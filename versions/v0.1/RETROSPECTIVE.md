@@ -8,6 +8,11 @@
 > فارسی: فهرست کاملِ اختلاف «داکیومنت» و «واقعیتِ ساخت»، راه‌حل موقتِ اعمال‌شده و
 > پیشنهادِ حل نهایی. ترتیبِ کار: تصمیم مالک ← بازنویسی داکیومنت‌ها ← شروع نسخهٔ بعد.
 
+> ✅ **STATUS (2026-08-24): ALL THREE DECISIONS APPROVED BY THE OWNER AND APPLIED THE
+> SAME DAY** — C-11 option (a), C-08 drop REFERENCES, C-10 org_id added (parity now
+> 36/36). Part 2's revision checklist has been EXECUTED across backend_docs and all
+> version folders; see CHANGELOG [Unreleased] and CONSTRAINTS C-08/C-10/C-11 rows.
+
 Status legend:
 - **[SETTLED]** — already resolved doc-first during the build; nothing pending.
 - **[OWNER DECISION]** — interim fix shipped, permanent choice is yours.

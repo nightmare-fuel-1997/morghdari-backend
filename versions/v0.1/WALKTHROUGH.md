@@ -61,7 +61,7 @@ That last sequence IS the product's security foundation — watch it behave exac
 ## 4. The CI gate (the exit demo)
 
 ```bash
-docker compose -f docker-compose.ci.yml run --rm test      # skeleton tests + test_rls.py → green
+docker compose -f docker-compose.ci.yml -p morghdari_ci run --rm test      # skeleton tests + test_rls.py → green (-p isolates from dev stack, C-13)
 pytest tests/test_rls.py -v                                # same suite locally against dev DB
 ```
 

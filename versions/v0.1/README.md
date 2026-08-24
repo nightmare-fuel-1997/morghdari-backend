@@ -25,7 +25,7 @@ simulator scaffold.
 ## Exit demo (the contract)
 
 ```bash
-docker compose -f docker-compose.ci.yml run --rm test     # green
+docker compose -f docker-compose.ci.yml -p morghdari_ci run --rm test     # green
 # plus, after M1:
 pytest tests/test_rls.py -v                               # cross-org read/write → 0 rows; no GUC leak
 ```

@@ -3,6 +3,22 @@
 All notable changes per version. Format follows the spiral-roadmap discipline:
 one section per version tag, each listing what risk the version killed.
 
+## [Unreleased] — retrospective resolutions (2026-08-24)
+
+All three open decisions from `versions/v0.1/RETROSPECTIVE.md` were APPROVED and applied:
+
+- **C-11 RESOLVED (keep security):** `saloon_telemetry` permanently keeps RLS with NO
+  columnar compression for v0.x; 180-day retention unchanged. Docs' capacity tables and
+  lifecycle sections updated to assume uncompressed storage.
+- **C-08 RESOLVED (drop FK):** database.md removes the un-executable `REFERENCES
+  gateway_hardware_registry(hardware_id)` clause; integrity enforced by the provisioning
+  sync writer at app level.
+- **C-10 RESOLVED (org_id everywhere):** `alert_acknowledgements` gains `org_id UUID NOT NULL`
+  doc-first; repo model + AddField/backfill/AlterField migration + both RLS policy lists synced.
+  Org-scoped RLS universe: 35 → **36** tables, parity-checked 1:1 across doc/initdb/migration.
+- Policy template NULLIF guard mirrored through Security Architecture §4.1, System Walkthrough
+  and Saas.md; docs ci compose gains `name: morghdari_ci`; EMQX mechanism-pair verified present.
+
 ## [v0.1] — 2026-08-24 — walking skeleton + full schema + RLS
 
 The smallest honest Morghdari: a Django project that boots in Docker, a CI
@@ -40,8 +56,8 @@ defeating FORCE ROW LEVEL SECURITY in SQL.
   `scripts/check_rls_parity.py`; `scripts/simulate_gateway.py` scaffold
 
 ### Real-world constraints surfaced (CONSTRAINTS.md C-01..C-13)
-Headliners: C-11 TimescaleDB compression ⊕ RLS mutual exclusion (owner
-decision pending, Tracker §7.1); C-12 pooled-session GUC '' quirk forcing the
+Headliners: C-11 TimescaleDB compression ⊕ RLS mutual exclusion (decided 2026-08-24 —
+see [Unreleased]); C-12 pooled-session GUC '' quirk forcing the
 NULLIF-hardened policy template; C-07/C-08/C-09 doc-vs-Django seams
 (composite PK, non-unique FK target, custom user model).
 
@@ -53,4 +69,4 @@ NULLIF-hardened policy template; C-07/C-08/C-09 doc-vs-Django seams
 ### Known gaps parked for owner retrospective
 - Farm/saloon CRUD endpoints decision (Tracker §6)
 - KB site resync with docs changes (§7 edits not yet reflected)
-- alert_acknowledgements lacks org_id (C-10) — doc-first fix recommended
+- alert_acknowledgements org_id (C-10) — APPROVED & APPLIED 2026-08-24, see [Unreleased]
