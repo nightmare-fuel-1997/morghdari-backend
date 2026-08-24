@@ -42,6 +42,7 @@ DECLARE
     'flock_cycles',
     'lifecycle_templates',
     'alert_instances',
+    'alert_acknowledgements',  -- C-10 resolution: gains org_id, joins the policy universe
     'saloon_operational_states',
     'doctor_tickets',
     'mortality_records',

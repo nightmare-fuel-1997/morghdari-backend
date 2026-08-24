@@ -79,6 +79,9 @@ class AlertAcknowledgement(models.Model):
     alert_acknowledgement_pause_minutes."""
 
     alert = models.ForeignKey(AlertInstance, on_delete=models.RESTRICT, related_name="+")
+    # C-10 resolution (owner decision 2026-08-24): denormalized like every
+    # tenant table so tenant_isolation applies (doc updated first).
+    org = models.ForeignKey("tenants.Organization", on_delete=models.RESTRICT, related_name="+")
     acknowledged_by = models.ForeignKey("accounts.User", on_delete=models.RESTRICT, related_name="+")
     acknowledged_at = models.DateTimeField(db_default=Now())
     pause_minutes = models.IntegerField(default=10)

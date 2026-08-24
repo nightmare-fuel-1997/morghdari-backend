@@ -50,6 +50,7 @@ DECLARE
     -- C4 alerting/config (+ D22/D23)
     'lifecycle_templates',
     'alert_instances',
+    'alert_acknowledgements',  -- C-10 resolution: gains org_id, joins the policy universe
     'saloon_operational_states',
     'doctor_tickets',
     'mortality_records',
@@ -84,10 +85,7 @@ BEGIN
 END
 $$;
 
--- KNOWN GAP (CONSTRAINTS C-10): alert_acknowledgements IS tenant data but the
--- doc gives it NO org_id column, so the mechanical 1:1 parity rule excludes it
--- here — meaning app-role reads of ack rows are NOT row-filtered. Owner decision
--- pending: doc-first fix (add org_id per the doc's own AU-RLS invariant) would
--- flow into this list, the Django model, and parity automatically.
--- Related nuance: lifecycle_templates.org_id is NULLable — NULL-org global
--- templates are invisible to tenant contexts under the equality policy.
+-- C-10 RESOLVED (owner decision 2026-08-24): alert_acknowledgements gained
+-- org_id in database.md (doc-first) and is a full policy member above.
+-- Related nuance (unchanged): lifecycle_templates.org_id is NULLable — NULL-org
+-- global templates are invisible to tenant contexts under the equality policy.
