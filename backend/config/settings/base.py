@@ -116,6 +116,8 @@ INSTALLED_APPS = [
     "apps.monitoring",
 ]
 
+AUTH_USER_MODEL = "accounts.User"  # C-09: doc's extended auth_user (is_platform_staff)
+
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
