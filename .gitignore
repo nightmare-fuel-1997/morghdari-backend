@@ -1,0 +1,29 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# --- Django ---
+*.sqlite3
+backend/staticfiles/
+
+# --- Env & secrets (NEVER commit — Deployment Guide §3) ---
+.env
+.env.*
+!.env.example
+
+# --- Node (owner-console has none by design, but just in case) ---
+node_modules/
+
+# --- Editors / OS ---
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# --- Test / coverage artifacts ---
+.coverage
+htmlcov/
+.pytest_cache/
