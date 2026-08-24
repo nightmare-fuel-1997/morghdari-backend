@@ -1,0 +1,31 @@
+# =============================================================================
+# .dockerignore — keep the build context honest and small (M0-08).
+#
+# فارسی: چیزی که به داکر فرستاده نمی‌شود؛ کانتکست کوچک = بیلد سریع و تمیز.
+#
+# Rules behind each entry:
+# - .venv/            : Windows wheels are useless inside the linux container;
+#                       the builder stage re-compiles from requirements/.
+# - __pycache__/*.pyc : stale bytecode must never leak into an image layer.
+# - .pytest_cache/.coverage : local test artifacts, not source.
+# - sqlite db files   : dev leftovers would silently satisfy imports in CI.
+#
+# DELIBERATELY KEPT in context (do NOT add):
+# - tests/            : the `test` stage runs pytest inside the image.
+# - requirements/     : the builder stage copies it first (layer-cache anchor).
+# =============================================================================
+
+.venv/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+*.sqlite3
+db.sqlite3
+.env
+.env.*
+!.env.example
+Dockerfile
+.dockerignore
