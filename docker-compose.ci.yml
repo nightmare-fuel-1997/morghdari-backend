@@ -59,6 +59,12 @@ services:
       DATABASE_URL: postgres://morghdari_test:ci_password_only@postgres:5432/morghdari_test
       REDIS_URL: redis://redis:6379/0
       DJANGO_SETTINGS_MODULE: config.settings.test
+      MORGHDARI_INITDB_DIR: /initdb
+    # The image packages ONLY ./backend (§8 build context); the bootstrap SQL
+    # is repo-root machinery shared with the postgres entrypoint, so it is
+    # mounted read-only instead of duplicated into the image.
+    volumes:
+      - ./initdb:/initdb:ro
     # Coverage gate lives in the command (mirrors docs template); pytest.ini
     # addopts would double-count --cov args otherwise kept minimal here.
     command: pytest --cov=apps --cov-report=term-missing --cov-fail-under=80

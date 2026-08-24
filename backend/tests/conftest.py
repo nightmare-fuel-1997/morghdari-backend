@@ -14,6 +14,7 @@ seed migrations themselves — nothing duplicated.
 """
 
 import importlib.util
+import os
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,10 @@ from django.db import connection
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 REPO_ROOT = BACKEND_DIR.parent
+# Repo-root machinery (roles + RLS bootstrap SQL). In CI the image packages
+# only ./backend, so compose mounts ./initdb read-only and points this env var
+# at it — the SQL itself is never duplicated.
+INITDB_DIR = Path(os.environ.get("MORGHDARI_INITDB_DIR", REPO_ROOT / "initdb"))
 
 # Seed payload lives INSIDE these migrations — import them by path (their
 # module names start with digits, so importlib-by-path is required).
@@ -56,8 +61,8 @@ def seeded_rls_db(django_db_setup, django_db_blocker):
             # Roles first: 02_rls FORCE + policy application needs no special
             # role, but keeping order identical to a production bootstrap makes
             # failures here mirror bootstrap failures. All scripts idempotent.
-            cursor.execute((REPO_ROOT / "initdb" / "01_roles.sql").read_text(encoding="utf-8"))
-            cursor.execute((REPO_ROOT / "initdb" / "02_rls.sql").read_text(encoding="utf-8"))
+            cursor.execute((INITDB_DIR / "01_roles.sql").read_text(encoding="utf-8"))
+            cursor.execute((INITDB_DIR / "02_rls.sql").read_text(encoding="utf-8"))
             # Test-ordering remediation ONLY: in a real bootstrap the
             # default privileges above precede table creation; here tables
             # already exist (syncdb ran first), so grant them explicitly.
