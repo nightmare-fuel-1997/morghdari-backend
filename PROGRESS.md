@@ -7,17 +7,17 @@
 
 ## M0 — walking skeleton
 
-- [ ] M0-01 git branch `v0.1-m0` created; `backend/` folder exists
-- [ ] M0-02 requirements per Blueprint §2 pins (`pip list` shows psycopg 3.x)
-- [ ] M0-03 project scaffold: manage.py + config/ package; `manage.py check` passes
-- [ ] M0-04 settings split w/ DATABASE_URL/REDIS_URL convention; production raises without env vars
-- [ ] M0-05 the 12 Blueprint §1 app packages with AppConfig `name="apps.X"`
-- [ ] M0-06 trivial test + pytest.ini; `pytest -q` green locally (sqlite fallback)
-- [ ] M0-07 docker-compose.dev.yml up → postgres/redis/emqx healthy
-- [ ] M0-08 multi-stage Dockerfile builds (`docker build ./backend`)
-- [ ] M0-09 docker-compose.ci.yml test run GREEN ← **M0 exit gate**
-- [ ] M0-10 .env.example documents every settings-read env var; initdb/ placeholder
-- [ ] M0-11 commit sweep + demo recorded per WALKTHROUGH
+- [x] M0-01 git branch `v0.1-m0` created; `backend/` folder exists — `1748510`
+- [x] M0-02 requirements per Blueprint §2 pins (`pip list` shows psycopg 3.x) — `9264c05`
+- [x] M0-03 project scaffold: manage.py + config/ package; `manage.py check` passes — `ab8042c`
+- [x] M0-04 settings split w/ DATABASE_URL/REDIS_URL convention; production raises without env vars — `ab8042c`
+- [x] M0-05 the 12 Blueprint §1 app packages with AppConfig `name="apps.X"` — `eb6fb53`
+- [x] M0-06 trivial test + pytest.ini; `pytest -q` green locally (sqlite fallback) — `4a57fee`
+- [x] M0-07 docker-compose.dev.yml up → postgres/redis/emqx healthy — `17ae4d2`
+- [x] M0-08 multi-stage Dockerfile builds (`docker build ./backend`) — `d6a4c13`
+- [x] M0-09 docker-compose.ci.yml test run GREEN ← **M0 exit gate** — `ff8c942` (3 passed @100% cov in-container)
+- [x] M0-10 .env.example documents every settings-read env var; initdb/ placeholder — `54b669a`
+- [x] M0-11 commit sweep + demo recorded per WALKTHROUGH — this commit (transcript: `versions/v0.1/DEMO-M0.md`; constraints C-03/C-05/C-06 logged)
 
 ## M1 — full schema + roles + RLS
 
