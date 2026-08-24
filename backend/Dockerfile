@@ -27,11 +27,15 @@ RUN pip wheel --no-cache-dir --wheel-dir /wheels-base  -r requirements/base.txt 
 # -----------------------------------------------------------------------------
 FROM python:3.12-slim AS test
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
-RUN useradd --create-home appuser
+# install -d makes /app itself appuser-owned (WORKDIR alone would create it
+# root-owned; pytest-cov then cannot create its .coverage file inside it).
+RUN useradd --create-home appuser && install -d -o appuser -g appuser /app
 WORKDIR /app
 COPY --from=builder /wheels-test /wheels-test
 RUN pip install --no-cache-dir /wheels-test/* && rm -rf /wheels-test
-COPY . .
+# --chown: pytest-cov must write .coverage.<host>.<pid> into /app while running
+# as appuser (first CI run proved root-owned /app breaks the coverage flush).
+COPY --chown=appuser:appuser . .
 USER appuser
 # CI harness entrypoint is overridden by docker-compose.ci.yml `command: pytest`.
 

@@ -20,6 +20,10 @@ works on sqlite is lying about production; integration truth lives in CI.
 import os
 
 from .base import *  # noqa: F401,F403
+# Star-import skips underscore names (Python semantics), and the postgres
+# branch below needs the URL parser — first proof: CI caught this on its
+# very first run while local sqlite runs never executed that branch.
+from .base import _database_from_url  # noqa: F401
 
 DEBUG = False
 ALLOWED_HOSTS = ["localhost", "127.0.0.1", "test"]

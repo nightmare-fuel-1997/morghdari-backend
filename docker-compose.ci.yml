@@ -1,0 +1,64 @@
+# =============================================================================
+# CI Compose — ephemeral TimescaleDB + Redis + pytest. THE acceptance gate.
+#   docker compose -f docker-compose.ci.yml run --rm test
+#
+# فارسی: سرویس‌های یک‌بارمصرف برای CI؛ گیتِ پذیرش M0/M1 همین‌جاست — سبز یعنی قبول.
+#
+# Provenance & deliberate adaptations from backend_docs/docker-compose.ci.yml:
+# - ADDED build.target: test — the docs template predates our 3-stage
+#   Dockerfile (§8); without `target` compose would build AND ship the final
+#   `runtime` stage, whose whole point is that pytest physically cannot exist
+#   in it. CI must run the `test` stage, nothing else.
+# - CHANGED DATABASE_URL user morghdari_app -> morghdari_test (bootstrap
+#   superuser provisioned by POSTGRES_* below): initdb-created roles carry no
+#   passwords, so a TCP login as morghdari_app cannot authenticate in CI. This
+#   matches the docs' own comment — RLS/app-role behavior is exercised by a
+#   pytest session fixture via SET ROLE + GUC (tests/test_rls.py, M1-09),
+#   never by the bootstrap roles. Runtime app-role URLs are a deployment
+#   concern (Deployment & DevOps Guide §2.1), not a CI concern.
+# - image pins mirror CONSTRAINTS C-04: exact tags only (timescaledb 2.29.2-pg16).
+#
+# `version:` key kept despite the compose v2 obsolete warning — CONSTRAINTS C-04
+# family decision: these files stay line-compatible with the docs repo copies.
+# =============================================================================
+
+version: "3.8"
+
+services:
+  postgres:
+    image: timescale/timescaledb:2.29.2-pg16
+    # Bootstrap SUPERUSER 'morghdari_test' provisions the CI database. RLS
+    # policies are exercised via a pytest session fixture (SET ROLE / GUC),
+    # not via the bootstrap roles — the superuser is fine for CI only.
+    environment:
+      POSTGRES_DB: morghdari_test
+      POSTGRES_USER: morghdari_test
+      POSTGRES_PASSWORD: ci_password_only
+    volumes:
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U morghdari_test -d morghdari_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+
+  test:
+    build:
+      context: ./backend
+      target: test
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      # Single-env convention (Blueprint §2) — same dialect as prod compose.
+      DATABASE_URL: postgres://morghdari_test:ci_password_only@postgres:5432/morghdari_test
+      REDIS_URL: redis://redis:6379/0
+      DJANGO_SETTINGS_MODULE: config.settings.test
+    # Coverage gate lives in the command (mirrors docs template); pytest.ini
+    # addopts would double-count --cov args otherwise kept minimal here.
+    command: pytest --cov=apps --cov-report=term-missing --cov-fail-under=80
