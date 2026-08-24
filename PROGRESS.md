@@ -21,17 +21,17 @@
 
 ## M1 — full schema + roles + RLS
 
-- [ ] M1-01 Compartment 1–2 models verbatim from database.md
-- [ ] M1-02 Compartment 3: telemetry hypertable + catalog + aggregates + flock_cycles (+placement_count/day_old_weight_g)
-- [ ] M1-03 Compartments 4–7 incl. system_configuration seeds, maintenance_mutes, legal_hold columns
-- [ ] M1-04 D22/D23 tables: weight samples, feed/water intake, dashboard_configs, biosecurity_events
-- [ ] M1-05 initdb scripts: 00_extensions / 01_roles (5 roles) / 02_rls
-- [ ] M1-06 RLS migration over every tenant table (policy list script-checked vs database.md)
-- [ ] M1-07 seed data: metric catalog (8 keys), system_configuration, tier quotas, geo sample
-- [ ] M1-08 app connects as morghdari_app only; tenant_context() helper; fail-closed proven
-- [ ] M1-09 tests/test_rls.py GREEN in CI ← **M1 exit gate**
-- [ ] M1-10 scripts/simulate_gateway.py scaffold (--help works)
-- [ ] M1-11 DoD sweep: CHANGELOG + tag v0.1 + demo recorded
+- [x] M1-01 Compartment 1–2 models verbatim from database.md — `1ef51e2`
+- [x] M1-02 Compartment 3: telemetry hypertable + catalog + aggregates + flock_cycles (+placement_count/day_old_weight_g) — `d35a3b4` (compression dropped per C-11, fix `9534795`)
+- [x] M1-03 Compartments 4–7 incl. system_configuration seeds, maintenance_mutes, legal_hold columns — `83c5781`
+- [x] M1-04 D22/D23 tables: weight samples, feed/water intake, dashboard_configs, biosecurity_events — `b4bf158`
+- [x] M1-05 initdb scripts: 00_extensions / 01_roles (5 roles) / 02_rls — `e6dc193`
+- [x] M1-06 RLS migration over every tenant table (policy list script-checked vs database.md) — `87ebc4e` (parity 35/35)
+- [x] M1-07 seed data: metric catalog (8 keys), system_configuration, tier quotas, geo sample — `1ba9a52`
+- [x] M1-08 app connects as morghdari_app only; tenant_context() helper; fail-closed proven — `2aca115`
+- [x] M1-09 tests/test_rls.py GREEN in CI ← **M1 exit gate** — `fced1f7` (14 passed @84.6% cov in-container)
+- [x] M1-10 scripts/simulate_gateway.py scaffold (--help works) — `acc6296`
+- [x] M1-11 DoD sweep: CHANGELOG + tag v0.1 + demo recorded — this commit (`versions/v0.1/DEMO-M1.md`)
 
 ## Version gate
 
