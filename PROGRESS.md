@@ -35,4 +35,4 @@
 
 ## Version gate
 
-- [ ] v0.1 EXIT DEMO performed/recorded → STOP for owner retrospective before v0.2
+- [x] v0.1 EXIT DEMO performed/recorded → STOP for owner retrospective before v0.2 — `8dad6d0` tag `v0.1` (transcripts: DEMO-M0.md, DEMO-M1.md; this tick is post-tag tidy)

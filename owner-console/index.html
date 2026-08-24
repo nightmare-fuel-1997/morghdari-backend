@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Morghdari — Owner Console | کنسول مالک</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<!--
+  OWNER-EXCLUSIVE static console. Never shipped; outside all API contracts.
+  فارسی: کنسول اختصاصی مالک — هرگز توزیع نمی‌شود و خارج از قراردادهای API است.
+-->
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">🐓</span>
+    <div>
+      <h1>Morghdari <small>Owner Console</small></h1>
+      <p dir="rtl" class="fa">کنسول مالک — فقط برای استفادهٔ خودتان</p>
+    </div>
+  </div>
+  <label class="backend-url">
+    Backend:
+    <input id="backend-url" type="url" value="http://localhost:8000" spellcheck="false">
+    <button id="save-url" type="button">Save</button>
+  </label>
+</header>
+
+<main>
+  <!-- Login placeholder: deliberately non-functional until v0.2 JWT exists. -->
+  <section id="login-placeholder" class="card muted-card" aria-label="login placeholder">
+    <h2>Login <span class="fa" dir="rtl">— ورود</span></h2>
+    <p class="placeholder-note">
+      PLACEHOLDER — no auth exists in v0.1 (JWT lands v0.2).
+      <span dir="rtl">نمایشی است؛ تا نسخهٔ ۰٫۲ احراز هویت وجود ندارد.</span>
+    </p>
+    <form onsubmit="return false" aria-disabled="true">
+      <input type="text" placeholder="username / نام کاربری" disabled>
+      <input type="password" placeholder="password / گذرواژه" disabled>
+      <button type="submit" disabled>Sign in</button>
+    </form>
+  </section>
+
+  <!-- Health panel: the ONE live element at v0.1. -->
+  <section id="health-panel" class="card" aria-label="backend health">
+    <div class="card-head">
+      <h2>Backend health <span class="fa" dir="rtl">— سلامت بک‌اند</span></h2>
+      <button id="refresh-health" type="button">Refresh</button>
+    </div>
+    <p id="health-status" class="status unknown">checking…</p>
+    <dl id="health-details" class="hidden"></dl>
+  </section>
+
+  <section class="card muted-card">
+    <h2>Dashboards <span class="fa" dir="rtl">— داشبوردها</span></h2>
+    <p class="placeholder-note">
+      Arrive with telemetry/alerts versions (v0.3/v0.4). Nothing is faked here.
+      <span dir="rtl">با نسخه‌های بعدی می‌آید؛ چیزی نمایشی جعل نمی‌شود.</span>
+    </p>
+  </section>
+</main>
+
+<footer>
+  <small>v0.1 · owner-only · never ship this folder · این پوشه هرگز منتشر نمی‌شود</small>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
