@@ -64,7 +64,7 @@ ALTER TABLE saloon_telemetry ENABLE ROW LEVEL SECURITY;
 ALTER TABLE saloon_telemetry FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON saloon_telemetry;
 CREATE POLICY tenant_isolation ON saloon_telemetry
-    USING (org_id = current_setting('app.current_org_id', true)::UUID)
+    USING (org_id = NULLIF(current_setting('app.current_org_id', true), '')::UUID)
     WITH CHECK (org_id = current_setting('app.current_org_id', true)::UUID);
 
 -- Lifecycle enforcement (§5 Storage Strategy): drop raw chunks after 180 d.
@@ -95,7 +95,7 @@ ALTER TABLE metric_hourly_aggregates ENABLE ROW LEVEL SECURITY;
 ALTER TABLE metric_hourly_aggregates FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON metric_hourly_aggregates;
 CREATE POLICY tenant_isolation ON metric_hourly_aggregates
-    USING (org_id = current_setting('app.current_org_id', true)::UUID)
+    USING (org_id = NULLIF(current_setting('app.current_org_id', true), '')::UUID)
     WITH CHECK (org_id = current_setting('app.current_org_id', true)::UUID);
 
 -- Chart queries: "give me temp for slot X last 7 days".

@@ -58,6 +58,15 @@ def seeded_rls_db(django_db_setup, django_db_blocker):
             # failures here mirror bootstrap failures. All scripts idempotent.
             cursor.execute((REPO_ROOT / "initdb" / "01_roles.sql").read_text(encoding="utf-8"))
             cursor.execute((REPO_ROOT / "initdb" / "02_rls.sql").read_text(encoding="utf-8"))
+            # Test-ordering remediation ONLY: in a real bootstrap the
+            # default privileges above precede table creation; here tables
+            # already exist (syncdb ran first), so grant them explicitly.
+            # Production paths are untouched.
+            cursor.execute(
+                "GRANT USAGE ON SCHEMA public TO morghdari_app;"
+                "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO morghdari_app;"
+                "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO morghdari_app;"
+            )
             for path in SEED_MIGRATIONS:
                 cursor.execute(_sql_from_migration(path))
     yield

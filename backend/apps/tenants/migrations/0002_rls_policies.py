@@ -65,7 +65,7 @@ BEGIN
       EXECUTE format('DROP POLICY IF EXISTS tenant_isolation ON %I', t);
       EXECUTE format(
         'CREATE POLICY tenant_isolation ON %I '
-        'USING (org_id = current_setting(''app.current_org_id'', true)::UUID) '
+        'USING (org_id = NULLIF(current_setting(''app.current_org_id'', true), '''')::UUID) '
         'WITH CHECK (org_id = current_setting(''app.current_org_id'', true)::UUID)',
         t
       );
