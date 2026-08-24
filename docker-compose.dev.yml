@@ -1,0 +1,111 @@
+# Development Docker Compose — Dependencies Only
+# Usage: docker compose -f docker-compose.dev.yml up -d
+# This runs the backing services without the full application stack.
+# Developers run Django, subscriber, and Celery workers natively (or in VS Code).
+
+version: "3.8"
+
+services:
+  postgres:
+    image: timescale/timescaledb:2.29.2-pg16
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: morghdari_dev
+      POSTGRES_USER: morghdari_dev
+      POSTGRES_PASSWORD: dev_password_only
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U morghdari_dev -d morghdari_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    # Dev deliberately uses everysec for local write speed.
+    # PRODUCTION uses `appendfsync always` (RPO ~= 0) — see Deployment Guide §6 / DR Plan T3.
+    command: redis-server --appendonly yes --appendfsync everysec --requirepass dev_redis_password
+    volumes:
+      - redis_dev_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "dev_redis_password", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  emqx:
+    image: emqx:5.5
+    ports:
+      - "1883:1883"    # MQTT (plain — dev only)
+      - "8883:8883"    # MQTT (TLS — requires certs)
+      - "18083:18083"  # Dashboard / Management API
+    environment:
+      EMQX_DASHBOARD__DEFAULT_PASSWORD: "dev_password"
+      # Dev mode uses built_in_database — no PostgreSQL auth dependency.
+      # EMQX_AUTHORIZATION__NO_MATCH: "allow" means any client can pub/sub to any topic.
+      # This is acceptable for local dev only. Production uses PostgreSQL auth + deny-all.
+      # No credentials are pre-seeded; use EMQX Dashboard (port 18083, login
+      # admin / dev_password from EMQX_DASHBOARD__DEFAULT_PASSWORD above)
+      # to manually create test users, or run the seed management command.
+      EMQX_AUTHENTICATION__1__MECHANISM: "password_based"  # C-05: EMQX 5.5 requires mechanism alongside backend
+      EMQX_AUTHENTICATION__1__BACKEND: "built_in_database"
+      EMQX_AUTHORIZATION__NO_MATCH: "allow"  # Allow all in dev
+    volumes:
+      - emqx_dev_data:/opt/emqx/data
+    healthcheck:
+      test: ["CMD", "emqx", "ctl", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Optional: Development & Debugging Tools
+  # ----------------------------------------------------------
+  # Uncomment services below for local development assistance.
+  #
+  # prometheus:
+  #   image: prom/prometheus
+  #   ports:
+  #     - "9090:9090"
+  #   volumes:
+  #     - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+  #
+  # grafana:
+  #   image: grafana/grafana
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     - GF_SECURITY_ADMIN_PASSWORD=dev_password
+  #
+  # flower:
+  #   image: mher/flower
+  #   ports:
+  #     - "5555:5555"
+  #   command: celery --broker=redis://redis:6379 flower --port=5555
+
+# Development-only Django settings (add to settings.py when running locally):
+#   if DEBUG:
+#       INSTALLED_APPS += ['debug_toolbar', 'django_extensions']
+#       MIDDLEWARE += ['debug_toolbar.middleware.DebugToolbarMiddleware']
+#       INTERNAL_IPS = ['127.0.0.1']
+#
+# Python packages for local development:
+#   pip install django-debug-toolbar django-extensions ipython pytest pytest-cov pytest-django factory-boy
+#
+# Useful dev commands:
+#   python manage.py shell_plus          # IPython with auto-imports
+#   python manage.py show_urls           # List all endpoints
+#   python manage.py generate_test_data  # Custom command to seed test gateways/saloons
+#   pytest --cov --tb=short              # Run tests with coverage
+#
+# Gateway payload generator (standalone script):
+#   python scripts/simulate_gateway.py --gateway FARM-01-GW-A --interval 60
+
+volumes:
+  postgres_dev_data:
+  redis_dev_data:
+  emqx_dev_data:
