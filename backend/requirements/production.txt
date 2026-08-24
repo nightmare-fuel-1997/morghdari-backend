@@ -1,0 +1,4 @@
+# Production = base ONLY. No debug tools can physically reach the prod image
+# because this file never pulls the development/test extras.
+# فارسی: production فقط base را نصب می‌کند؛ ابزارهای دیباگ به ایمیج تولید راه ندارند.
+-r base.txt

@@ -1,0 +1,8 @@
+# Development-only extras (never in the production image — the -r chain
+# guarantees prod installs base.txt only).
+# فارسی: ابزارهای فقط-توسعه؛ به دلیل زنجیرهٔ -r هرگز وارد ایمیج production نمی‌شوند.
+-r base.txt
+django-debug-toolbar
+django-extensions
+ipython
+ruff

@@ -1,0 +1,7 @@
+# Test extras — pytest stack per django-tdd conventions (Blueprint §2/§7).
+# فارسی: ابزارهای تست؛ نام‌ها و آستانه‌های پوشش در pytest.ini اعمال می‌شود.
+-r base.txt
+pytest
+pytest-django
+pytest-cov
+factory-boy
