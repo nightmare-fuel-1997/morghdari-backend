@@ -301,6 +301,31 @@ class BiosecurityEvent(models.Model):
         ]
 
 
+class MaintenanceMute(models.Model):
+    """Planned-maintenance mute windows (GS-MAINT-MUTE, 2026-08-23 — Tracker §4i).
+    While active for a saloon, threshold-crossing and duration-filter alerts are
+    SUPPRESSED (readings still logged); velocity emergencies ALWAYS bypass mutes
+    (Decision 10 invariant). Managed via Django Admin in v1 — no REST endpoint."""
+
+    id = models.AutoField(primary_key=True)
+    org = models.ForeignKey("tenants.Organization", on_delete=models.RESTRICT, related_name="+")
+    saloon = models.ForeignKey("farms.Saloon", on_delete=models.RESTRICT, related_name="+")
+    starts_at = models.DateTimeField()
+    ends_at = models.DateTimeField()
+    reason = models.CharField(max_length=200)
+    created_by = models.ForeignKey("accounts.User", on_delete=models.RESTRICT, null=True, blank=True, related_name="+")
+    created_at = models.DateTimeField(null=True, db_default=Now())
+
+    class Meta:
+        db_table = "maintenance_mutes"
+        constraints = [
+            models.CheckConstraint(check=Q(ends_at__gt=F("starts_at")), name="ck_maintenance_mutes_window"),
+        ]
+        indexes = [
+            models.Index(fields=["saloon", "starts_at", "ends_at"], name="idx_mutes_lookup"),
+        ]
+
+
 class DashboardConfig(models.Model):
     """KPI widget toggles. Resolution order: personal override → role default →
     built-in system default. Widget keys v1: live_readings, mortality_pct,

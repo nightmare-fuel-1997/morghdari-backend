@@ -10,6 +10,7 @@ class Migration(migrations.Migration):
     initial = True
 
     dependencies = [
+        ('devices', '0001_initial'),
         ('farms', '0001_initial'),
         ('tenants', '0001_initial'),
     ]

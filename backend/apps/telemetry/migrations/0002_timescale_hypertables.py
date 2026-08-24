@@ -10,8 +10,10 @@ Everything here is verbatim from database.md Compartment 3:
 - create_hypertable + add_dimension(org_id, 4) — org space-partition.
 - idx_telemetry_buffered partial index: crucial for the Celery retroactive
   alert sweep (v0.4).
-- Compression (90 d, ordered by received ts, segmented by org+saloon) and
-  retention (180 d) policies enforce the §5 Storage Strategy lifecycle;
+- tenant_isolation RLS on both hypertables (Compartment 8 mandate).
+- Retention (180 d) policy enforces the §5 Storage Strategy drop date;
+  compression is BLOCKED by C-11 (mutually exclusive with RLS) pending the
+  owner decision in Open Items Tracker §7.1.
   metric_hourly_aggregates is deliberately NOT retained away — permanent
   summaries (AU-fix 2026-08-16).
 
@@ -53,14 +55,19 @@ SELECT add_dimension('saloon_telemetry', 'org_id', number_partitions => 4);
 -- Crucial partial index for the Celery retroactive alert sweep.
 CREATE INDEX idx_telemetry_buffered ON saloon_telemetry (saloon_id, device_ts DESC) WHERE is_buffered = TRUE;
 
--- Compression BEFORE policy (required order); lifecycle 90d compressed /
--- 180d dropped per §5 Storage Strategy.
-ALTER TABLE saloon_telemetry SET (
-    timescaledb.compress,
-    timescaledb.compress_orderby = 'server_received_ts DESC',
-    timescaledb.compress_segmentby = 'org_id, saloon_id'
-);
-SELECT add_compression_policy('saloon_telemetry', INTERVAL '90 days');
+-- CONSTRAINTS C-11 / Tracker §7.1: TimescaleDB 2.29 refuses compression AND
+-- row-level security on the same hypertable in EITHER order. Compartment 8
+-- mandates tenant_isolation on every org-scoped table, so the security-first
+-- interim state is RLS ON / columnstore OFF; RETENTION below still runs.
+-- Owner decision pending in the docs repo before compression may return.
+ALTER TABLE saloon_telemetry ENABLE ROW LEVEL SECURITY;
+ALTER TABLE saloon_telemetry FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON saloon_telemetry;
+CREATE POLICY tenant_isolation ON saloon_telemetry
+    USING (org_id = current_setting('app.current_org_id', true)::UUID)
+    WITH CHECK (org_id = current_setting('app.current_org_id', true)::UUID);
+
+-- Lifecycle enforcement (§5 Storage Strategy): drop raw chunks after 180 d.
 SELECT add_retention_policy('saloon_telemetry', INTERVAL '180 days');
 
 -- ================= metric_hourly_aggregates (permanent) ======================
@@ -81,6 +88,15 @@ CREATE TABLE IF NOT EXISTS metric_hourly_aggregates (
 );
 
 SELECT create_hypertable('metric_hourly_aggregates', 'bucket_hr');
+
+-- Same C-11 ordering rule (no compression here, but kept symmetric so both
+-- hypertables get their RLS from THIS migration, never from 02_rls.sql).
+ALTER TABLE metric_hourly_aggregates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE metric_hourly_aggregates FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON metric_hourly_aggregates;
+CREATE POLICY tenant_isolation ON metric_hourly_aggregates
+    USING (org_id = current_setting('app.current_org_id', true)::UUID)
+    WITH CHECK (org_id = current_setting('app.current_org_id', true)::UUID);
 
 -- Chart queries: "give me temp for slot X last 7 days".
 CREATE INDEX idx_agg_lookup ON metric_hourly_aggregates (slot_id, metric_key, bucket_hr DESC);

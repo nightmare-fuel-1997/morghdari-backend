@@ -21,3 +21,21 @@ class SystemConfiguration(models.Model):
 
     class Meta:
         db_table = "system_configuration"
+
+
+class TierQuotaMapping(models.Model):
+    """Per-tier resource quotas (database.md Compartment 4 tail). Enforcement
+    is at the DJANGO MODEL LAYER (save-signal count checks + 403) and the
+    midnight cron re-syncs counts to Redis — deliberately NOT a DB CHECK so a
+    tier change (Phase 2 Stripe webhook) lifts limits without migrations.
+    Org-less global: NO org_id, NO RLS policy. Seed rows land in M1-07."""
+
+    tier = models.CharField(max_length=50, primary_key=True)
+    max_farms = models.IntegerField(default=5)
+    max_saloons = models.IntegerField(default=20)
+    max_sensor_slots = models.IntegerField(default=50)
+    max_hourly_messages = models.IntegerField(default=10000)
+    max_gateways = models.IntegerField(default=2)
+
+    class Meta:
+        db_table = "tier_quota_mapping"
