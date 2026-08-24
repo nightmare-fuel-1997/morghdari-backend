@@ -192,3 +192,140 @@ class MedicalPrescription(models.Model):
         indexes = [
             models.Index(fields=["flock"], name="idx_prescription_flock"),
         ]
+
+
+# ====================================================================
+# FLOCK PRODUCTION RECORDS — FCR + KPI inputs (MET-FCR/MET-KPI 2026-08-22)
+# D22/D23 tables (TASKS M1-04). Manual entry by the Farm Engineer in v1;
+# the `source` column lets a future weigh station / feed-silo device write
+# the same rows with zero migration.
+# ====================================================================
+
+
+class FlockWeightSample(models.Model):
+    id = models.AutoField(primary_key=True)
+    org = models.ForeignKey("tenants.Organization", on_delete=models.RESTRICT, related_name="+")
+    flock = models.ForeignKey("telemetry.FlockCycle", on_delete=models.RESTRICT, related_name="+")
+    saloon = models.ForeignKey("farms.Saloon", on_delete=models.RESTRICT, related_name="+")
+    sampled_at = models.DateTimeField(db_default=Now())
+    sample_size = models.IntegerField()  # birds weighed (e.g., 50)
+    avg_weight_g = models.DecimalField(max_digits=8, decimal_places=2)
+    min_weight_g = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
+    max_weight_g = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
+    uniformity_pct = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)  # % within ±10% of mean
+    source = models.CharField(max_length=10, default="manual")
+    recorded_by = models.ForeignKey("accounts.User", on_delete=models.RESTRICT, related_name="+")
+    notes = models.TextField(null=True, blank=True)
+
+    class Meta:
+        db_table = "flock_weight_samples"
+        constraints = [
+            models.CheckConstraint(check=Q(source__in=["manual", "device"]), name="ck_flock_weight_samples_source"),
+        ]
+        indexes = [
+            models.Index(F("flock"), F("sampled_at").desc(), name="idx_weight_flock"),
+        ]
+
+
+class FlockFeedIntake(models.Model):
+    """One row per flock per day — cumulative intake is a reliable SUM.
+    Corrections are UPDATEs on the same row (audited via account_activity_logs)."""
+
+    id = models.AutoField(primary_key=True)
+    org = models.ForeignKey("tenants.Organization", on_delete=models.RESTRICT, related_name="+")
+    flock = models.ForeignKey("telemetry.FlockCycle", on_delete=models.RESTRICT, related_name="+")
+    saloon = models.ForeignKey("farms.Saloon", on_delete=models.RESTRICT, related_name="+")
+    entry_date = models.DateField()
+    feed_kg = models.DecimalField(max_digits=10, decimal_places=2)  # consumed = delivered − remaining
+    feed_type = models.CharField(max_length=100, null=True, blank=True)  # starter | grower | finisher
+    source = models.CharField(max_length=10, default="manual")
+    recorded_by = models.ForeignKey("accounts.User", on_delete=models.RESTRICT, related_name="+")
+    notes = models.TextField(null=True, blank=True)
+
+    class Meta:
+        db_table = "flock_feed_intake"
+        constraints = [
+            models.CheckConstraint(check=Q(source__in=["manual", "device"]), name="ck_flock_feed_intake_source"),
+            models.UniqueConstraint(fields=["flock", "entry_date"], name="uq_flock_feed_intake_day"),
+        ]
+
+
+class FlockWaterIntake(models.Model):
+    """D23 / §4h water module. Water is the EARLIEST disease indicator; the
+    water:feed ratio KPI (~1.8–2:1) computes from this + FlockFeedIntake."""
+
+    id = models.AutoField(primary_key=True)
+    org = models.ForeignKey("tenants.Organization", on_delete=models.RESTRICT, related_name="+")
+    flock = models.ForeignKey("telemetry.FlockCycle", on_delete=models.RESTRICT, related_name="+")
+    saloon = models.ForeignKey("farms.Saloon", on_delete=models.RESTRICT, related_name="+")
+    entry_date = models.DateField()
+    water_l = models.DecimalField(max_digits=10, decimal_places=2)  # liters consumed that day
+    source = models.CharField(max_length=10, default="manual")
+    recorded_by = models.ForeignKey("accounts.User", on_delete=models.RESTRICT, related_name="+")
+    notes = models.TextField(null=True, blank=True)
+
+    class Meta:
+        db_table = "flock_water_intake"
+        constraints = [
+            models.CheckConstraint(check=Q(source__in=["manual", "device"]), name="ck_flock_water_intake_source"),
+            models.UniqueConstraint(fields=["flock", "entry_date"], name="uq_flock_water_intake_day"),
+        ]
+
+
+class BiosecurityEvent(models.Model):
+    """D23 / §4h biosecurity module — avian-flu is the existential farm risk;
+    vets and insurers ask exactly for this record. Farm-level (not saloon)."""
+
+    id = models.AutoField(primary_key=True)
+    org = models.ForeignKey("tenants.Organization", on_delete=models.RESTRICT, related_name="+")
+    farm = models.ForeignKey("farms.Farm", on_delete=models.RESTRICT, related_name="+")
+    event_type = models.CharField(max_length=30)
+    occurred_at = models.DateTimeField(db_default=Now())
+    person_count = models.IntegerField(null=True, blank=True)  # visitors/workers on site
+    details = models.JSONField(null=True, blank=True)  # {"origin","purpose","product_used"}
+    recorded_by = models.ForeignKey("accounts.User", on_delete=models.RESTRICT, related_name="+")
+
+    class Meta:
+        db_table = "biosecurity_events"
+        constraints = [
+            models.CheckConstraint(
+                check=Q(event_type__in=[
+                    "visitor_entry", "vehicle_entry", "disinfection",
+                    "rodent_control", "outbreak_prep", "other",
+                ]),
+                name="ck_biosecurity_events_event_type",
+            ),
+        ]
+        indexes = [
+            models.Index(F("farm"), F("occurred_at").desc(), name="idx_biosec_farm"),
+        ]
+
+
+class DashboardConfig(models.Model):
+    """KPI widget toggles. Resolution order: personal override → role default →
+    built-in system default. Widget keys v1: live_readings, mortality_pct,
+    compliance_pct, fcr, cycle_summary, alerts, feed_intake, weight_trend."""
+
+    id = models.AutoField(primary_key=True)
+    org = models.ForeignKey("tenants.Organization", on_delete=models.RESTRICT, related_name="+")
+    # NULL = role-default row; users edit only their own (CASCADE on user delete).
+    user = models.ForeignKey("accounts.User", on_delete=models.CASCADE, null=True, blank=True, related_name="+")
+    role = models.CharField(max_length=50)
+    widgets = models.JSONField(default=dict)
+    updated_at = models.DateTimeField(null=True, db_default=Now())
+    updated_by = models.ForeignKey("accounts.User", db_column="updated_by", on_delete=models.RESTRICT, null=True, blank=True, related_name="+")
+
+    class Meta:
+        db_table = "dashboard_configs"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["org", "role"],
+                condition=Q(user__isnull=True),
+                name="idx_dashcfg_role_default",
+            ),
+            models.UniqueConstraint(
+                fields=["org", "user", "role"],
+                condition=Q(user__isnull=False),
+                name="idx_dashcfg_personal",
+            ),
+        ]
