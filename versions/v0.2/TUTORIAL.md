@@ -41,19 +41,30 @@ class LoginSerializer(TokenObtainPairSerializer):
     @classmethod
     def get_token(cls, user):
         token = super().get_token(user)
-        member = OrgMember.objects.filter(user=user, is_active=True).first()
-        if member:
-            token["org_id"] = str(member.org_id)
-            token["roles"] = [member.role]
+        member = (
+            OrgMember.objects.filter(user=user, is_active=True)
+            .order_by("joined_at", "id")          # deterministic pick: OLDEST active membership wins
+            .first()
+        )
+        if member is None:
+            raise AuthenticationFailed("no active org membership")   # zero active memberships → 401
+        token["org_id"] = str(member.org_id)
+        extra_roles = set(
+            AccountRoleScope.objects.filter(user=user, org=member.org)
+            .values_list("role", flat=True))
+        token["roles"] = sorted({member.role} | extra_roles)         # sorted set-union — deterministic
         if user.is_platform_staff:
             token["is_platform_staff"] = True
         return token
 ```
 
-Line-by-line: `get_token` is the single hook JWT claims flow through. A multi-org user
-logs into ONE org per token — two orgs = two tokens, no ambiguity. `is_platform_staff`
-travels separately from roles because platform identity and tenant identity are
-different axes (D15).
+Line-by-line: `get_token` is the single hook JWT claims flow through. The org claim is ONE
+active membership, picked deterministically oldest-first (`order_by("joined_at", "id")`) —
+multi-org users currently resolve to their oldest active membership; an org selector in
+`LoginRequest` is PARKED (Tracker §6). Zero active memberships → 401. `roles[]` is built as
+the sorted set-union of the `org_members` base role and any `account_role_scopes` roles for
+that org. `is_platform_staff` travels separately from roles because platform identity and
+tenant identity are different axes (D15).
 
 ### 3.2 Refresh semantics — the honest revocation story
 
@@ -78,20 +89,28 @@ quiet settings flip.
 ```python
 class TenantMiddleware:
     def __call__(self, request):
-        claims = getattr(request, "_jwt_claims", None)
-        if not claims:
-            return self.get_response(request)          # anonymous → views decide
+        jwt_claims = getattr(request, "jwt_claims", None)   # verify-once stash from CachedJWTAuthentication
+        if jwt_claims and jwt_claims.get("support_session"):
+            org_id = jwt_claims["org_id"]               # ① support session → GUC regardless of staff flag
+        elif getattr(request.user, "is_platform_staff", False):
+            return self.get_response(request)           # ② platform staff → skip GUC entirely
+        elif jwt_claims and jwt_claims.get("org_id"):
+            org_id = jwt_claims["org_id"]               # ③ authenticated + org_id → GUC
+        else:
+            return self.get_response(request)           # ④ pass-through — views/DRF decide later
         with transaction.atomic():
             with connection.cursor() as cur:
                 cur.execute("SELECT set_config('app.current_org_id', %s, true)",
-                            [claims["org_id"]])
-        return self.get_response(request)
+                            [org_id])
+            return self.get_response(request)   # INSIDE atomic() — the GUC must outlive the view
 ```
 
 Identical mechanics to v0.1's `tenant_context()` — same GUC name, same transaction
 scoping, parameterized value. Platform ADMIN takes the separate BYPASSRLS connection
 (morghdari_admin); support NEVER does — its scoped session token carries the org claim
-instead (§4.5), so ordinary RLS applies to staff too.
+instead (§4.5), so ordinary RLS applies to staff too. Full failure-mode rules (garbage
+tokens, missing claims, branch ordering) live canonically in Security Architecture §4.1 —
+this tutorial only echoes them.
 
 ### 3.4 RBAC — one decorator
 
@@ -134,8 +153,10 @@ def support_session(request):
 
 Read it as four policies: staff-not-superuser only · mandatory incident · 15-min scoped
 token · audit BEFORE success returns. The middleware then treats the holder as a user
-of exactly that org — RLS does the rest. Ops whitelist endpoints check the SAME
-session's incident id on every call.
+of exactly that org — RLS does the rest. Note that branch-① precedence in the middleware
+(Security §4.1) is what makes this scoped token effective even though its holder has
+`is_platform_staff=True` — without it, branch ② would skip the GUC for staff entirely.
+Ops whitelist endpoints check the SAME session's incident id on every call.
 
 ### 3.6 Tests worth stealing
 
@@ -155,8 +176,8 @@ def test_websocket_org_membership_check(): cross-org WS → close 4003
 
 | Command / concept | Purpose | Key detail | Gotcha |
 |---|---|---|---|
-| POST `/auth/login/` | Issue token pair w/ claims | Claims frozen at issue | Role change needs new login |
-| POST `/auth/token/refresh/` | Fresh access from refresh token | Same token reusable (no rotation) | Client keeps the refresh token for its full 7-day life |
+| POST `/auth/login/` | Issue token pair w/ claims | Claims frozen at issue | Role change needs new login; returns {access_token, refresh_token, user{profile}} — asymmetric BY CONTRACT |
+| POST `/auth/token/refresh/` | Fresh access from refresh token | Same token reusable (no rotation) | Client keeps the refresh token for its full 7-day life; returns native {access} only — do NOT unify with login's shape |
 | `require_role("manager")` | View-level RBAC | Reads token roles | Scope narrowing is separate |
 | `support_session` | Scoped staff debugging | Mandatory incident_id | Superuser deliberately rejected |
 | `SUPPORT_ORG_ENTER` audit row | Accountability | details.incident_id | Written BEFORE returning success |

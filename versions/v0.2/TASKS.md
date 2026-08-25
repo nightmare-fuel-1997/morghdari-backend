@@ -2,14 +2,18 @@
 
 | # | Task | Depends on | Acceptance |
 |---|---|---|---|
+| M2-00a | **NEW** doc-first: Security §4.1 canon update (middleware branch order ①support_session→②platform-staff skip-GUC→③authenticated+org_id→④pass-through; claims-delivery verify-once + stash; transaction topology notes) | - | docs committed & cross-checked |
+| M2-00b | **NEW** doc-first: claim semantics (org = single active membership ordered (joined_at,id) ASC, zero→401; roles[] = sorted union org_members.role ∪ account_role_scopes.role; LoginRequest.org_id selector PARKED; login/refresh key asymmetry recorded) | - | docs committed & cross-checked |
+| M2-00c | **NEW** doc-first: offboarding semantics + Tracker §4j record + §6 parked rows | - | docs committed & cross-checked |
 | M2-01 | Install SimpleJWT; settings block (15-min access / 7-day refresh; **rotation OFF, blacklist OFF** — owner decision 2026-08-23, Tracker §4i) | v0.1 | token pair issued on login |
-| M2-02 | Custom `TokenObtainPairSerializer` embedding `org_id`, `roles[]`, `is_platform_staff` | M2-01 | decoded claims visible in test |
-| M2-03 | `/auth/login/` + `/auth/token/refresh/` endpoints per OpenAPI schemas | M2-01 | contract-shaped 200/401 |
+| M2-02 | **CHANGED** Custom `TokenObtainPairSerializer` embedding `org_id`, `roles[]`, `is_platform_staff` | M2-01 | decoded claims visible in test; decoded claims show ordered single-active org pick (joined_at,id) ASC, zero→401, roles = sorted union of org_members.role ∪ account_role_scopes.role |
+| M2-03 | **CHANGED** `/auth/login/` + `/auth/token/refresh/` endpoints per OpenAPI schemas | M2-01 | contract-shaped 200/401; login response keys {access_token, refresh_token, user{profile}} vs refresh native {access} — asymmetry asserted as contractual; CachedJWTAuthentication registered with stash-absent fallback |
 | M2-04 | No-rotation semantics verified | M2-03 | refresh with the SAME token twice → both return fresh access tokens (no rotation, no blacklist rows) |
-| M2-05 | TenantMiddleware: GUC from validated claim (transaction-scoped); platform-admin path separate | M2-02, v0.1 tenant_context | request-scoped isolation proven in tests |
+| M2-05 | **CHANGED** TenantMiddleware: GUC from validated claim (transaction-scoped); platform-admin path separate | M2-02, v0.1 tenant_context | request-scoped isolation proven in tests; branches in Security §4.1 order ①–④; signature verified exactly once/request (spy test); get_response INSIDE transaction.atomic(); garbage token → pass-through (DRF 401s later), not 500 |
 | M2-06 | RBAC: `require_role` permission classes + `account_role_scopes` farm/saloon narrowing | M2-05 | worker→manager surface = 403 |
-| M2-07 | Org-member management endpoints (invite/list/deactivate staff) | M2-06 | owner manages; manager cannot |
-| M2-08 | Support role + `/platform/support/session/` (400 without incident_id · 200 + 900s scoped token · SUPPORT_ORG_ENTER audit row) | M2-02 | per Security §4.5 |
-| M2-09 | Token revocation story: offboarded member's ACCESS dies ≤15 min; refresh token stays valid until its natural 7-day expiry (no blacklist — accepted risk, Security §3.2) | M2-04 | test proves the access-token bound; risk documented |
-| M2-10 | RBAC matrix test suite (role × endpoint parametrized) | M2-06..08 | full matrix green |
-| M2-11 | DoD sweep: CHANGELOG, tag `v0.2`, demo recorded (WALKTHROUGH script), docs swept | all | tag pushed |
+| M2-07a | **NEW** contract v1.4.3 diff published (3 member-management paths); OWNER APPROVAL GATE blocking M2-07/M2-09 code | M2-00a..c | owner sign-off recorded on the diff |
+| M2-07 | **CHANGED** Org-member management endpoints (invite/list/deactivate staff) | M2-06 | owner manages; manager cannot; responses match contract v1.4.3 verbatim; owner-exclusive (403 others); deactivate flips org_members.is_active, never DELETE; 409 only on duplicate active membership; invite over inactive row reactivates (200) |
+| M2-08 | **CHANGED** Support role + `/platform/support/session/` (400 without incident_id · 200 + 900s scoped token · SUPPORT_ORG_ENTER audit row) | M2-02 | per Security §4.5; scoped token honored via middleware branch ① even though holder is_platform_staff |
+| M2-09 | **CHANGED** Token revocation story: offboarded member's ACCESS dies ≤15 min; refresh token stays valid until its natural 7-day expiry (no blacklist — accepted risk, Security §3.2) | M2-04 | test proves the access-token bound; risk documented; post-deactivation refresh yields access WITHOUT org_id claim → tenant calls return HTTP 200 EMPTY (fail-closed, correct), not 401/403; live tokens die ≤15 min; refresh valid to natural 7-day expiry |
+| M2-10 | **CHANGED** RBAC matrix test suite (role × endpoint parametrized) | M2-06..08 | full matrix green; matrix suite gains the deactivated-member fail-closed-empty-200 case |
+| M2-11 | **CHANGED** DoD sweep: CHANGELOG, tag `v0.2`, demo recorded (WALKTHROUGH script), docs swept | all | tag pushed; sweep additionally verifies contract v1.4.3 artifact + verify-once evidence |
