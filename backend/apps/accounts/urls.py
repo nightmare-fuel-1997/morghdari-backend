@@ -10,6 +10,7 @@ from apps.accounts.views import (
     RefreshView,
     deactivate_member,
     org_members,
+    support_session,
 )
 
 app_name = "accounts"
@@ -24,4 +25,6 @@ urlpatterns = [
         deactivate_member,
         name="org-member-deactivate",
     ),
+    # Contract v1.4.4: audited support-session opening (staff-not-superuser).
+    path("platform/support/session/", support_session, name="support-session"),
 ]

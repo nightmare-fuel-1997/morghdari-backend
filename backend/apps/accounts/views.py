@@ -17,11 +17,14 @@ from django.contrib.auth import get_user_model
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework_simplejwt.tokens import AccessToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from apps.accounts.models import OrgMember
 from apps.accounts.permissions import _claims
 from apps.accounts.serializers import LoginSerializer, resolve_active_membership
+from apps.auditing.models import AccountActivityLog
+from apps.tenants.models import Organization
 
 # Contract v1.4.3 OrgMemberInviteRequest.role enum — the ONLY writable roles.
 ORG_MEMBER_ROLES = ["owner", "manager", "engineer", "doctor", "worker", "installer"]
@@ -36,6 +39,7 @@ class LoginView(TokenObtainPairView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         member, roles = resolve_active_membership(serializer.user)
+        # Platform staff log in ORG-LESS (D15): no membership, no org envelope.
         return Response(
             {
                 "access_token": serializer.validated_data["access"],
@@ -44,8 +48,8 @@ class LoginView(TokenObtainPairView):
                     "id": serializer.user.id,
                     "username": serializer.user.username,
                     "roles": roles,
-                    "org_id": str(member.org_id),
-                    "org_name": member.org.name,
+                    "org_id": str(member.org_id) if member else None,
+                    "org_name": member.org.name if member else None,
                     "is_platform_staff": bool(serializer.user.is_platform_staff),
                 },
             }
@@ -147,3 +151,55 @@ def deactivate_member(request, member_id: int):
     member.is_active = False
     member.save(update_fields=["is_active"])
     return Response({"is_active": False})
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def support_session(request):
+    """/platform/support/session/ — audited org-context session (Security §4.5).
+
+    Four policies, in order (TUTORIAL §3.5 verbatim semantics):
+      1. staff-NOT-superuser only — superuser is deliberately rejected (403);
+      2. incident_id is MANDATORY and non-blank (400) — the audit anchor;
+      3. the scoped token lives 15 min (expires_in_sec 900), claims add
+         org_id + support_session:true + incident_id; middleware branch ①
+         makes its holder an ordinary RLS-scoped user of exactly that org;
+      4. SUPPORT_ORG_ENTER audit row is written BEFORE the success return.
+
+    فارسی: نشست پشتیبانی فقط برای کارکنانِ غیرسوپریوزر؛ شماره حادثه اجباری؛ توکن
+    ۱۵ دقیقه‌ای با ادعای سازمانِ مقصد؛ و ردیف ممیز پیش از بازگشت موفق ثبت می‌شود.
+    """
+    user = request.user
+    if not user.is_platform_staff or user.is_superuser:
+        return Response({"error": "caller lacks the support platform claim"}, status=403)
+
+    incident = (request.data.get("incident_id") or "").strip()
+    if not incident:
+        return Response({"error": "incident_id required"}, status=400)
+
+    org = Organization.objects.filter(org_id=request.data.get("org_id") or "").first()
+    if org is None:
+        return Response({"error": "unknown org_id"}, status=400)
+
+    token = AccessToken.for_user(user)
+    token["org_id"] = str(org.org_id)
+    token["support_session"] = True
+    token["incident_id"] = incident
+
+    # Audit BEFORE success — the write must not be skippable by a later error.
+    AccountActivityLog.objects.create(
+        actor=user,
+        org=org,
+        action="SUPPORT_ORG_ENTER",
+        ip_address=request.META.get("REMOTE_ADDR"),
+        details={"incident_id": incident, "reason": request.data.get("reason", "")},
+    )
+
+    return Response(
+        {
+            "access_token": str(token),
+            "org_id": str(org.org_id),
+            "incident_id": incident,
+            "expires_in_sec": 900,
+        }
+    )
