@@ -22,6 +22,8 @@ urlpatterns = [
     path("api/v1/", include("rest_framework.urls", namespace="rest_framework")),
     # v0.2 auth endpoints (contract v1.4.3: /auth/login/, /auth/token/refresh/)
     path("api/v1/", include("apps.accounts.urls")),
+    # v0.3 telemetry read API (contract: /saloons/{id}/telemetry/)
+    path("api/v1/", include("apps.telemetry.urls")),
     # API documentation (owner-requested at v0.1 close):
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
