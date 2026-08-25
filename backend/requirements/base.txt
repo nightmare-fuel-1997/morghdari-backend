@@ -13,3 +13,6 @@ psycopg[binary]>=3.1
 redis>=5.0
 bcrypt
 prometheus-client
+# API documentation tooling — owner-requested at v0.1 close (serves /api/docs/
+# from v0.1 onward so every endpoint added in v0.2+ self-documents).
+drf-spectacular>=0.27

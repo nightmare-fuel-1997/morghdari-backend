@@ -99,6 +99,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     # Third-party
     "rest_framework",
+    "drf_spectacular",
     "django_celery_beat",
     # Project apps — one per domain, Blueprint §1 enumeration.
     # Model homes are decided ONCE here; never invent extra apps (M0-05).
@@ -189,6 +190,29 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
     "DEFAULT_AUTHENTICATION_CLASSES": [],  # deliberately empty until JWT (v0.2)
     "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
+    # Auto-schema powers /api/schema/ + Swagger UI; endpoints self-document
+    # from v0.2 onward (owner-requested docs page at v0.1 close).
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+}
+
+# ---------------------------------------------------------------------------
+# OpenAPI documentation (drf-spectacular) — served at /api/schema/ + UIs.
+# فارسی: صفحهٔ مستندات API؛ از همین نسخه سرو می‌شود تا نسخه‌های بعد خودکار
+# مستندسازی شوند.
+# ---------------------------------------------------------------------------
+SPECTACULAR_SETTINGS = {
+    "TITLE": "Morghdari API",
+    "DESCRIPTION": (
+        "Poultry-farm IoT platform API. v0.1 ships the schema/RLS foundation "
+        "with no business endpoints yet — auth lands v0.2, telemetry v0.3, "
+        "alerts v0.4. The canonical human-written contract lives in "
+        "backend_docs/API Contract (OpenAPI).yaml."
+    ),
+    "VERSION": "0.1.0",
+    "SERVE_INCLUDE_SCHEMA": False,
+    # Docs pages are public read-only even though the API itself is not:
+    # a contract you cannot see cannot be integrated against.
+    "SERVE_PERMISSIONS": ["rest_framework.permissions.AllowAny"],
 }
 
 # ---------------------------------------------------------------------------
