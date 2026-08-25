@@ -51,4 +51,5 @@
 - [x] M2-07a **GATE** contract v1.4.3 diff published + owner sign-off — backend_docs `406c006`, cleared 2026-08-25
 - [x] M2-01 SIMPLE_JWT settings block (15m access / 7d refresh; rotation+blacklist OFF forever; no token_blacklist app; test SECRET_KEY ≥32B for HS256) — `b130cad`
 - [x] M2-02 claims serializer: oldest-active-org pick (401 on zero), sorted role union, staff-flag-when-true — `2766648`
-- [x] M2-03 login/refresh endpoints per contract keys + CachedJWTAuthentication registered (stash fallback verified) — this commit
+- [x] M2-03 login/refresh endpoints per contract keys + CachedJWTAuthentication registered (stash fallback verified) — `bd75633`
+- [x] M2-04 no-rotation proof: same refresh reused twice ⇒ two valid accesses; blacklist app unreachable; tampered signature 401 — this commit
