@@ -35,3 +35,17 @@ writes a `SUPPORT_ORG_ENTER` audit row.
 Does the JWT org-claim model hold for installers (cross-farm scope)? Did GS-BOARD land
 (platform-side review, extensible)? Staff off-boarding mid-session: does 15-min expiry
 cover revocation?
+
+### Answers (recorded at close, 2026-08-25)
+
+1. **Installers (cross-farm scope):** YES. The token carries the union of
+   `org_members.role` ∪ `account_role_scopes.role`; cross-farm reach comes from
+   PROVINCE-scoped scope rows narrowing querysets via
+   `apps/accounts/permissions.py::scoped_farms/scoped_saloons` (M2-06 truth table).
+2. **GS-BOARD:** NOT in v0.2 by design — platform-side review permission is reserved
+   (support role exists); its code home is v0.5 per the GS-BOARD decision.
+3. **Staff offboarding mid-session:** YES for tenant authority — live access tokens die
+   ≤15 min (proven: exp−iat==900), and the next refresh RE-DERIVES claims, yielding an
+   org-less token whose reads are HTTP 200 + empty (C-14). The refresh token itself stays
+   valid to natural 7-day expiry — the documented accepted risk (Security §3.2) — but it
+   confers NO tenant data authority anymore.

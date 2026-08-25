@@ -3,7 +3,48 @@
 All notable changes per version. Format follows the spiral-roadmap discipline:
 one section per version tag, each listing what risk the version killed.
 
-## [Unreleased] — retrospective resolutions (2026-08-24)
+## [v0.2] — 2026-08-25 — auth & tenancy (M2)
+
+Identity and role enforcement on top of the RLS foundation. Contract bumps
+v1.4.3 (org-member management) and v1.4.4 (support-session access_token erratum);
+decisions D1–D7 owner-approved and recorded in backend_docs Tracker §4j;
+constraint **C-14 pre-registered**: deactivated-member reads return HTTP 200
+with EMPTY payloads by design — do not "fix".
+
+### Risk killed
+**App-layer isolation & role enforcement.** Every authenticated request now
+carries validated JWT claims; the tenant GUC is set inside ONE transaction per
+request by `TenantOrgMiddleware` (branch order ①–④, signature verified exactly
+once); RBAC lives in a single choke point (`require_role`/`RequireRole`) with
+account_role_scopes narrowing. Deactivation revokes tenant authority without
+any blacklist: live tokens die ≤15 min, next refresh is org-less, reads fail
+closed-empty. Accepted risk (Security §3.2, unchanged): a leaked refresh token
+stays REUSABLE to its natural 7-day expiry.
+
+### Added — M2 auth & tenancy
+- SIMPLE_JWT settings (15-min access / 7-day refresh; rotation+blacklist OFF
+  forever, Tracker §4i); resolved pin 5.5.1 recorded; no token_blacklist app
+- `/auth/login/` (contract envelope `{access_token, refresh_token, user{}}`) +
+  stock `/auth/token/refresh/` (native `{access}` — asymmetry contractual)
+- Claims at birth: oldest-active-org pick (zero→401), sorted role union,
+  platform-staff flag; STAFF LOGIN IS ORG-LESS (D15 axis, docs erratum-2)
+- `CachedJWTAuthentication` verify-once stash + `TenantOrgMiddleware`
+  (support-session claim beats staff-skip; whole view inside one atomic)
+- Org-member management per contract v1.4.3: list / invite (unusable password,
+  201; reactivation of inactive row 200; duplicate active 409) / deactivate
+  (soft-off, never delete) — owner-exclusive writes
+- `POST /platform/support/session/`: staff-not-superuser, mandatory incident_id,
+  900s scoped token, SUPPORT_ORG_ENTER audit written before success
+- Offboarding chain proven end-to-end incl. C-12 residue on pooled connections
+
+### Verification
+- Isolated CI gate: **91 passed @ 87.25%** on timescale/timescaledb:2.29.2-pg16
+- Full local postgres mode: 74 passed pre-matrix, zero skips; fresh dev volume
+  unaffected (C-13 `-p morghdari_ci` discipline held all round)
+- Demo transcript: `versions/v0.2/DEMO-M2.md`; look-back answers recorded in
+  `versions/v0.2/README.md`
+
+## Post-v0.1 retrospective resolutions — 2026-08-24 (applied before v0.2 build)
 
 All three open decisions from `versions/v0.1/RETROSPECTIVE.md` were APPROVED and applied:
 
@@ -18,18 +59,6 @@ All three open decisions from `versions/v0.1/RETROSPECTIVE.md` were APPROVED and
   Org-scoped RLS universe: 35 → **36** tables, parity-checked 1:1 across doc/initdb/migration.
 - Policy template NULLIF guard mirrored through Security Architecture §4.1, System Walkthrough
   and Saas.md; docs ci compose gains `name: morghdari_ci`; EMQX mechanism-pair verified present.
-
-### v0.2 auth & tenancy resolution batch (2026-08-25)
-
-- Contract bumped v1.4.3 (+3 org-member paths, owner-exclusive,
-  reactivation-on-inactive semantics)
-- Middleware branch order canonized (support-session claim precedes staff skip)
-- Claims delivered via verify-once middleware stash + CachedJWTAuthentication
-- Tx topology locked (whole view inside atomic, no ATOMIC_REQUESTS)
-- Claim semantics pinned (oldest-active-org pick, union roles, selector parked)
-- Offboarding = fail-closed-empty HTTP 200 (pre-registered as C-14)
-
-**Risk killed:** app-layer isolation & role enforcement *(filled at tag)*
 
 ## [v0.1] — 2026-08-24 — walking skeleton + full schema + RLS
 

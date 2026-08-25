@@ -1,8 +1,17 @@
 # HANDOFF — v0.1 accomplished & closed
 
+> **v0.2 UPDATE (2026-08-25):** v0.2 (auth & tenancy, M2) is CLOSED on branch
+> `v0.2-m2`, tag `v0.2`. Truth files now include `versions/v0.2/{TASKS,README,
+> DEMO-M2}.md` and CHANGELOG `[v0.2]`. Resume ritual unchanged; HEAD/tip values
+> below are v0.1-historical — trust `git log` over them. Contract canon is
+> `backend_docs/API Contract (OpenAPI).yaml` at v1.4.4; decisions D1–D7 +
+> errata in backend_docs Open Items Tracker §4j; C-14 pre-registered
+> (deactivated-member reads = HTTP 200 empty — correct, do not "fix").
+> NEXT: v0.3 planning on owner go (telemetry ingest per versions/v0.3).
+
 > EN: Everything a fresh session (or a new developer) needs to know about what
 > v0.1 delivered and how to continue. Written 2026-08-24 at version close.
-> فارسی: هر آنچه نسخهٔ ۰٫۱ تحویل داده است و چطور ادامه دهید — برای نشست تازه.
+> فارسی: هرچه یک نشستِ تازه برای ادامه لازم دارد؛ نوشته‌شده در بستنِ نسخهٔ ۰٫۱.
 
 ## 0. Resume ritual (do these FIRST)
 

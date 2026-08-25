@@ -58,4 +58,9 @@
 - [x] M2-07 org-member endpoints per contract v1.4.3: owner-exclusive writes, unusable-password invite, reactivation, soft-off deactivate — `cb33f65`
 - [x] M2-08 support-session endpoint: staff-not-superuser, mandatory incident, 900s scoped token via branch ①, SUPPORT_ORG_ENTER audit before return — `b2c7073` (staff org-less login encoded doc-first: docs `ba2384b`)
 - [x] M2-09 offboarding chain proven end to end: refresh re-derives claims → org-less token → HTTP 200 empty reads; GUC dies at real commit — `98f9e27`
-- [x] M2-10 RBAC matrix: 18 parametrized role×endpoint verdicts on the real middleware path — this commit
+- [x] M2-10 RBAC matrix: 18 parametrized role×endpoint verdicts on the real middleware path — `db74ee8`
+- [x] M2-11 DoD sweep: CHANGELOG [v0.2], DEMO-M2.md, README look-back answers, HANDOFF v0.2 block, final CI gate 91 passed @87.25%, annotated tag `v0.2` — this commit
+
+## Version gate (v0.2)
+
+- [x] v0.2 EXIT DEMO recorded (`versions/v0.2/DEMO-M2.md`); risk killed = app-layer isolation & role enforcement; STOP for owner review before v0.3 — this commit + tag `v0.2`
