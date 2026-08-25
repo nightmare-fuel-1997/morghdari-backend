@@ -14,14 +14,17 @@ no/invalid header ⇒ AuthenticationFailed ⇒ 401.
 
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
-# Where TenantOrgMiddleware (M2-05) parks (user, validated_token) after its
-# single verification. Underscore = internal contract between the two layers.
-JWT_AUTH_STASH_ATTR = "_jwt_cached_auth"
+# TenantOrgMiddleware (M2-05) parks the ALREADY-VALIDATED token here after its
+# single signature check; this class then only resolves the user. Underscore =
+# internal contract between the two layers.
+TOKEN_STASH_ATTR = "_jwt_validated_token"
 
 
 class CachedJWTAuthentication(JWTAuthentication):
     def authenticate(self, request):
-        stash = getattr(request, JWT_AUTH_STASH_ATTR, None)
-        if stash is not None:
-            return stash  # already verified once upstream — reuse, never re-sign-check
+        validated = getattr(request, TOKEN_STASH_ATTR, None)
+        if validated is not None:
+            # Signature already verified once upstream — resolve user, never
+            # re-check the signature.
+            return self.get_user(validated), validated
         return super().authenticate(request)

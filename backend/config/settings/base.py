@@ -128,7 +128,9 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
-    # TenantOrgMiddleware (v0.2) will be appended here — it must run AFTER auth.
+    # v0.2 (D2/D3): verify-once tenant middleware. MUST stay AFTER
+    # AuthenticationMiddleware — order is asserted in test_m2_05.
+    "apps.tenants.middleware.TenantOrgMiddleware",
 ]
 
 ROOT_URLCONF = "config.urls"
