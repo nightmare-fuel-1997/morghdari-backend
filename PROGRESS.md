@@ -57,4 +57,5 @@
 - [x] M2-06 RBAC choke point: require_role/RequireRole + farm/saloon/province narrowing truth table — `90e710a`
 - [x] M2-07 org-member endpoints per contract v1.4.3: owner-exclusive writes, unusable-password invite, reactivation, soft-off deactivate — `cb33f65`
 - [x] M2-08 support-session endpoint: staff-not-superuser, mandatory incident, 900s scoped token via branch ①, SUPPORT_ORG_ENTER audit before return — `b2c7073` (staff org-less login encoded doc-first: docs `ba2384b`)
-- [x] M2-09 offboarding chain proven end to end: refresh re-derives claims → org-less token → HTTP 200 empty reads; GUC dies at real commit — this commit
+- [x] M2-09 offboarding chain proven end to end: refresh re-derives claims → org-less token → HTTP 200 empty reads; GUC dies at real commit — `98f9e27`
+- [x] M2-10 RBAC matrix: 18 parametrized role×endpoint verdicts on the real middleware path — this commit
