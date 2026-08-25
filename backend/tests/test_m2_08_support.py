@@ -10,6 +10,8 @@ returned access_token seeing EXACTLY that org's saloons under FORCE RLS.
 برگشتی دقیقاً فقط سازمانِ مقصد را می‌بیند و ردیف SUPPORT_ORG_ENTER ثبت شده است.
 """
 
+import unittest
+
 import pytest
 from django.contrib.auth import get_user_model
 from django.db import connection
@@ -52,6 +54,12 @@ def _login_token(client: APIClient, username: str) -> str:
 @pytest.mark.use_migrations
 @pytest.mark.django_db(transaction=True)
 class SupportSessionTests(TestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        if connection.vendor != "postgresql":
+            raise unittest.SkipTest("support-session truth requires PostgreSQL (CI/dev-container)")
+
     def setUp(self):
         self.client = APIClient()
         self.url = reverse("accounts:support-session")

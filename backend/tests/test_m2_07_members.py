@@ -13,8 +13,11 @@ unknown/foreign member 404 · deactivated member cannot log in again.
 می‌شوند؛ فقط روی Postgres اجرا می‌شود.
 """
 
+import unittest
+
 import pytest
 from django.contrib.auth import get_user_model
+from django.db import connection
 from django.test import TestCase
 from django.urls import reverse
 from rest_framework.test import APIClient
@@ -39,6 +42,12 @@ def _login(client: APIClient, username: str) -> str:
 @pytest.mark.use_migrations
 @pytest.mark.django_db(transaction=True)
 class OrgMembersEndpointTests(TestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        if connection.vendor != "postgresql":
+            raise unittest.SkipTest("member management truth requires PostgreSQL (CI/dev-container)")
+
     def setUp(self):
         self.client = APIClient()
         self.list_url = reverse("accounts:org-members")
