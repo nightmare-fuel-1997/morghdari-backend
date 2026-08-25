@@ -36,3 +36,17 @@
 ## Version gate
 
 - [x] v0.1 EXIT DEMO performed/recorded → STOP for owner retrospective before v0.2 — `cee9210` tag `v0.1` (transcripts: DEMO-M0.md, DEMO-M1.md; this tick is post-tag tidy)
+
+## M2 — auth & tenancy (v0.2)
+
+> EN: Live mirror of `versions/v0.2/TASKS.md` as updated by decisions D1–D7
+> (backend_docs Open Items Tracker §4j). The doc-first batch (M2-00a..c) and the
+> contract gate (M2-07a) closed BEFORE any code, per the agreed ritual.
+>
+> فارسی: آینهٔ زندهٔ تسک‌های نسخهٔ ۰٫۲؛ کارهای سند-اول و گیتِ قرارداد پیش از هر کدی بسته شدند.
+
+- [x] M2-00a Security §4.1 canon: branch order ①–④, verify-once claims delivery, tx topology — backend_docs `cc234cd`
+- [x] M2-00b claim semantics doc-first: ordered active-org pick, union roles, parked selector, login/refresh key asymmetry — backend_docs `406c006` + `cc234cd`
+- [x] M2-00c offboarding semantics + Tracker §4j record + §6 parked rows — backend_docs `8a3b253`
+- [x] M2-07a **GATE** contract v1.4.3 diff published + owner sign-off — backend_docs `406c006`, cleared 2026-08-25
+- [x] M2-01 SIMPLE_JWT settings block (15m access / 7d refresh; rotation+blacklist OFF forever; no token_blacklist app; test SECRET_KEY ≥32B for HS256) — this commit

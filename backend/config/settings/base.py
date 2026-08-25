@@ -17,6 +17,7 @@ Design rules enforced here (Implementation Blueprint §2):
 """
 
 import os
+from datetime import timedelta
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -192,7 +193,27 @@ REST_FRAMEWORK = {
     "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
     # Auto-schema powers /api/schema/ + Swagger UI; endpoints self-document
     # from v0.2 onward (owner-requested docs page at v0.1 close).
-    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+}
+
+# ---------------------------------------------------------------------------
+# JWT (SimpleJWT) — Security Architecture §3.2; owner decision Tracker §4i.
+# Lifetimes: access 15 min / refresh 7 days. Rotation + blacklist are OFF
+# FOREVER (owner decision 2026-08-23): offboarding relies on claim semantics,
+# not revocation — a deactivated member's fresh tokens carry no org_id so RLS
+# fails closed (Security §4.1b, constraint C-14). The token_blacklist app is
+# therefore NEVER installed: registering it would promise revocation we do
+# not implement in v0.x.
+# فارسی: عمر توکن دسترسی ۱۵ دقیقه و توکن نوسازی ۷ روز؛ چرخش و سیاههٔ توکن برای
+# همیشه خاموش است (تصمیم مالک). خروجِ عضو از راهِ حذف ادعای org_id و RLS کنترل
+# می‌شود، نه ابطال توکن؛ پس اپ token_blacklist هرگز ثبت نمی‌شود.
+# ---------------------------------------------------------------------------
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    "ROTATE_REFRESH_TOKENS": False,
+    "BLACKLIST_AFTER_ROTATION": False,
+    "AUTH_HEADER_TYPES": ("Bearer",),
 }
 
 # ---------------------------------------------------------------------------

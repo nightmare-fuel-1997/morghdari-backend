@@ -28,7 +28,10 @@ from .base import _database_from_url  # noqa: F401
 DEBUG = False
 ALLOWED_HOSTS = ["localhost", "127.0.0.1", "test"]
 
-SECRET_KEY = "test-only-insecure-key"  # never a secret: test env by definition
+# 32+ bytes so SimpleJWT's HS256 signing stops raising InsecureKeyLengthWarning
+# (RFC 7518 §3.2 minimum); still never a secret: test env by definition.
+# فارسی: کلید تست حداقل ۳۲ بایت است تا هشدار طول کلید JWT حذف شود؛ باز هم محرمانه نیست.
+SECRET_KEY = "test-only-insecure-key-0123456789abcdef!"  # never a secret: test env by definition
 
 # Speed lever 1: fastest hasher allowed by Django's validator chain.
 PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]  # noqa: F405

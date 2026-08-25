@@ -3,7 +3,7 @@
 # Rule: every pin here is deliberate — do not add "just in case" packages.
 Django>=5.0,<5.1
 djangorestframework>=3.15
-djangorestframework-simplejwt
+djangorestframework-simplejwt  # resolved 5.5.1 at M2-01; lifetimes/flags per Security §3.2, Tracker §4i
 channels[daphne]>=4.0
 channels-redis
 celery[redis]>=5.4
