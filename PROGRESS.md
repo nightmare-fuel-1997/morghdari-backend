@@ -49,4 +49,5 @@
 - [x] M2-00b claim semantics doc-first: ordered active-org pick, union roles, parked selector, login/refresh key asymmetry — backend_docs `406c006` + `cc234cd`
 - [x] M2-00c offboarding semantics + Tracker §4j record + §6 parked rows — backend_docs `8a3b253`
 - [x] M2-07a **GATE** contract v1.4.3 diff published + owner sign-off — backend_docs `406c006`, cleared 2026-08-25
-- [x] M2-01 SIMPLE_JWT settings block (15m access / 7d refresh; rotation+blacklist OFF forever; no token_blacklist app; test SECRET_KEY ≥32B for HS256) — this commit
+- [x] M2-01 SIMPLE_JWT settings block (15m access / 7d refresh; rotation+blacklist OFF forever; no token_blacklist app; test SECRET_KEY ≥32B for HS256) — `b130cad`
+- [x] M2-02 claims serializer: oldest-active-org pick (401 on zero), sorted role union, staff-flag-when-true — this commit
