@@ -15,15 +15,18 @@ never disagree about who logged in (one rule, two consumers).
 
 from django.contrib.auth import get_user_model
 from rest_framework.decorators import api_view, permission_classes
+from rest_framework.exceptions import AuthenticationFailed
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework_simplejwt.tokens import AccessToken
+from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from apps.accounts.models import OrgMember
 from apps.accounts.permissions import _claims
 from apps.accounts.serializers import LoginSerializer, resolve_active_membership
 from apps.auditing.models import AccountActivityLog
+from apps.tenants.models import Organization
 from apps.tenants.models import Organization
 
 # Contract v1.4.3 OrgMemberInviteRequest.role enum — the ONLY writable roles.
@@ -57,7 +60,44 @@ class LoginView(TokenObtainPairView):
 
 
 class RefreshView(TokenRefreshView):
-    """Stock on purpose: contract RefreshResponse = native `{access}` only."""
+    """Stock endpoint, one override: tenancy claims are RE-DERIVED at refresh.
+
+    Contract v1.4.3 promises a deactivated member's next refresh yields an
+    access WITHOUT org_id — but stock refresh COPIES the frozen claims from
+    the old refresh token, which would keep a fired worker reading their old
+    farm for up to 7 days. So the new access is minted fresh from CURRENT DB
+    truth (resolve_active_membership): active membership ⇒ same claims as
+    login; deactivated/staff ⇒ org-less (branch-②/④ semantics, C-14).
+    فارسی: در نوسازی، ادعاهای سازمانی از حقیقتِ فعلیِ دیتابیس ساخته می‌شوند تا
+    خروجِ عضو بلافاصله اثر کند و توکنِ جدید بدونِ org_id صادر شود.
+    """
+
+    def post(self, request, *args, **kwargs):
+        response = super().post(request, *args, **kwargs)
+        if response.status_code != 200:
+            return response
+        try:
+            old = RefreshToken(request.data.get("refresh"))
+        except TokenError:
+            return response  # unreachable after super() succeeded; stay safe
+        user = User.objects.filter(id=old.payload.get("user_id")).first()
+        if user is None:
+            return response
+        try:
+            member, roles = resolve_active_membership(user)
+        except AuthenticationFailed:
+            # Fully deactivated tenant: the refresh itself STAYS valid (its own
+            # lifetime is the accepted risk, Security §3.2) but the new access
+            # must be ORG-LESS — C-14's fail-closed-empty semantics.
+            member, roles = None, []
+        access = AccessToken.for_user(user)
+        access["roles"] = roles
+        if member is not None:
+            access["org_id"] = str(member.org_id)
+        if user.is_platform_staff:
+            access["is_platform_staff"] = True
+        response.data["access"] = str(access)
+        return response
 
 
 def _member_out(member: OrgMember) -> dict:
