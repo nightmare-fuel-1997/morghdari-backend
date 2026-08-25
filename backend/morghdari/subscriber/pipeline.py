@@ -1,14 +1,18 @@
-"""Per-message pipeline — the ordered gate every reading passes (M3-02+).
+"""Per-message pipeline — the ordered gates every reading passes (M3-02..04).
 
-Order matters and is contractual:
-  parse topic → identity cross-check → dedup (M3-03) → enrich/XADD (M3-04)
-This module currently implements the first two gates plus resolution inputs;
-dedup/enrich slots in ahead of the marked hand-off point in M3-03/M3-04.
-فارسی: ترتیبِ دروازه‌ها قراردادی است — تاپیک، هویت، و بعداً حذفِ تکرار و
-تغییرِ قالب؛ این ماژول فعلاً دو دروازهٔ نخست را پیاده کرده است.
+Order is CONTRACTUAL (TUTORIAL §3.1–3.4, pitfalls table):
+  ① parse topic → ② identity cross-check → ③ schema gate → ④ device_ts
+  → ⑤ CHEAP dedup → ⑥ slot resolution → ⑦ enrich + XADD per reading
+  (+ trim on the write path, M3-07).
+A rejection at ANY gate dead-letters with a reason; a duplicate drops
+silently as a success.
+فارسی: ترتیبِ دروازه‌ها قراردادی است؛ هر رد در هر دروازه با دلیل به صندوق مرده
+می‌رود و پیامِ تکراری بی‌سروصدا حذف می‌شود.
 """
 
 import json
+import time
+import uuid
 
 from .dlq import send_to_dlq
 from .resolver import UNKNOWN_SLOT, resolve_pack_slot
@@ -16,17 +20,29 @@ from .topics import TopicParseError, identity_fault, parse_topic
 
 SUPPORTED_SCHEMA_VERSION = "2.0"   # Firmware Spec §3.8 — gates the parser
 DEDUP_TTL_SECONDS = 90_000         # ≥ EMQX session expiry (AU-fix invariant)
+STREAM_REALTIME = "telemetry:realtime"
+STREAM_HISTORICAL = "telemetry:historical"
+STREAM_MAXLEN = 100_000            # Tracker AU-STREAMS: bounded, approximate
+
+
+def trim_streams(redis_client) -> None:
+    """Availability, not housekeeping: with maxmemory noeviction an untrimmed
+    stream eventually rejects ALL writes — including alerts. Trim on the write
+    path, always (TUTORIAL §3.7). DLQ exempt: archive before trimming it.
+    فارسی: هرس روی مسیر نوشتن؛ وگرنه استریمِ پُر همهٔ نوشتن‌ها را رد می‌کند.
+    """
+    for stream in (STREAM_REALTIME, STREAM_HISTORICAL):
+        redis_client.xtrim(stream, maxlen=STREAM_MAXLEN, approximate=True)
 
 
 def dedup_key(org_id: str, gateway_slot: str, device_ts: str) -> str:
     """Gateway-level dedup: one payload = one 60s window per gateway.
 
     TUTORIAL §3.3 sketches slot_id as the middle component, but payloads are
-    MULTI-pack (M3-08) while device_ts is per-PAYLOAD — keying on the resolved
-    pack slot would let a replayed multi-pack message partially through.
-    The topic's gateway slot is stable, authenticated-adjacent, and unique per
-    window. Deviation from the sketch recorded for Tracker ratification (Q4
-    family).
+    MULTI-pack (M3-08) while device_ts is per-PAYLOAD — keying on a resolved
+    pack slot would let a replayed multi-pack message partially through. The
+    topic's gateway slot is stable and unique per window; deviation from the
+    sketch recorded for Tracker ratification (Q4 family).
     فارسی: کلید حذف تکرار در سطح گیت‌وی است چون هر محموله چند پک دارد ولی یک
     device_ts واحد؛ اسلاتِ تاپیک ثابت و معتبر است.
     """
@@ -34,10 +50,11 @@ def dedup_key(org_id: str, gateway_slot: str, device_ts: str) -> str:
 
 
 def handle_message(redis_client, topic: str, payload: bytes, db_fetch=None) -> str | None:
-    """Process one MQTT message; returns an entry id when dead-lettered.
+    """Process one MQTT message.
 
-    Returns None on the happy path once M3-04 lands; today it also returns an
-    id only for rejections. `payload` is raw bytes exactly as received.
+    Returns None on success/duplicate, or a DLQ entry id on rejection.
+    `payload` is raw bytes exactly as received — they travel intact into the
+    stream entry so workers never depend on this process's parsing choices.
     """
     # Gate 1 — transport identity.
     try:
@@ -59,9 +76,7 @@ def handle_message(redis_client, topic: str, payload: bytes, db_fetch=None) -> s
 
     # Gate 3 — schema version gates the parser (Firmware Spec).
     if data.get("schema_version") != SUPPORTED_SCHEMA_VERSION:
-        return send_to_dlq(
-            redis_client, topic, payload, "UNSUPPORTED_SCHEMA_VERSION"
-        )
+        return send_to_dlq(redis_client, topic, payload, "UNSUPPORTED_SCHEMA_VERSION")
 
     # Gate 4 — one top-level device_ts per payload; also the dedup component.
     device_ts = data.get("device_ts")
@@ -75,19 +90,41 @@ def handle_message(redis_client, topic: str, payload: bytes, db_fetch=None) -> s
     if not redis_client.set(key, 1, nx=True, ex=DEDUP_TTL_SECONDS):
         return None
 
-    # Per-reading slot resolution (cache-first). A miss is a DLQ reason, not a
-    # crash — provisioning owns the mapping table (v0.5 writer).
+    # Gate 6 — resolve EVERY pack before publishing anything: a partial storm
+    # of entries for a half-known payload would be worse than one DLQ entry.
+    resolved_slots = []
     for reading in data.get("readings", []):
-        pack_id = reading.get("pack_id")
         slot_id = resolve_pack_slot(
             redis_client,
             org_id,
             data.get("gateway_hardware_id", ""),
-            pack_id,
+            reading.get("pack_id"),
             db_fetch=db_fetch,
         )
         if slot_id == UNKNOWN_SLOT:
             return send_to_dlq(redis_client, topic, payload, UNKNOWN_SLOT)
+        resolved_slots.append(slot_id)
 
-    # ── M3-04 enrich/XADD inserts here ─────────────────────────────────────
+    # Gate 7 — enrich + XADD, one entry PER READING (workers derive saloon
+    # from the resolved slot). Lane by is_buffered; flat fields per decision
+    # Q4 incl recv_ts + trace_id; raw JSON travels untouched.
+    lane = STREAM_HISTORICAL if data.get("is_buffered") else STREAM_REALTIME
+    raw_str = payload.decode("utf-8", errors="replace")
+    for slot_id in resolved_slots:
+        redis_client.xadd(
+            lane,
+            {
+                "org_id": org_id,
+                "farm_id": farm_id,
+                "gateway_slot_id": gateway_slot,
+                "device_ts": device_ts,
+                "is_buffered": str(bool(data.get("is_buffered"))),
+                "slot_id": str(slot_id),
+                "payload": raw_str,
+                "recv_ts": repr(time.time()),
+                "trace_id": str(uuid.uuid4()),
+            },
+        )
+
+    trim_streams(redis_client)  # M3-07: bounded streams, every write
     return None

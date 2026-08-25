@@ -40,14 +40,23 @@ VALID_TOPIC = (
 @pytest.fixture()
 def redis_client():
     client = redis_lib.Redis.from_url(REDIS_URL, decode_responses=True)
-    # Hermetic: scrub BEFORE and AFTER — the dev/demo Redis is long-lived.
-    # NOTE the glob: cache keys look like "slot:map:m3test-HW:P-A", so the
-    # wildcard must start right after the "m3test" tag, not after a colon.
-    for key in client.scan_iter("slot:map:m3test*"):
-        client.delete(key)
+    # Hermetic: scrub BEFORE and AFTER — the dev/demo Redis is long-lived and
+    # pytest processes come and go, so leftovers poison the next run (dedup
+    # keys live 25h; streams keep every crashed run's junk). Globs: cache keys
+    # look like "slot:map:m3test-HW:P-A" (wildcard right after the tag); dedup
+    # keys carry the test org uuid. The two lanes wipe wholesale; DLQ is
+    # shared with other assertions — never wiped here.
+    for pattern in ("slot:map:m3test*", "dedup:9f8c2d34-6f0e*"):
+        for key in client.scan_iter(pattern):
+            client.delete(key)
+    client.delete("telemetry:realtime")
+    client.delete("telemetry:historical")
     yield client
-    for key in client.scan_iter("slot:map:m3test*"):
-        client.delete(key)
+    for pattern in ("slot:map:m3test*", "dedup:9f8c2d34-6f0e*"):
+        for key in client.scan_iter(pattern):
+            client.delete(key)
+    client.delete("telemetry:realtime")
+    client.delete("telemetry:historical")
 
 
 # ── parser ────────────────────────────────────────────────────────────────
@@ -254,7 +263,97 @@ def test_different_device_ts_is_not_a_duplicate(redis_client):
         db_fetch=lambda *a: calls.append(1) or 43,
     )
     assert second is None
-    assert calls  # a genuinely new window DID resolve slots again
+    # A genuinely new window must be PROCESSED again — proof is the stream:
+    # two windows → two enriched entries (resolution itself may come from the
+    # 24h cache, which is correct and cheap; DB is only the cold path).
+    entries = _drain_stream(redis_client, REALTIME)
+    assert sorted(f["device_ts"] for _, f in entries) == [
+        "2026-08-25T10:30:00Z",
+        "2026-08-25T10:31:00Z",
+    ]
+
+
+# ── M3-04: enrichment → lane streams · M3-07: trimming ───────────────────
+
+REALTIME = "telemetry:realtime"
+HISTORICAL = "telemetry:historical"
+
+
+def _drain_stream(client, stream):
+    entries = client.xrange(stream)
+    client.delete(stream)
+    return [(i, f) for i, f in entries]
+
+
+def test_enriched_realtime_entry_carries_contract_fields(redis_client):
+    body = _valid_payload()
+    handle_message(redis_client, VALID_TOPIC, _bytes(body), db_fetch=lambda *a: 42)
+
+    entries = _drain_stream(redis_client, REALTIME)
+    assert len(entries) == 1
+    fields = entries[0][1]
+    assert fields["org_id"] == "9f8c2d34-6f0e-4a55-9a10-2b7c1f5e4d01"
+    assert fields["farm_id"] == "12"
+    assert fields["gateway_slot_id"] == "FARM-01-GW-A"
+    assert fields["device_ts"] == body["device_ts"]
+    assert fields["is_buffered"] == "False"  # redis stores strings
+    assert fields["slot_id"] == "42"         # resolved, NOT from the wire
+    assert '"pack_id"' in fields["payload"]  # raw JSON travels intact
+    assert float(fields["recv_ts"]) > 0
+    assert len(fields["trace_id"]) == 36     # uuid4 tracking sticker
+
+
+def test_multi_pack_payload_emits_one_entry_per_reading(redis_client):
+    body = _valid_payload(
+        readings=[
+            {"pack_id": "P-A", "metrics": {"temp": {"avg": 28.4}}},
+            {"pack_id": "P-B", "metrics": {"nh3": {"avg": 14.0}}},
+        ]
+    )
+    def fetch(org, hw, pack):
+        return {"P-A": 42, "P-B": 43}[pack]
+
+    handle_message(redis_client, VALID_TOPIC, _bytes(body), db_fetch=fetch)
+    entries = _drain_stream(redis_client, REALTIME)
+    assert sorted(f["slot_id"] for _, f in entries) == ["42", "43"]
+
+
+def test_buffered_payload_routes_to_historical_lane(redis_client):
+    handle_message(
+        redis_client,
+        VALID_TOPIC,
+        _bytes(_valid_payload(is_buffered=True)),
+        db_fetch=lambda *a: 42,
+    )
+    assert redis_client.xlen(REALTIME) == 0
+    entries = _drain_stream(redis_client, HISTORICAL)
+    assert len(entries) == 1
+    assert entries[0][1]["is_buffered"] == "True"
+
+
+def test_trim_issues_approximate_xtrim_on_both_lanes(monkeypatch, redis_client):
+    # NOTE: we spy the COMMAND, not the resulting length — Redis's approximate
+    # XTRIM may legally undershoot when entries share radix nodes (observed:
+    # 25-entry stream in one node trims to... 25). The 100k bound is asserted
+    # by the sustained-load acceptance in M3-10 on a realistic volume.
+    from morghdari.subscriber import pipeline
+
+    calls = []
+    real_xtrim = redis_client.xtrim
+
+    def spy(name, maxlen=None, approximate=True, **kw):
+        calls.append((name, maxlen, approximate))
+        return real_xtrim(name, maxlen=maxlen, approximate=approximate)
+
+    monkeypatch.setattr(redis_client, "xtrim", spy)
+    redis_client.xadd(REALTIME, {"n": "1"})
+    redis_client.xadd(HISTORICAL, {"n": "1"})
+
+    pipeline.trim_streams(redis_client)
+
+    assert ("telemetry:realtime", pipeline.STREAM_MAXLEN, True) in calls
+    assert ("telemetry:historical", pipeline.STREAM_MAXLEN, True) in calls
+    redis_client.delete(REALTIME, HISTORICAL)
 
 
 # ── helpers ───────────────────────────────────────────────────────────────
