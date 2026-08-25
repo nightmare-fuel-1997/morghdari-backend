@@ -39,10 +39,10 @@ condition: service_healthy`); tests ran against real TimescaleDB 2.29.2-pg16
 
 1. `config/settings/test.py` — `from .base import *` does not import
    `_database_from_url`; the DATABASE_URL branch NameError'd only under CI
-   (local sqlite runs never took that path). Fixed ff8c942.
+   (local sqlite runs never took that path). Fixed e089ef7.
 2. Dockerfile test stage — `/app` was root-owned, so appuser's pytest-cov
    could not create `.coverage.*`. Fixed with `install -d -o appuser` +
-   `COPY --chown` (ff8c942).
+   `COPY --chown` (e089ef7).
 
 ## 4. Not shown on purpose (scope guard, WALKTHROUGH §5)
 

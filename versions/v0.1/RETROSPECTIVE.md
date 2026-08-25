@@ -132,23 +132,23 @@ Status legend:
 
 **14. Star-import hides underscore names [SETTLED]** — `from .base import *` skipped
 `_database_from_url`; CI's DATABASE_URL branch NameError'd while local sqlite runs passed.
-Fixed with explicit import (commit `ff8c942`).
+Fixed with explicit import (commit `e089ef7`).
 
 **15. Root-owned WORKDIR broke coverage [SETTLED]** — `/app` created by WORKDIR was root-owned,
 so appuser's pytest-cov couldn't write `.coverage.*`. Fixed via `install -d -o appuser /app` +
-`COPY --chown` (commit `ff8c942`).
+`COPY --chown` (commit `e089ef7`).
 
 **16. Incomplete auto-generated migration dependency [SETTLED]** — telemetry/0001 lacked
 `('devices','0001_initial')`; the RunSQL FK to `saloon_sensor_slots` failed only on a VIRGIN
 database (old dev volume masked it). Fixed; lesson: the fresh-volume bootstrap replay is mandatory,
-not optional (commit `9534795`).
+not optional (commit `3d2c2ec`).
 
 **17. Two silently omitted tables [SETTLED]** — `maintenance_mutes` and `tier_quota_mapping`
 were missed during transcription; a systematic db_table-vs-doc diff caught them (same commit).
 
 **18. CI image couldn't see initdb SQL [SETTLED]** — the §8 build context packages only
 `./backend`; repo-root `initdb/` is mounted read-only into the CI test service
-(`MORGHDARI_INITDB_DIR=/initdb`) rather than duplicated into the image (commit `fced1f7`).
+(`MORGHDARI_INITDB_DIR=/initdb`) rather than duplicated into the image (commit `291e5b7`).
 
 ---
 
