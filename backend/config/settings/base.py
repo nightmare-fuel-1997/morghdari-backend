@@ -185,11 +185,15 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # ---------------------------------------------------------------------------
-# REST framework — minimal for v0.1; auth classes arrive with JWT at v0.2
+# REST framework — auth arrives with JWT at v0.2 (Security §4.1, decision D3):
+# CachedJWTAuthentication reuses the middleware's verify-once stash when
+# TenantOrgMiddleware has run, else verifies stock. Permission stays deny-all.
 # ---------------------------------------------------------------------------
 REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
-    "DEFAULT_AUTHENTICATION_CLASSES": [],  # deliberately empty until JWT (v0.2)
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "apps.accounts.authentication.CachedJWTAuthentication",
+    ],
     "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
     # Auto-schema powers /api/schema/ + Swagger UI; endpoints self-document
     # from v0.2 onward (owner-requested docs page at v0.1 close).

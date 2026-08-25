@@ -29,21 +29,33 @@ class LoginSerializer(TokenObtainPairSerializer):
     @classmethod
     def get_token(cls, user):
         token = super().get_token(user)
-        member = (
-            OrgMember.objects.filter(user=user, is_active=True)
-            .order_by("joined_at", "id")  # deterministic pick: OLDEST active membership wins
-            .first()
-        )
-        if member is None:
-            # Zero active memberships → 401 at the view layer; never a token
-            # with an empty org claim (that would silently read zero rows and
-            # mask a provisioning bug as an empty farm).
-            raise AuthenticationFailed("no active org membership")
+        member, roles = resolve_active_membership(user)
         token["org_id"] = str(member.org_id)
-        extra_roles = set(
-            AccountRoleScope.objects.filter(user=user, org=member.org).values_list("role", flat=True)
-        )
-        token["roles"] = sorted({member.role} | extra_roles)  # sorted set-union — deterministic
+        token["roles"] = roles  # sorted set-union — deterministic
         if user.is_platform_staff:
             token["is_platform_staff"] = True
         return token
+
+
+def resolve_active_membership(user):
+    """Single source of truth for WHO the token says you are (Security §4.1b).
+
+    Returns (member, roles) for the caller's oldest ACTIVE membership. Raises
+    AuthenticationFailed on zero active memberships so both token issuance and
+    the profile envelope fail the same way — one rule, two consumers.
+    فارسی: تنها منبع حقیقت هویتِ توکن؛ قدیمی‌ترین عضویت فعال و نقش‌های اجتماعِ مرتب‌شده.
+    """
+    member = (
+        OrgMember.objects.filter(user=user, is_active=True)
+        .order_by("joined_at", "id")  # deterministic pick: OLDEST active membership wins
+        .first()
+    )
+    if member is None:
+        # Zero active memberships → 401 at the view layer; never a token with
+        # an empty org claim (that would silently read zero rows and mask a
+        # provisioning bug as an empty farm).
+        raise AuthenticationFailed("no active org membership")
+    extra_roles = set(
+        AccountRoleScope.objects.filter(user=user, org=member.org).values_list("role", flat=True)
+    )
+    return member, sorted({member.role} | extra_roles)
