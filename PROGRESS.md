@@ -54,4 +54,5 @@
 - [x] M2-03 login/refresh endpoints per contract keys + CachedJWTAuthentication registered (stash fallback verified) — `bd75633`
 - [x] M2-04 no-rotation proof: same refresh reused twice ⇒ two valid accesses; blacklist app unreachable; tampered signature 401 — `fa196c4`
 - [x] M2-05 TenantOrgMiddleware: verify-once stash, branch order ①–④, whole-view atomic GUC, fail-closed proofs on real Postgres — `bb38928` ← mid-round checkpoint cleared
-- [x] M2-06 RBAC choke point: require_role/RequireRole + farm/saloon/province narrowing truth table — this commit
+- [x] M2-06 RBAC choke point: require_role/RequireRole + farm/saloon/province narrowing truth table — `90e710a`
+- [x] M2-07 org-member endpoints per contract v1.4.3: owner-exclusive writes, unusable-password invite, reactivation, soft-off deactivate — this commit
