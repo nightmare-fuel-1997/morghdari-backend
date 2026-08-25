@@ -73,4 +73,5 @@
 > فارسی: آینهٔ زندهٔ تسک‌های نسخهٔ ۰٫۳؛ شش تصمیمِ برنامه‌ریزی در سند ردیابی ثبت شد.
 
 - [x] M3-01 subscriber package: shared group `$share/telemetry_workers/`, qos=1, persistent session, required unique client id — `6d0c866`
-- [x] M3-02 topic parser + identity cross-check + pack→slot resolver (cache-first 24h, DB fallback, UNKNOWN_SLOT DLQ) + DLQ writer — tests written FIRST — this commit
+- [x] M3-02 topic parser + identity cross-check + pack→slot resolver (cache-first 24h, DB fallback, UNKNOWN_SLOT DLQ) + DLQ writer — tests written FIRST — `cf00cc1`
+- [x] M3-03 dedup guard `SET NX EX 90000` (gateway-level key) + schema/device_ts gates — this commit

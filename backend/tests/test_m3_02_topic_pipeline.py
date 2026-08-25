@@ -145,6 +145,25 @@ def test_dlq_entry_carries_topic_payload_reason(redis_client):
 
 # ── pipeline wiring (parse → identity → resolve, pre-dedup skeleton) ──────
 
+def _valid_payload(**overrides):
+    """Minimal schema-2.0 body the gates accept (single reading, mapped pack)."""
+    payload = {
+        "gateway_hardware_id": "m3test-HW",
+        "gateway_slot_id": "FARM-01-GW-A",
+        "schema_version": "2.0",
+        "device_ts": "2026-08-25T10:30:00Z",
+        "is_buffered": False,
+        "readings": [{"pack_id": "P-A", "metrics": {"temp": {"avg": 28.4}}}],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _dlq_reason(redis_client, entry_id):
+    _, fields = redis_client.xrange(DLQ_STREAM, min=entry_id, max=entry_id)[0]
+    return fields["reason"]
+
+
 def test_handle_message_routes_malformed_topic_to_dlq(redis_client):
     entry_id = handle_message(
         redis_client, "forged/topic/shape", b'{"gateway_slot_id":"X"}'
@@ -160,6 +179,91 @@ def test_handle_message_identity_mismatch_goes_to_dlq(redis_client):
         VALID_TOPIC.replace("FARM-01-GW-A", "FARM-01-GW-B"),
         b'{"gateway_slot_id":"FARM-01-GW-A"}',
     )
-    _, fields = redis_client.xrange(DLQ_STREAM, min=entry_id, max=entry_id)[0]
-    assert fields["reason"] == "TOPIC_PAYLOAD_IDENTITY_MISMATCH"
+    assert _dlq_reason(redis_client, entry_id) == "TOPIC_PAYLOAD_IDENTITY_MISMATCH"
     redis_client.xdel(DLQ_STREAM, entry_id)
+
+
+# ── M3-03: schema gate, dedup guard ───────────────────────────────────────
+
+def test_handle_message_bad_json_goes_to_dlq(redis_client):
+    entry_id = handle_message(redis_client, VALID_TOPIC, b"{not json")
+    assert _dlq_reason(redis_client, entry_id) == "bad_json"
+    redis_client.xdel(DLQ_STREAM, entry_id)
+
+
+def test_handle_message_non_object_json_is_bad_json(redis_client):
+    entry_id = handle_message(redis_client, VALID_TOPIC, b"[1,2,3]")
+    assert _dlq_reason(redis_client, entry_id) == "bad_json"
+    redis_client.xdel(DLQ_STREAM, entry_id)
+
+
+def test_unsupported_schema_version_dead_letters(redis_client):
+    entry_id = handle_message(
+        redis_client,
+        VALID_TOPIC,
+        _valid_payload_bytes(schema_version="1.0"),
+    )
+    assert _dlq_reason(redis_client, entry_id) == "UNSUPPORTED_SCHEMA_VERSION"
+    redis_client.xdel(DLQ_STREAM, entry_id)
+
+
+def test_missing_device_ts_dead_letters(redis_client):
+    body = _valid_payload()
+    del body["device_ts"]
+    entry_id = handle_message(redis_client, VALID_TOPIC, _bytes(body))
+    assert _dlq_reason(redis_client, entry_id) == "missing_device_ts"
+    redis_client.xdel(DLQ_STREAM, entry_id)
+
+
+def test_duplicate_payload_dropped_silently_before_resolution(redis_client):
+    calls = []
+    body = _valid_payload()
+
+    first = handle_message(
+        redis_client, VALID_TOPIC, _bytes(body), db_fetch=lambda *a: 42
+    )
+
+    def counting(*args):
+        calls.append(args)
+        return 42
+
+    second = handle_message(redis_client, VALID_TOPIC, _bytes(body), db_fetch=counting)
+    assert first is None  # happy path accepted
+    assert second is None  # duplicate dropped — NOT dead-lettered
+    assert calls == []  # dedup fired BEFORE resolution: zero DB/cache work
+
+    key = f"dedup:9f8c2d34-6f0e-4a55-9a10-2b7c1f5e4d01:FARM-01-GW-A:{body['device_ts']}"
+    ttl = redis_client.ttl(key)
+    assert ttl >= 86_000  # 90000s invariant ≥ EMQX session expiry
+
+
+def test_different_device_ts_is_not_a_duplicate(redis_client):
+    calls = []
+    fetcher = lambda *a: 42  # noqa: E731
+
+    handle_message(
+        redis_client,
+        VALID_TOPIC,
+        _bytes(_valid_payload(device_ts="2026-08-25T10:30:00Z")),
+        db_fetch=fetcher,
+    )
+    second = handle_message(
+        redis_client,
+        VALID_TOPIC,
+        _bytes(_valid_payload(device_ts="2026-08-25T10:31:00Z")),
+        db_fetch=lambda *a: calls.append(1) or 43,
+    )
+    assert second is None
+    assert calls  # a genuinely new window DID resolve slots again
+
+
+# ── helpers ───────────────────────────────────────────────────────────────
+
+def _valid_payload_bytes(**overrides):
+    return _bytes(_valid_payload(**overrides))
+
+
+def _bytes(body) -> bytes:
+    import json
+
+    return json.dumps(body).encode()
