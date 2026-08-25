@@ -34,7 +34,7 @@ def resolve_pack_slot(
     key = cache_key(hardware_id, pack_id)
     cached = redis_client.get(key)
     if cached is not None:
-        return int(cached)
+        return cached  # slot_id is a CharField pk — never int-cast
 
     if db_fetch is None:
         return UNKNOWN_SLOT
@@ -44,4 +44,4 @@ def resolve_pack_slot(
         return UNKNOWN_SLOT  # never cache a miss (TUTORIAL §3.1 note)
 
     redis_client.set(key, slot_id, ex=CACHE_TTL_SECONDS)
-    return int(slot_id)
+    return slot_id

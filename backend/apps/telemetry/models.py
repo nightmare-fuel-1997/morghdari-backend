@@ -42,16 +42,26 @@ class SaloonTelemetry(models.Model):
     (org_id, slot_id, device_ts), Saas.md Decision 14 (v0.3 concern).
     """
 
-    server_received_ts = models.DateTimeField(db_default=Now())
+    # PK pragmatism: the REAL uniqueness is composite (server_received_ts,
+    # slot_id, org_id) via RunSQL — Django can't express that, and an implied
+    # auto `id` would SELECT a column this hypertable does not have. We pin
+    # the deterministic component instead; never rely on it as an identity
+    # guarantee (that's the Redis dedup guard's job, Saas Decision 14).
+    # فارسی: کلید اصلیِ جنگو صرفاً برای سازگاریِ SELECT است؛ تضمین یکتایی نزد
+    # گاردِ ردیس است نه اینجا.
+    server_received_ts = models.DateTimeField(db_default=Now(), primary_key=True)
     device_ts = models.DateTimeField()
     org = models.ForeignKey("tenants.Organization", db_column="org_id", on_delete=models.RESTRICT, related_name="+")
     saloon = models.ForeignKey("farms.Saloon", db_column="saloon_id", on_delete=models.RESTRICT, related_name="+")
     slot = models.ForeignKey("devices.SaloonSensorSlot", db_column="slot_id", on_delete=models.RESTRICT, related_name="+")
     is_buffered = models.BooleanField(default=False, null=True)
-    # DB-generated column (RunSQL): NUMERIC(10,2) STORED from the ts delta.
-    buffered_delay_mins = models.DecimalField(max_digits=10, decimal_places=2, editable=False, null=True)
-    # JSONB metrics — any sensor type, zero migrations. Each key is a
-    # sensor_metric_types.metric_key; each value {"avg","min","max"[,"max_ts"]}.
+    # NOTE: `buffered_delay_mins` is a DB-GENERATED column (NUMERIC(10,2)
+    # STORED from the ts delta — full DDL in the RunSQL migration). It is
+    # deliberately ABSENT here because Django <5.2 cannot express
+    # GENERATED ALWAYS and would emit a NULL insert (rejected by Postgres).
+    # Read it via SaloonTelemetry.objects.annotate(...) where needed.
+    # فارسی: ستونِ تولیدشده در مدل نمی‌آید چون جنگو هنوز آن را پشتیبانی نمی‌کند؛
+    # هنگام خواندن با annotate اضافه می‌شود.
     metrics = models.JSONField(default=dict)
     clock_drift = models.BooleanField(default=False, null=True)
 

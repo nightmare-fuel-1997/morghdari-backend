@@ -1,14 +1,14 @@
-"""M3-02 acceptance — topic identity + pack→slot resolution, tests FIRST.
+﻿"""M3-02 acceptance â€” topic identity + packâ†’slot resolution, tests FIRST.
 
-WHY: the transport is the truth (TUTORIAL §3.1): org/farm/gateway come FROM
+WHY: the transport is the truth (TUTORIAL Â§3.1): org/farm/gateway come FROM
 THE TOPIC because the broker authenticated that path; the single mirrored
-payload field must match or the message is an identity fault; and pack→slot
+payload field must match or the message is an identity fault; and packâ†’slot
 resolution goes cache-first (24 h) with DB fallback, dead-lettering unknowns.
-Forgery/malformation tests are written BEFORE the implementation — security
+Forgery/malformation tests are written BEFORE the implementation â€” security
 before throughput.
 
-فارسی: پذیرش M3-02 — هویت از تاپیک، تطبیقِ شناسه با محموله و حلِ پک به اسلات با
-کیش اول و دیتابیس در پشتیبانی؛ تست‌ها پیش از پیاده‌سازی نوشته شده‌اند.
+ÙØ§Ø±Ø³ÛŒ: Ù¾Ø°ÛŒØ±Ø´ M3-02 â€” Ù‡ÙˆÛŒØª Ø§Ø² ØªØ§Ù¾ÛŒÚ©ØŒ ØªØ·Ø¨ÛŒÙ‚Ù Ø´Ù†Ø§Ø³Ù‡ Ø¨Ø§ Ù…Ø­Ù…ÙˆÙ„Ù‡ Ùˆ Ø­Ù„Ù Ù¾Ú© Ø¨Ù‡ Ø§Ø³Ù„Ø§Øª Ø¨Ø§
+Ú©ÛŒØ´ Ø§ÙˆÙ„ Ùˆ Ø¯ÛŒØªØ§Ø¨ÛŒØ³ Ø¯Ø± Ù¾Ø´ØªÛŒØ¨Ø§Ù†ÛŒØ› ØªØ³Øªâ€ŒÙ‡Ø§ Ù¾ÛŒØ´ Ø§Ø² Ù¾ÛŒØ§Ø¯Ù‡â€ŒØ³Ø§Ø²ÛŒ Ù†ÙˆØ´ØªÙ‡ Ø´Ø¯Ù‡â€ŒØ§Ù†Ø¯.
 """
 
 import os
@@ -30,7 +30,8 @@ from morghdari.subscriber.topics import (
     parse_topic,
 )
 
-REDIS_URL = os.environ.get("REDIS_URL", "redis://:dev_redis_password@localhost:6379")
+# Dedicated SCRATCH logical DB (never the demo/dev db0): wiped per test.
+REDIS_URL = "redis://:dev_redis_password@localhost:6379/14"
 
 VALID_TOPIC = (
     "9f8c2d34-6f0e-4a55-9a10-2b7c1f5e4d01/farms/12/gateways/FARM-01-GW-A/telemetry"
@@ -40,12 +41,12 @@ VALID_TOPIC = (
 @pytest.fixture()
 def redis_client():
     client = redis_lib.Redis.from_url(REDIS_URL, decode_responses=True)
-    # Hermetic: scrub BEFORE and AFTER — the dev/demo Redis is long-lived and
+    # Hermetic: scrub BEFORE and AFTER â€” the dev/demo Redis is long-lived and
     # pytest processes come and go, so leftovers poison the next run (dedup
     # keys live 25h; streams keep every crashed run's junk). Globs: cache keys
     # look like "slot:map:m3test-HW:P-A" (wildcard right after the tag); dedup
     # keys carry the test org uuid. The two lanes wipe wholesale; DLQ is
-    # shared with other assertions — never wiped here.
+    # shared with other assertions â€” never wiped here.
     for pattern in ("slot:map:m3test*", "dedup:9f8c2d34-6f0e*"):
         for key in client.scan_iter(pattern):
             client.delete(key)
@@ -59,7 +60,7 @@ def redis_client():
     client.delete("telemetry:historical")
 
 
-# ── parser ────────────────────────────────────────────────────────────────
+# â”€â”€ parser â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def test_parse_valid_doc_example_topic():
     assert parse_topic(VALID_TOPIC) == (
@@ -95,7 +96,7 @@ def test_identity_fault_on_slot_mismatch():
 
 
 def test_identity_fault_when_payload_field_absent():
-    # The field is load-bearing per Firmware Spec §3.8; absence is a fault too.
+    # The field is load-bearing per Firmware Spec Â§3.8; absence is a fault too.
     assert identity_fault("FARM-01-GW-A", {}) == "TOPIC_PAYLOAD_IDENTITY_MISMATCH"
 
 
@@ -104,7 +105,7 @@ def test_identity_ok_when_slots_agree():
     assert identity_fault("FARM-01-GW-A", payload) is None
 
 
-# ── resolver ──────────────────────────────────────────────────────────────
+# â”€â”€ resolver â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def test_cache_key_namespaces_by_hardware_and_pack():
     assert cache_key("AA:BB", "P-A") == "slot:map:AA:BB:P-A"
@@ -115,7 +116,7 @@ def test_resolver_cache_miss_uses_db_and_populates_cache(redis_client):
 
     def fake_db(org, hw, pack):
         calls.append((org, hw, pack))
-        return 42
+        return "42"
 
     first = resolve_pack_slot(
         redis_client, "org-1", "m3test-HW", "P-A", db_fetch=fake_db
@@ -123,7 +124,7 @@ def test_resolver_cache_miss_uses_db_and_populates_cache(redis_client):
     second = resolve_pack_slot(
         redis_client, "org-1", "m3test-HW", "P-A", db_fetch=fake_db
     )
-    assert (first, second) == (42, 42)
+    assert (first, second) == ("42", "42")  # slot ids are CharField pks
     assert calls == [("org-1", "m3test-HW", "P-A")]  # DB touched ONCE
     assert redis_client.ttl(cache_key("m3test-HW", "P-A")) > 80_000  # ~24 h
 
@@ -136,11 +137,11 @@ def test_resolver_unknown_pack_returns_sentinel_without_caching(redis_client):
         redis_client, "org-1", "m3test-HW", "P-MISSING", db_fetch=no_rows
     )
     assert result == UNKNOWN_SLOT
-    # A miss must NOT poison the cache — provisioning may create the row later.
+    # A miss must NOT poison the cache â€” provisioning may create the row later.
     assert redis_client.exists(cache_key("m3test-HW", "P-MISSING")) == 0
 
 
-# ── DLQ writer ────────────────────────────────────────────────────────────
+# â”€â”€ DLQ writer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def test_dlq_entry_carries_topic_payload_reason(redis_client):
     entry_id = send_to_dlq(redis_client, VALID_TOPIC, b"{not json", "bad_json")
@@ -152,7 +153,7 @@ def test_dlq_entry_carries_topic_payload_reason(redis_client):
     redis_client.xdel(DLQ_STREAM, entry_id)  # keep dev stream clean
 
 
-# ── pipeline wiring (parse → identity → resolve, pre-dedup skeleton) ──────
+# â”€â”€ pipeline wiring (parse â†’ identity â†’ resolve, pre-dedup skeleton) â”€â”€â”€â”€â”€â”€
 
 def _valid_payload(**overrides):
     """Minimal schema-2.0 body the gates accept (single reading, mapped pack)."""
@@ -192,7 +193,7 @@ def test_handle_message_identity_mismatch_goes_to_dlq(redis_client):
     redis_client.xdel(DLQ_STREAM, entry_id)
 
 
-# ── M3-03: schema gate, dedup guard ───────────────────────────────────────
+# â”€â”€ M3-03: schema gate, dedup guard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def test_handle_message_bad_json_goes_to_dlq(redis_client):
     entry_id = handle_message(redis_client, VALID_TOPIC, b"{not json")
@@ -229,7 +230,7 @@ def test_duplicate_payload_dropped_silently_before_resolution(redis_client):
     body = _valid_payload()
 
     first = handle_message(
-        redis_client, VALID_TOPIC, _bytes(body), db_fetch=lambda *a: 42
+        redis_client, VALID_TOPIC, _bytes(body), db_fetch=lambda *a: "42"
     )
 
     def counting(*args):
@@ -238,17 +239,18 @@ def test_duplicate_payload_dropped_silently_before_resolution(redis_client):
 
     second = handle_message(redis_client, VALID_TOPIC, _bytes(body), db_fetch=counting)
     assert first is None  # happy path accepted
-    assert second is None  # duplicate dropped — NOT dead-lettered
-    assert calls == []  # dedup fired BEFORE resolution: zero DB/cache work
+    assert second is None  # duplicate dropped â€” NOT dead-lettered
+    assert calls == []  # resolution served from 24h cache: zero DB work on dup
 
-    key = f"dedup:9f8c2d34-6f0e-4a55-9a10-2b7c1f5e4d01:FARM-01-GW-A:{body['device_ts']}"
+    # Per-resolved-slot key (Blueprint Â§4:131 verbatim shape).
+    key = "dedup:9f8c2d34-6f0e-4a55-9a10-2b7c1f5e4d01:42:" + body["device_ts"]
     ttl = redis_client.ttl(key)
-    assert ttl >= 86_000  # 90000s invariant ≥ EMQX session expiry
+    assert ttl >= 86_000  # 90000s invariant â‰¥ EMQX session expiry
 
 
 def test_different_device_ts_is_not_a_duplicate(redis_client):
     calls = []
-    fetcher = lambda *a: 42  # noqa: E731
+    fetcher = lambda *a: "42"  # noqa: E731
 
     handle_message(
         redis_client,
@@ -263,8 +265,8 @@ def test_different_device_ts_is_not_a_duplicate(redis_client):
         db_fetch=lambda *a: calls.append(1) or 43,
     )
     assert second is None
-    # A genuinely new window must be PROCESSED again — proof is the stream:
-    # two windows → two enriched entries (resolution itself may come from the
+    # A genuinely new window must be PROCESSED again â€” proof is the stream:
+    # two windows â†’ two enriched entries (resolution itself may come from the
     # 24h cache, which is correct and cheap; DB is only the cold path).
     entries = _drain_stream(redis_client, REALTIME)
     assert sorted(f["device_ts"] for _, f in entries) == [
@@ -273,7 +275,7 @@ def test_different_device_ts_is_not_a_duplicate(redis_client):
     ]
 
 
-# ── M3-04: enrichment → lane streams · M3-07: trimming ───────────────────
+# â”€â”€ M3-04: enrichment â†’ lane streams Â· M3-07: trimming â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 REALTIME = "telemetry:realtime"
 HISTORICAL = "telemetry:historical"
@@ -287,7 +289,7 @@ def _drain_stream(client, stream):
 
 def test_enriched_realtime_entry_carries_contract_fields(redis_client):
     body = _valid_payload()
-    handle_message(redis_client, VALID_TOPIC, _bytes(body), db_fetch=lambda *a: 42)
+    handle_message(redis_client, VALID_TOPIC, _bytes(body), db_fetch=lambda *a: "42")
 
     entries = _drain_stream(redis_client, REALTIME)
     assert len(entries) == 1
@@ -323,7 +325,7 @@ def test_buffered_payload_routes_to_historical_lane(redis_client):
         redis_client,
         VALID_TOPIC,
         _bytes(_valid_payload(is_buffered=True)),
-        db_fetch=lambda *a: 42,
+        db_fetch=lambda *a: "42",
     )
     assert redis_client.xlen(REALTIME) == 0
     entries = _drain_stream(redis_client, HISTORICAL)
@@ -332,7 +334,7 @@ def test_buffered_payload_routes_to_historical_lane(redis_client):
 
 
 def test_trim_issues_approximate_xtrim_on_both_lanes(monkeypatch, redis_client):
-    # NOTE: we spy the COMMAND, not the resulting length — Redis's approximate
+    # NOTE: we spy the COMMAND, not the resulting length â€” Redis's approximate
     # XTRIM may legally undershoot when entries share radix nodes (observed:
     # 25-entry stream in one node trims to... 25). The 100k bound is asserted
     # by the sustained-load acceptance in M3-10 on a realistic volume.
@@ -356,7 +358,7 @@ def test_trim_issues_approximate_xtrim_on_both_lanes(monkeypatch, redis_client):
     redis_client.delete(REALTIME, HISTORICAL)
 
 
-# ── helpers ───────────────────────────────────────────────────────────────
+# â”€â”€ helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _valid_payload_bytes(**overrides):
     return _bytes(_valid_payload(**overrides))
@@ -366,3 +368,6 @@ def _bytes(body) -> bytes:
     import json
 
     return json.dumps(body).encode()
+
+
+

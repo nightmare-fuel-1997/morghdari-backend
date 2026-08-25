@@ -35,18 +35,15 @@ def trim_streams(redis_client) -> None:
         redis_client.xtrim(stream, maxlen=STREAM_MAXLEN, approximate=True)
 
 
-def dedup_key(org_id: str, gateway_slot: str, device_ts: str) -> str:
-    """Gateway-level dedup: one payload = one 60s window per gateway.
-
-    TUTORIAL §3.3 sketches slot_id as the middle component, but payloads are
-    MULTI-pack (M3-08) while device_ts is per-PAYLOAD — keying on a resolved
-    pack slot would let a replayed multi-pack message partially through. The
-    topic's gateway slot is stable and unique per window; deviation from the
-    sketch recorded for Tracker ratification (Q4 family).
-    فارسی: کلید حذف تکرار در سطح گیت‌وی است چون هر محموله چند پک دارد ولی یک
-    device_ts واحد؛ اسلاتِ تاپیک ثابت و معتبر است.
+def dedup_key(org_id: str, sensor_slot: str, device_ts: str) -> str:
+    """Per-resolved-slot dedup — Blueprint §4 line 131 VERBATIM shape:
+    `dedup:{org_id}:{slot}:{device_ts}` set NX EX after cache/DB resolution.
+    A fully redelivered payload finds every slot key present and publishes
+    nothing; genuinely new windows pass. (Multi-pack safe: each reading has
+    its own key.)
+    فارسی: کلید حذف تکرار به ازای هر اسلاتِ حل‌شده، عینِ اسنیپتِ کانونیکل.
     """
-    return f"dedup:{org_id}:{gateway_slot}:{device_ts}"
+    return f"dedup:{org_id}:{sensor_slot}:{device_ts}"
 
 
 def handle_message(redis_client, topic: str, payload: bytes, db_fetch=None) -> str | None:
@@ -83,16 +80,11 @@ def handle_message(redis_client, topic: str, payload: bytes, db_fetch=None) -> s
     if not device_ts:
         return send_to_dlq(redis_client, topic, payload, "missing_device_ts")
 
-    # Gate 5 — CHEAP dedup BEFORE any resolution/enrichment work: QoS-1 is
-    # at-least-once; this guard makes it effectively-once. Duplicates drop
-    # silently (return None) — they are successes, not errors.
-    key = dedup_key(org_id, gateway_slot, device_ts)
-    if not redis_client.set(key, 1, nx=True, ex=DEDUP_TTL_SECONDS):
-        return None
-
-    # Gate 6 — resolve EVERY pack before publishing anything: a partial storm
-    # of entries for a half-known payload would be worse than one DLQ entry.
-    resolved_slots = []
+    # Gate 5 — resolve EVERY pack first (cache-first, so this is cheap on the
+    # hot path): dedup keys are PER RESOLVED SLOT (Blueprint §4:131), which
+    # requires resolution before the NX check. A fully redelivered payload
+    # then finds every key present and publishes nothing.
+    resolved = []  # (reading, slot_id) pairs
     for reading in data.get("readings", []):
         slot_id = resolve_pack_slot(
             redis_client,
@@ -103,14 +95,26 @@ def handle_message(redis_client, topic: str, payload: bytes, db_fetch=None) -> s
         )
         if slot_id == UNKNOWN_SLOT:
             return send_to_dlq(redis_client, topic, payload, UNKNOWN_SLOT)
-        resolved_slots.append(slot_id)
+        resolved.append((reading, slot_id))
+
+    # Gate 6 — per-slot dedup; duplicates skip publishing silently.
+    fresh = []
+    for reading, slot_id in resolved:
+        key = dedup_key(org_id, slot_id, device_ts)
+        if redis_client.set(key, 1, nx=True, ex=DEDUP_TTL_SECONDS):
+            fresh.append((reading, slot_id))
+    if not fresh:
+        return None  # full duplicate — success, nothing to do
 
     # Gate 7 — enrich + XADD, one entry PER READING (workers derive saloon
     # from the resolved slot). Lane by is_buffered; flat fields per decision
-    # Q4 incl recv_ts + trace_id; raw JSON travels untouched.
+    # Q4 incl recv_ts + trace_id; raw JSON travels untouched. Buffered
+    # publishes also bump the replay counter (Blueprint §4:139).
     lane = STREAM_HISTORICAL if data.get("is_buffered") else STREAM_REALTIME
     raw_str = payload.decode("utf-8", errors="replace")
-    for slot_id in resolved_slots:
+    for reading, slot_id in fresh:
+        if data.get("is_buffered"):
+            redis_client.incr(f"replay:pending:{gateway_slot}")
         redis_client.xadd(
             lane,
             {
@@ -123,6 +127,8 @@ def handle_message(redis_client, topic: str, payload: bytes, db_fetch=None) -> s
                 "payload": raw_str,
                 "recv_ts": repr(time.time()),
                 "trace_id": str(uuid.uuid4()),
+                "metrics": json.dumps(reading.get("metrics", {})),
+                "clock_drift": str(bool(data.get("clock_drift"))),
             },
         )
 

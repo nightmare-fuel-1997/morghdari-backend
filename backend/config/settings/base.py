@@ -251,10 +251,28 @@ CELERY_TIMEZONE = "Asia/Tehran"     # AU-TZ: 'midnight' crons are farm-local
 CELERY_TASK_ROUTES = {
     # Canonical queue names (Blueprint §5). Tasks themselves land in v0.3/v0.4;
     # declaring routes now prevents accidental default-queue drift later.
+    # SPECIFIC routes must precede the telemetry.* wildcard (D-6 fix): the
+    # historical task rides its own lane so replay storms never touch realtime.
+    "telemetry.process_historical_payload": {"queue": "telemetry_historical"},
+    "telemetry.flush_telemetry_buffer": {"queue": "telemetry_realtime"},
     "telemetry.*": {"queue": "telemetry_realtime"},
     "alerts.*": {"queue": "alerts"},
     "auditing.*": {"queue": "audit"},
     "provisioning.*": {"queue": "provisioning"},
+}
+# Drain tasks are BEAT-DRIVEN (one cycle per kick, 10s): stateless workers,
+# crash-simple self-healing. No self-rescheduling recursion to reason about.
+CELERY_BEAT_SCHEDULE = {
+    "telemetry-historical-drain-kick": {
+        "task": "telemetry.process_historical_payload",
+        "schedule": 10.0,
+        "options": {"queue": "telemetry_historical"},
+    },
+    "telemetry-realtime-drain-kick": {
+        "task": "telemetry.process_realtime_payload",
+        "schedule": 10.0,
+        "options": {"queue": "telemetry_realtime"},
+    },
 }
 # Historical lane is throttled IN THE WORKER from system_configuration (Saas §4);
 # Celery-level rates are intentionally NOT set here to avoid two sources of truth.
