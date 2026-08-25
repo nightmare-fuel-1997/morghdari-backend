@@ -19,6 +19,18 @@ All three open decisions from `versions/v0.1/RETROSPECTIVE.md` were APPROVED and
 - Policy template NULLIF guard mirrored through Security Architecture §4.1, System Walkthrough
   and Saas.md; docs ci compose gains `name: morghdari_ci`; EMQX mechanism-pair verified present.
 
+### v0.2 auth & tenancy resolution batch (2026-08-25)
+
+- Contract bumped v1.4.3 (+3 org-member paths, owner-exclusive,
+  reactivation-on-inactive semantics)
+- Middleware branch order canonized (support-session claim precedes staff skip)
+- Claims delivered via verify-once middleware stash + CachedJWTAuthentication
+- Tx topology locked (whole view inside atomic, no ATOMIC_REQUESTS)
+- Claim semantics pinned (oldest-active-org pick, union roles, selector parked)
+- Offboarding = fail-closed-empty HTTP 200 (pre-registered as C-14)
+
+**Risk killed:** app-layer isolation & role enforcement *(filled at tag)*
+
 ## [v0.1] — 2026-08-24 — walking skeleton + full schema + RLS
 
 The smallest honest Morghdari: a Django project that boots in Docker, a CI
