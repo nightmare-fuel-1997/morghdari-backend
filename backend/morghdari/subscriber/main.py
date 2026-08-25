@@ -24,6 +24,9 @@ import os
 import sys
 
 import paho.mqtt.client as mqtt
+import redis
+
+from .pipeline import handle_message
 
 logging.basicConfig(
     level=logging.INFO,
@@ -80,10 +83,24 @@ def _on_connect(client, userdata, flags, reason_code, properties=None):
 
 
 def _on_message(client, userdata, message) -> None:
-    # M3-02+ will parse/enrich/route here; for now visibility is the feature.
-    logger.info(
-        "received %s bytes on %s", len(message.payload), message.topic
-    )
+    # M3-02: every message now passes the pipeline's ordered gates; rejections
+    # dead-letter with a reason, happy-path logging stays visible until the
+    # enrich/XADD gate lands (M3-04).
+    handle_message(_redis(), message.topic, message.payload)
+
+
+_redis_client = None
+
+
+def _redis():
+    """Shared Redis connection — same URL convention as Django settings."""
+    global _redis_client
+    if _redis_client is None:
+        url = os.environ.get(
+            "REDIS_URL", "redis://:dev_redis_password@localhost:6379"
+        )
+        _redis_client = redis.Redis.from_url(url, decode_responses=True)
+    return _redis_client
 
 
 def _on_disconnect(client, userdata, disconnect_flags, reason_code, properties=None):

@@ -63,4 +63,14 @@
 
 ## Version gate (v0.2)
 
-- [x] v0.2 EXIT DEMO recorded (`versions/v0.2/DEMO-M2.md`); risk killed = app-layer isolation & role enforcement; STOP for owner review before v0.3 — this commit + tag `v0.2`
+- [x] v0.2 EXIT DEMO recorded (`versions/v0.2/DEMO-M2.md`); risk killed = app-layer isolation & role enforcement; STOP for owner review before v0.3 — `676014b` + tag `v0.2`
+
+## M3 — ingestion + fake gateway (v0.3)
+
+> EN: Live mirror of `versions/v0.3/TASKS.md`. Decisions Q1–Q6 recorded in
+> backend_docs Tracker §4k (all approved 2026-08-25). Contract untouched (v1.4.4).
+>
+> فارسی: آینهٔ زندهٔ تسک‌های نسخهٔ ۰٫۳؛ شش تصمیمِ برنامه‌ریزی در سند ردیابی ثبت شد.
+
+- [x] M3-01 subscriber package: shared group `$share/telemetry_workers/`, qos=1, persistent session, required unique client id — `6d0c866`
+- [x] M3-02 topic parser + identity cross-check + pack→slot resolver (cache-first 24h, DB fallback, UNKNOWN_SLOT DLQ) + DLQ writer — tests written FIRST — this commit

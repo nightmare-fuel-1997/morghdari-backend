@@ -1,4 +1,5 @@
-"""morghdari.subscriber — `python -m morghdari.subscriber` entrypoint."""
-from .main import main
+"""morghdari.subscriber — MQTT→Redis bridge package.
 
-main()
+Run with: python -m morghdari.subscriber   (execution lives in __main__.py so
+importing this package never has side effects — pytest imports it too.)
+"""
