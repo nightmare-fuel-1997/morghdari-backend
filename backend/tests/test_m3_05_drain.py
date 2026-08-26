@@ -21,8 +21,7 @@ from django.test import TransactionTestCase
 
 # ISOLATED Redis logical DB for this module: streams/dedup/groups from other
 # runs can never leak in. Flushed per test by the autouse fixture below.
-from tests.conftest import redis_base_url
-REDIS_URL = redis_base_url() + "/15"
+from tests.conftest import INTEGRATION_REDIS_URL as REDIS_URL  # noqa: E402
 
 from apps.accounts.models import OrgMember  # noqa: E402
 from apps.devices.models import (  # noqa: E402

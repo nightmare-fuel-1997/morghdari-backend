@@ -33,8 +33,7 @@ from apps.telemetry.models import SaloonTelemetry
 from apps.tenants.models import Organization
 from morghdari.subscriber.pipeline import handle_message
 
-from tests.conftest import redis_base_url
-REDIS_URL = redis_base_url() + "/12"  # scratch DB
+from tests.conftest import INTEGRATION_REDIS_URL as REDIS_URL  # noqa: E402
 os_set = __import__("os").environ.__setitem__
 os_set("REDIS_URL", REDIS_URL)
 

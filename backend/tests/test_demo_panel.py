@@ -16,8 +16,7 @@ import redis as redis_lib
 os.environ.setdefault("MORGHDARI_DEMO_UI", "1")
 
 # ISOLATED scratch logical DB for pipeline state (streams/dedup/groups).
-REDIS_URL = "redis://:dev_redis_password@localhost:6379/13"
-os.environ["REDIS_URL"] = REDIS_URL
+from tests.conftest import INTEGRATION_REDIS_URL as REDIS_URL  # noqa: E402
 
 from django.contrib.auth import get_user_model  # noqa: E402
 from django.urls import reverse  # noqa: E402
@@ -34,6 +33,7 @@ from apps.geography.models import City, Province  # noqa: E402
 from apps.telemetry.consumers import _redis as _consumer_redis  # noqa: E402
 from apps.telemetry.models import SaloonTelemetry  # noqa: E402
 from apps.tenants.models import Organization  # noqa: E402
+from tests.conftest import redis_base_url
 from morghdari.subscriber.pipeline import handle_message  # noqa: E402
 
 PASSWORD = "strong-pass-123"
