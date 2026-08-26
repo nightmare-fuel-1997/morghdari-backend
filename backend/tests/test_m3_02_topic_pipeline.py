@@ -31,7 +31,9 @@ from morghdari.subscriber.topics import (
 )
 
 # Dedicated SCRATCH logical DB (never the demo/dev db0): wiped per test.
-REDIS_URL = "redis://:dev_redis_password@localhost:6379/14"
+from tests.conftest import redis_base_url
+
+REDIS_URL = redis_base_url() + "/14"
 
 VALID_TOPIC = (
     "9f8c2d34-6f0e-4a55-9a10-2b7c1f5e4d01/farms/12/gateways/FARM-01-GW-A/telemetry"

@@ -1,20 +1,20 @@
-"""M3-10 acceptance — storm lane separation + bounded streams (WIP).
+﻿"""M3-10 acceptance â€” storm lane separation + bounded streams (WIP).
 
 STATUS (2026-08-25, end of session): lane/dedup ANOMALY under investigation.
 Observed on sequence [3 buffered oldest-first, then 2 live]: XLEN showed
-realtime=3 / historical=3 (expected 2/3) BEFORE any drain — one publish
+realtime=3 / historical=3 (expected 2/3) BEFORE any drain â€” one publish
 mis-laned or an extra entry appeared. Single-flow probe (1 entry) behaves
 perfectly. Next debugging steps:
   1. log lane choice + dedup-key NX result per publish inside
      pipeline.handle_message behind M3DEBUG env;
   2. check whether the FIRST backlog window's dedup key collides with the
-     previous test's keys (org uuid differs — should be impossible);
+     previous test's keys (org uuid differs â€” should be impossible);
   3. verify replay:pending INCR isn't cross-wiring the lane variable.
 Everything else in this module (world builder, ingest helper, drain-all) is
 final and reused by the fix.
 
-فارسی: وضعیت فعلی — ناهنجاریِ لِین در توالیِ طوفان در حال بررسی است؛ بقیهٔ
-زیرساختِ تست نهایی و قابل استفاده است.
+ÙØ§Ø±Ø³ÛŒ: ÙˆØ¶Ø¹ÛŒØª ÙØ¹Ù„ÛŒ â€” Ù†Ø§Ù‡Ù†Ø¬Ø§Ø±ÛŒÙ Ù„ÙÛŒÙ† Ø¯Ø± ØªÙˆØ§Ù„ÛŒÙ Ø·ÙˆÙØ§Ù† Ø¯Ø± Ø­Ø§Ù„ Ø¨Ø±Ø±Ø³ÛŒ Ø§Ø³ØªØ› Ø¨Ù‚ÛŒÙ‡Ù”
+Ø²ÛŒØ±Ø³Ø§Ø®ØªÙ ØªØ³Øª Ù†Ù‡Ø§ÛŒÛŒ Ùˆ Ù‚Ø§Ø¨Ù„ Ø§Ø³ØªÙØ§Ø¯Ù‡ Ø§Ø³Øª.
 """
 
 import json
@@ -33,7 +33,8 @@ from apps.telemetry.models import SaloonTelemetry
 from apps.tenants.models import Organization
 from morghdari.subscriber.pipeline import handle_message
 
-REDIS_URL = "redis://:dev_redis_password@localhost:6379/12"  # scratch DB
+from tests.conftest import redis_base_url
+REDIS_URL = redis_base_url() + "/12"  # scratch DB
 os_set = __import__("os").environ.__setitem__
 os_set("REDIS_URL", REDIS_URL)
 
@@ -112,7 +113,7 @@ def test_storm_lanes_stay_separate_and_bounded(timescale_db):
     assert client.xlen(STREAM_REALTIME) == 20
     assert client.xlen(STREAM_HISTORICAL) == 240
 
-    # Live drains FIRST and completely — the heartbeat is instant.
+    # Live drains FIRST and completely â€” the heartbeat is instant.
     assert drain_stream(STREAM_REALTIME, count=50) == 20
     assert SaloonTelemetry.objects.filter(
         org_id=world["org"].org_id, is_buffered=False).count() == 20
@@ -151,3 +152,4 @@ def test_dedup_holds_across_a_full_backlog_replay(timescale_db):
 
     assert _drain_all(STREAM_HISTORICAL) == 60
     assert SaloonTelemetry.objects.filter(org_id=world["org"].org_id).count() == 60
+

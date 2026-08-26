@@ -15,10 +15,18 @@ seed migrations themselves â€” nothing duplicated.
 
 import importlib.util
 import os
+import re
 from pathlib import Path
 
 import pytest
 from django.db import connection
+
+
+def redis_base_url() -> str:
+    """Env-provided Redis URL WITHOUT any logical-db suffix (CI vs dev aware)."""
+    url = os.environ.get("REDIS_URL", "redis://:dev_redis_password@localhost:6379")
+    return re.sub(r"/\d+$", "", url)
+
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 REPO_ROOT = BACKEND_DIR.parent

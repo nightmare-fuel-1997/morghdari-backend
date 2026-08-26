@@ -28,7 +28,8 @@ from apps.tenants.models import Organization
 from morghdari.subscriber.pipeline import handle_message
 
 PASSWORD = "strong-pass-123"
-REDIS_URL = "redis://:dev_redis_password@localhost:6379/13"  # scratch DB
+from tests.conftest import redis_base_url
+REDIS_URL = redis_base_url() + "/13"  # scratch DB
 os.environ["REDIS_URL"] = REDIS_URL  # consumers must talk to the SAME db
 
 
@@ -197,4 +198,5 @@ def test_slot_filter_narrows(timescale_db):
         assert response.data["results"] == []
     finally:
         _reset_role()
+
 

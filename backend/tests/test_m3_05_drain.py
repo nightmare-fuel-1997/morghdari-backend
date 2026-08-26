@@ -21,7 +21,8 @@ from django.test import TransactionTestCase
 
 # ISOLATED Redis logical DB for this module: streams/dedup/groups from other
 # runs can never leak in. Flushed per test by the autouse fixture below.
-REDIS_URL = "redis://:dev_redis_password@localhost:6379/15"
+from tests.conftest import redis_base_url
+REDIS_URL = redis_base_url() + "/15"
 os.environ["REDIS_URL"] = REDIS_URL
 
 from apps.accounts.models import OrgMember  # noqa: E402
@@ -64,6 +65,14 @@ def _fresh_redis():
 
 class _NoFlush(TransactionTestCase):
     """Integration base: real commits, zero framework truncation."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        from django.db import connection as dj_conn
+
+        if dj_conn.vendor != "postgresql":
+            raise unittest.SkipTest("drain truth requires PostgreSQL + Redis (CI/dev)")
 
     def _fixture_teardown(self):
         pass  # rows are isolated per-run by a fresh UUID org
@@ -202,5 +211,6 @@ def test_per_org_window_throttles_after_configured_rate():
 
     assert sleeps  # the throttle engaged beyond the configured rate
     assert sum(sleeps) > 0
+
 
 
