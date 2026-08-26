@@ -23,7 +23,6 @@ from django.test import TransactionTestCase
 # runs can never leak in. Flushed per test by the autouse fixture below.
 from tests.conftest import redis_base_url
 REDIS_URL = redis_base_url() + "/15"
-os.environ["REDIS_URL"] = REDIS_URL
 
 from apps.accounts.models import OrgMember  # noqa: E402
 from apps.devices.models import (  # noqa: E402
@@ -56,10 +55,12 @@ def _pending(client, stream):
 
 
 @pytest.fixture(autouse=True)
-def _fresh_redis():
+def _fresh_redis(monkeypatch):
     """Wipe the isolated logical DB before every test — zero cross-run state."""
     client = redis_lib.Redis.from_url(REDIS_URL, decode_responses=True)
     client.flushdb()
+    # consumer must read/write THIS logical db, not whatever env says
+    monkeypatch.setattr("apps.telemetry.consumers._redis_client", client)
     yield
 
 

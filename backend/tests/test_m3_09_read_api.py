@@ -30,7 +30,6 @@ from morghdari.subscriber.pipeline import handle_message
 PASSWORD = "strong-pass-123"
 from tests.conftest import redis_base_url
 REDIS_URL = redis_base_url() + "/13"  # scratch DB
-os.environ["REDIS_URL"] = REDIS_URL  # consumers must talk to the SAME db
 
 
 def _redis():
@@ -38,9 +37,11 @@ def _redis():
 
 
 @pytest.fixture(autouse=True)
-def _fresh_redis():
-    """Wipe this module's scratch DB before every test."""
-    _redis().flushdb()
+def _fresh_redis(monkeypatch):
+    """Wipe the isolated logical DB before every test — zero cross-run state."""
+    client = redis_lib.Redis.from_url(REDIS_URL, decode_responses=True)
+    client.flushdb()
+    monkeypatch.setattr("apps.telemetry.consumers._redis_client", client)
     yield
 
 

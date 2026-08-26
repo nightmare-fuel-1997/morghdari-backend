@@ -44,8 +44,10 @@ def _redis():
 
 
 @pytest.fixture(autouse=True)
-def _fresh_redis():
-    _redis().flushdb()
+def _fresh_redis(monkeypatch):
+    client = _redis()
+    client.flushdb()
+    monkeypatch.setattr("apps.telemetry.consumers._redis_client", client)
     yield
 
 
