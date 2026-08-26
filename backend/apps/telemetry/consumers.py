@@ -170,6 +170,7 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None) -> in
             continue
         by_org: dict[str, list[dict]] = {}
         ids: list[str] = []
+        raw_entries: list[tuple[str, dict]] = []  # (org_id_str, fields)
         for entry_id, fields in entries:
             ids.append(entry_id)
             kwargs = _to_model_kwargs(fields)
@@ -188,6 +189,7 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None) -> in
             else:
                 kwargs["saloon_id"] = saloon_id
                 by_org.setdefault(kwargs["org_id"], []).append(kwargs)
+                raw_entries.append((kwargs["org_id"], {"saloon_id": saloon_id, "fields": fields}))
 
         for org, rows in by_org.items():
             from apps.tenants.context import tenant_context
@@ -199,6 +201,33 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None) -> in
                         (SaloonTelemetry(**row) for row in rows),
                         ignore_conflicts=True,  # same-entry redelivery ⇒ no-op
                     )
+
+                    # M4-04: inline alert evaluation AFTER telemetry commit.
+                    # Runs inside the SAME tenant_context for RLS consistency.
+                    from apps.alerts.services.evaluation import evaluate_entry
+
+                    for entry_org, raw in raw_entries:
+                        if entry_org != org:
+                            continue  # only evaluate entries belonging to THIS org
+                        try:
+                            metrics_data = json.loads(
+                                raw["fields"].get("metrics", "{}")
+                            )
+                            evaluate_entry(
+                                redis_client=client,
+                                saloon_id=raw["saloon_id"],
+                                org_id=entry_org,
+                                farm_id=int(raw["fields"].get("farm_id") or 0),
+                                slot_id=raw["fields"].get("slot_id", ""),
+                                metrics=metrics_data,
+                                device_ts=raw["fields"].get("device_ts", ""),
+                            )
+                        except Exception:
+                            logger.exception(
+                                "alert evaluation failed for saloon=%s",
+                                entry_org,
+                            )
+
             processed += len(rows)
             if pacer is not None:
                 time.sleep(pacer.sleep_seconds(org))
