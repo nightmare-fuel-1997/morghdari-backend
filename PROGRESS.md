@@ -87,3 +87,15 @@
 ## Version gate (v0.3)
 
 - [x] v0.3 EXIT DEMO recorded (`versions/v0.3/DEMO-M3.md`, storm included); risk killed = silent telemetry loss / absent ingestion path; STOP for owner review before v0.4 — tag `v0.3`
+
+## M4 — alert engine (v0.4)
+
+> EN: Live mirror of `versions/v0.4/TASKS.md`. Decisions Q1–Q10 recorded in
+> backend_docs Tracker §4l (all approved 2026-08-25). Contract bumped to v1.4.5.
+>
+> فارسی: آینهٔ زندهٔ تسک‌های نسخهٔ ۰٫۴؛ ده تصمیم در سند ردیابی ثبت شد.
+
+- [x] M4-00 alerts scaffold: canonical task names registered, redis-key builders, injectable clock — `a921d48`
+- [x] M4-01 threshold cache + midnight cron + re-cache signals + 4 seeded tunables (breach 900s, status TTL 300s, tiers 15/30) — `74d5ac1`
+- [x] test infra: all PG modules standardized on integration redis /11 via conftest INTEGRATION_REDIS_URL — `ade9e18`
+- [x] M4-02 breach accumulation + hysteresis flapping prevention + midnight grace key suppression — this commit
