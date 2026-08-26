@@ -190,3 +190,32 @@ form { margin-bottom: var(--space-2); }
   * { transition: none !important; animation: none !important; }
   .btn:hover { transform: none; }
 }
+
+
+/* ── v0.3 telemetry explorer + data path ───────────────────────────────── */
+
+.tx-controls {
+  display: grid; gap: var(--space-3); align-items: end;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  margin-bottom: var(--space-3);
+}
+.tx-controls .tx-toggle { display: flex; align-items: center; gap: var(--space-2); }
+.tx-controls .tx-toggle input { width: 20px; min-height: 20px; }
+.tx-controls .tx-toggle label { margin: 0; }
+
+.members.tx td code { font-size: .75rem; color: var(--color-foreground-dim); }
+
+.flow {
+  display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: stretch;
+}
+.fstep {
+  flex: 1 1 130px;
+  background: var(--color-muted); border: 1px solid var(--color-border);
+  border-radius: var(--radius); padding: var(--space-3);
+  font-size: .85rem; line-height: 1.4;
+}
+.fstep b { font-family: var(--font-mono); font-size: .8rem; color: var(--color-accent); }
+.arrow {
+  align-self: center; color: var(--color-accent);
+  font-family: var(--font-mono); font-size: 1.1rem; padding: 0 var(--space-1);
+}

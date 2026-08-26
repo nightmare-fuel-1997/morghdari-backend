@@ -39,6 +39,11 @@ The route is GATED: it appears only when `DEBUG` is on or
 | 5 | Offboarding chain | deactivate Session-B → B's refresh yields org-less token → reads = HTTP 200 EMPTY (C-14) |
 | 6 | Support session | staff-only; blank incident 400; audited 900s scoped token |
 | 7 | Event log | every request/response, timestamped |
+| 8 | Telemetry explorer **(v0.3)** | RLS-scoped read API: since/until/slot_id/include_buffered filters, generated delay column |
+| 9 | How your data flows **(v0.3)** | static pipeline walkthrough with every guarantee annotated |
 
 Suggested script for the manager: log in A as `demo-owner`, log in B as a
-worker you invite from card 4, then walk cards 2 → 3 → 5 → 6.
+worker you invite from card 4, walk cards 2 → 3 → 5 → 6, then run the
+simulator (`python scripts/simulate_gateway.py --gateway FARM-01-GW-A --org
+<org-uuid> --hardware hw-demo --packs P-A --interval 2` with MQTT_* env) and
+watch card 8 fill up in real time.

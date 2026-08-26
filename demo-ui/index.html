@@ -130,6 +130,75 @@
     <p class="hint">Every opening writes a <code>SUPPORT_ORG_ENTER</code> row into <code>account_activity_logs</code>.</p>
   </section>
 
+  <!-- ══════════ 8 · TELEMETRY EXPLORER (v0.3) ══════════ -->
+  <section class="card wide" aria-labelledby="tx-h">
+    <h2 id="tx-h">8 · Telemetry explorer / کاوشگر تله‌متری <span class="badge staff">v0.3</span></h2>
+    <p class="sub">The loop closes: readings that entered via MQTT come back here through the RLS-scoped read API.</p>
+    <p class="sub fa" dir="rtl">حلقه بسته می‌شود: داده‌هایی که از MQTT وارد شدند از همین API با رعایت مرز سازمان برمی‌گردند.</p>
+
+    <div class="tx-controls">
+      <div>
+        <label for="tx-saloon">Saloon id <span class="fa" dir="rtl">شناسه سالن</span></label>
+        <input id="tx-saloon" type="number" min="1" placeholder="e.g. 1">
+      </div>
+      <div>
+        <label for="tx-slot">Slot id (optional)</label>
+        <input id="tx-slot" placeholder="S01-PACK-A">
+      </div>
+      <div>
+        <label for="tx-since">Since <span class="fa" dir="rtl">از</span></label>
+        <input id="tx-since" type="datetime-local">
+      </div>
+      <div>
+        <label for="tx-until">Until <span class="fa" dir="rtl">تا</span></label>
+        <input id="tx-until" type="datetime-local">
+      </div>
+      <div class="tx-toggle">
+        <input id="tx-buffered" type="checkbox">
+        <label for="tx-buffered">include buffered<br><span class="fa hint" dir="rtl">شامل بازپخش‌ها</span></label>
+      </div>
+      <button id="btn-tx" class="btn btn-primary" data-slot="A" disabled>Fetch telemetry</button>
+    </div>
+
+    <table id="tx-table" class="members tx" hidden aria-live="polite">
+      <thead><tr>
+        <th scope="col">device_ts</th><th scope="col">slot_id</th><th scope="col">lane</th>
+        <th scope="col">delay&nbsp;(min)</th><th scope="col">metrics</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+    <p id="tx-empty" class="empty" hidden></p>
+  </section>
+
+  <!-- ══════════ 9 · DATA PATH (static walkthrough) ══════════ -->
+  <section class="card wide" aria-labelledby="flow-h">
+    <h2 id="flow-h">9 · How your data flows / مسیر داده <span class="badge staff">v0.3</span></h2>
+    <p class="sub">Every guarantee below is enforced by code you can read, and pinned by tests that run on every push.</p>
+    <p class="sub fa" dir="rtl">هر تضمین زیر با کد و تست‌های خودکار پشتیبانی می‌شود.</p>
+
+    <div class="flow" role="list">
+      <div class="fstep" role="listitem"><b>Gateway</b><br>schema-2.0 payload<br><span class="hint">qos=1 · one device_ts / window</span></div>
+      <div class="arrow">→</div>
+      <div class="fstep" role="listitem"><b>EMQX broker</b><br>authenticates the path<br><span class="hint">the topic IS the identity</span></div>
+      <div class="arrow">→</div>
+      <div class="fstep" role="listitem"><b>Subscriber bridge</b><br>$share/telemetry_workers<br><span class="hint">dedup NX 90000 · DLQ with reasons</span></div>
+      <div class="arrow">→</div>
+      <div class="fstep" role="listitem"><b>Two lanes</b><br>realtime | historical<br><span class="hint">trim ~100k · storms never delay live</span></div>
+      <div class="arrow">→</div>
+      <div class="fstep" role="listitem"><b>Celery drain</b><br>XACK after commit<br><span class="hint">per-org RLS batches · crash-safe</span></div>
+      <div class="arrow">→</div>
+      <div class="fstep" role="listitem"><b>TimescaleDB</b><br>hypertable · 180d retention<br><span class="hint">UNIQUE + ignore_conflicts = once</span></div>
+      <div class="arrow">→</div>
+      <div class="fstep" role="listitem"><b>This API</b><br>RLS-scoped reads<br><span class="hint">cross-org ⇒ HTTP 200 empty</span></div>
+    </div>
+
+    <p class="hint" style="margin-top: var(--space-3);">
+      Poison at any step dead-letters WITH a reason — bad_json · UNSUPPORTED_SCHEMA_VERSION ·
+      TOPIC_PAYLOAD_IDENTITY_MISMATCH · UNKNOWN_SLOT · GATEWAY_NOT_PROVISIONED.
+      <span class="fa" dir="rtl">در هر مرحله، پیامِ سالم به‌همراه دلیلش به صندوق مرده می‌رود — هیچ‌چیز بی‌صدا گم نمی‌شود.</span>
+    </p>
+  </section>
+
   <!-- ══════════ 7 · EVENT LOG ══════════ -->
   <section class="card wide" aria-labelledby="log-h">
     <h2 id="log-h">Event log / گزارش رویدادها</h2>

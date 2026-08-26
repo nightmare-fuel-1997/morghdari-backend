@@ -375,6 +375,60 @@ async function supportOpen() {
 
 /* ── wiring ───────────────────────────────────────────────── */
 
+/* ── v0.3 telemetry explorer ─────────────────────────────────────────────── */
+
+async function fetchTelemetry() {
+  const session = SLOTS.A;
+  if (!session) return;
+  const saloon = $("tx-saloon").value.trim();
+  if (!saloon) {
+    show("tx-empty", "saloon_id is required");
+    $("tx-empty").hidden = false;
+    return;
+  }
+  const params = new URLSearchParams();
+  for (const [key, id] of [["slot_id", "tx-slot"], ["since", "tx-since"], ["until", "tx-until"]]) {
+    const value = $(id).value.trim();
+    if (value) params.set(key, value);
+  }
+  if ($("tx-buffered").checked) params.set("include_buffered", "true");
+
+  const result = await api(
+    "GET",
+    `/saloons/${encodeURIComponent(saloon)}/telemetry/?${params}`,
+    { token: session.access }
+  );
+
+  const table = $("tx-table");
+  const empty = $("tx-empty");
+  table.hidden = false;
+  if (!result.ok) {
+    empty.hidden = false;
+    empty.textContent = `HTTP ${result.status} — ${result.data?.detail || "denied"}`;
+    return;
+  }
+  const rows = result.data.results || [];
+  table.querySelector("tbody").innerHTML = rows
+    .map((r) => {
+      const lane = r.is_buffered
+        ? '<span class="pill-off">buffered</span>'
+        : '<span class="pill-active">live</span>';
+      const delay = r.buffered_delay_mins === null ? "—" : r.buffered_delay_mins;
+      return `<tr><td>${esc(r.device_ts)}</td><td>${esc(r.slot_id)}</td>` +
+             `<td>${lane}</td><td>${esc(String(delay))}</td>` +
+             `<td><code>${esc(JSON.stringify(r.metrics))}</code></td></tr>`;
+    })
+    .join("");
+  empty.hidden = rows.length > 0;
+  if (rows.length === 0) {
+    empty.hidden = false;
+    // C-14 family: HTTP 200 + empty is CORRECT — unauthorized or no data yet.
+    empty.textContent =
+      "HTTP 200 with an EMPTY list — fail-closed by design (wrong org, " +
+      "deactivated member, or simply no readings in this window).";
+  }
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
   $("login-form-a").addEventListener("submit", (e) => doLogin("A", e));
   $("login-form-b").addEventListener("submit", (e) => doLogin("B", e));
@@ -388,6 +442,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("btn-ghost-b").addEventListener("click", ghostRead);
   $("btn-sup-blank").addEventListener("click", supportBlank);
   $("btn-sup-open").addEventListener("click", supportOpen);
+  $("btn-tx").addEventListener("click", fetchTelemetry);
 
   // connection chip: anonymous ping against a protected route (expect 401)
   const probe = await api("GET", "/org/members/");
