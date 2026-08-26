@@ -24,6 +24,25 @@ STREAM_REALTIME = "telemetry:realtime"
 STREAM_HISTORICAL = "telemetry:historical"
 STREAM_MAXLEN = 100_000            # Tracker AU-STREAMS: bounded, approximate
 
+_last_recv_ts = [0.0]              # monotonic guard (single-threaded bridge)
+
+
+def _next_recv_ts() -> str:
+    """Strictly-increasing receive timestamp per subscriber process.
+
+    server_received_ts doubles as part of the hypertable's UNIQUE key, so two
+    entries published within one clock tick would otherwise silently lose a
+    row to ignore_conflicts. Windows-clock granularity makes this REAL, not
+    theoretical (observed 9 collisions in a 20-publish loop).
+    فارسی: زمانِ دریافتِ اکیداً صعودی تا کلیدِ یکتا هرگز برخورد نکند.
+    """
+    global _last_recv_ts
+    now = time.time()
+    if now <= _last_recv_ts[0]:
+        now = _last_recv_ts[0] + 0.000001
+    _last_recv_ts[0] = now
+    return repr(now)
+
 
 def trim_streams(redis_client) -> None:
     """Availability, not housekeeping: with maxmemory noeviction an untrimmed
@@ -125,7 +144,7 @@ def handle_message(redis_client, topic: str, payload: bytes, db_fetch=None) -> s
                 "is_buffered": str(bool(data.get("is_buffered"))),
                 "slot_id": str(slot_id),
                 "payload": raw_str,
-                "recv_ts": repr(time.time()),
+                "recv_ts": _next_recv_ts(),
                 "trace_id": str(uuid.uuid4()),
                 "metrics": json.dumps(reading.get("metrics", {})),
                 "clock_drift": str(bool(data.get("clock_drift"))),
