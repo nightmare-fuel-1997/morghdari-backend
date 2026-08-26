@@ -34,3 +34,21 @@ historical lane without delaying live messages.
 
 p99 of PUBACK→Redis under the replay storm (the fsync benchmark gate)? What broke
 between EMQX and Timescale that the docs didn't predict?
+
+
+### Answers (recorded at close, 2026-08-26)
+
+1. **p99 PUBACK->Redis:** NOT formally measured yet. Broker-less CI (Q3) cannot
+   see PUBACK timings and appendfsync always is a PROD-only setting; the fsync
+   benchmark stays a physical pre-go-live gate. What we CAN say: in the dev demo
+   the live reading appears via API within the same second as publish, and the
+   storm test proves the historical lane never delays it.
+2. **What broke that docs did not predict** (all fixed + test-pinned):
+   Windows clock granularity made rapid publishes share one recv_ts, silently
+   dropping rows via UNIQUE+ignore_conflicts (9 losses / 20 publishes) - fixed
+   with strictly monotonic receive timestamps; superuser connections BYPASS RLS
+   making cross-org assertions vacuous - request-phase tests now SET ROLE
+   morghdari_app (C-15); Django <5.2 cannot express GENERATED ALWAYS columns -
+   buffered_delay_mins left the model, read via annotate; the historical Celery
+   route was missing from settings (caught in planning, D-6); Redis integration
+   state leaks across pytest processes - scratch logical DBs are mandatory.

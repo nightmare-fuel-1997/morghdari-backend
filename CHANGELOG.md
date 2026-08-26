@@ -3,6 +3,58 @@
 All notable changes per version. Format follows the spiral-roadmap discipline:
 one section per version tag, each listing what risk the version killed.
 
+## [v0.3] — 2026-08-26 — ingestion + fake gateway (M3)
+
+The product's data path exists end to end: a simulated gateway publishes
+schema-2.0 payloads, and the owner's own reading comes back through the API —
+tenant-scoped, deduped, lane-separated, dead-lettered on poison.
+
+### Risk killed
+**Silent telemetry loss / absent ingestion path.** QoS-1 at-least-once is now
+effectively-once (subscriber NX dedup + deterministic recv_ts + XACK after
+commit); poison payloads land in `telemetry:dead_letter` WITH reasons; a 4-hour
+outage replays through the historical lane without delaying live readings; both
+streams are bounded by write-path trim.
+
+### Added — M3 ingestion
+- `backend/morghdari/` subscriber package: `$share/telemetry_workers/` shared
+  subscription, qos=1, persistent session, REQUIRED unique client id
+- Pipeline gates: strict topic parse → payload identity cross-check → schema
+  version → device_ts presence → per-slot dedup (`SET NX EX 90000`) → slot
+  resolution (24h cache / DB fallback / UNKNOWN_SLOT DLQ) → enrich+XADD per
+  reading into realtime/historical lanes → approximate trim (~100k) every write
+- Celery app + consumers: XACK strictly after DB commit, per-org
+  atomic+tenant_context batches, own-pending crash recovery,
+  `bulk_create(ignore_conflicts=True)` over deterministic recv_ts
+- Historical pacing from system_configuration EVERY cycle (50/min global,
+  20/org sliding window) — config-is-data, no redeploy
+- Full simulator: multi-pack schema-2.0 payloads, `--replay-hours N` storm then
+  live resume, compressed demo cadence
+- `GET /saloons/{id}/telemetry/`: RLS-scoped read with since/until/slot_id/
+  include_buffered filters; DB-generated `buffered_delay_mins` via annotate
+
+### Decisions & constraints
+Q1–Q6 approved (Tracker §4k): non-PROVISIONED → DLQ reason; consumer group
+`telemetry_workers`; CI broker-less (in-process stubs vs real redis/postgres);
+flat stream envelope incl recv_ts+trace_id; historical route added before the
+wildcard; metric auto-discovery parked. **C-15 stamped:** RLS assertions are
+VACUOUS under superuser connections — request-phase tests must
+`SET ROLE morghdari_app`.
+
+### Verification
+- Isolated CI gate: **130 passed @ 87.37%** on timescale/timescaledb:2.29.2-pg16
+- Storm integration (local PG+Redis): 240-window backlog + 20 live stay
+  lane-separated; FULL identical replay yields 60 rows not 120; hypertable
+  chunking verified via timescaledb_information
+- Demo transcript: `versions/v0.3/DEMO-M3.md`; look-back answers in
+  `versions/v0.3/README.md`
+
+### Real-world constraints surfaced
+Headliners: monotonic recv_ts requirement (Windows clock-tick collisions
+silently dropped rows via UNIQUE+ignore_conflicts); superuser BYPASSRLS vacuous
+test discipline (C-15); Django<5.2 generated-column exclusion from unmanaged
+models; Redis scratch-DB isolation for integration tests.
+
 ## [v0.2] — 2026-08-25 — auth & tenancy (M2)
 
 Identity and role enforcement on top of the RLS foundation. Contract bumps

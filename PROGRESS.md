@@ -81,4 +81,9 @@
 - [x] M3-06 historical lane: pacing from system_configuration every cycle (global sleep + sliding per-org window) — `e41de82`
 - [x] M3-08 full simulator: schema-2.0 multi-pack payloads, `--replay-hours` outage storm then live resume — `396b17d`
 - [x] M3-09 telemetry read API per contract (RLS-scoped; generated column via annotate; cross-org = HTTP 200 empty) — `396b17d`
-- [x] M3-10 storm integration: 240-window backlog + 20 live stay lane-separated; dedup holds across FULL replay (60→60); hypertable chunking verified; monotonic recv_ts kills silent UNIQUE collisions — this commit
+- [x] M3-10 storm integration: 240-window backlog + 20 live stay lane-separated; dedup holds across FULL replay (60→60); hypertable chunking verified; monotonic recv_ts kills silent UNIQUE collisions — `bb02d69` (+`d7291bc` CI-host-aware redis URLs)
+- [x] M3-11 DoD sweep: CHANGELOG [v0.3], DEMO-M3.md, look-back answers, HANDOFF refresh, C-15 stamped, final CI gate **130 passed @87.37%**, annotated tag `v0.3` — this commit
+
+## Version gate (v0.3)
+
+- [x] v0.3 EXIT DEMO recorded (`versions/v0.3/DEMO-M3.md`, storm included); risk killed = silent telemetry loss / absent ingestion path; STOP for owner review before v0.4 — tag `v0.3`

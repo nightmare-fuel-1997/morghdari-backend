@@ -1,5 +1,15 @@
 # HANDOFF — v0.1 accomplished & closed
 
+> **v0.3 UPDATE (2026-08-26):** v0.3 (ingestion + fake gateway, M3) is CLOSED
+> on branch `v0.3-m3`, tag `v0.3`. Truth files: `versions/v0.3/{TASKS,README,
+> DEMO-M3}.md`, CHANGELOG `[v0.3]`, Tracker §4k (decisions Q1–Q6), CONSTRAINTS
+> C-14/C-15. Contract still v1.4.4 (no surface added in v0.3). Key mechanics:
+> subscriber `$share/telemetry_workers/` → pipeline gates → Redis streams →
+> Celery consumers (XACK-after-commit, per-org RLS batches) → saloon_telemetry;
+> read API `GET /saloons/{id}/telemetry/`; simulator storms via
+> `--replay-hours`. NEXT: v0.4 planning on owner go (alerts engine) — physical
+> gates unchanged (wal-g bake-in M8, fsync benchmark pre-go-live).
+
 > **v0.2 UPDATE (2026-08-25):** v0.2 (auth & tenancy, M2) is CLOSED on branch
 > `v0.2-m2`, tag `v0.2`. Truth files now include `versions/v0.2/{TASKS,README,
 > DEMO-M2}.md` and CHANGELOG `[v0.2]`. Resume ritual unchanged; HEAD/tip values
