@@ -44,7 +44,13 @@ if settings.DEBUG or os.environ.get("MORGHDARI_DEMO_UI") == "1":
     # the repo-root demo-ui folder is TWO parents up, not one.
     _DEMO_ROOT = str(settings.BASE_DIR.parent.parent / "demo-ui")
 
+    from apps.telemetry import demo_views
+
     urlpatterns += [
         re_path(r"^demo/(?P<path>(?:css|js)/.+)$", _static_serve, {"document_root": _DEMO_ROOT}),
         path("demo/", lambda request: _static_serve(request, "index.html", document_root=_DEMO_ROOT)),
+        # live pipeline introspection (JWT-required; demo data only)
+        path("demo/api/pipeline/", demo_views.pipeline_status, name="demo-pipeline"),
+        path("demo/api/dlq/", demo_views.dlq_tail, name="demo-dlq"),
+        path("demo/api/simulate/", demo_views.simulate_reading, name="demo-simulate"),
     ]
