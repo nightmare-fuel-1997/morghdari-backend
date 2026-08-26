@@ -1,4 +1,4 @@
-﻿"""
+"""
 Shared pytest fixtures.
 
 ÙØ§Ø±Ø³ÛŒ: ÙÛŒÚ©Ø³Ú†Ø±Ù‡Ø§ÛŒ Ù…Ø´ØªØ±Ú©Ø› Ø§Ø³ØªØ«Ù†Ø§ÛŒÙ --nomigrations Ø¨Ø±Ø§ÛŒ ØªØ³Øªâ€ŒÙ‡Ø§ÛŒ RLS/Ø¨Ø°Ø± Ø§ÛŒÙ†Ø¬Ø§Ø³Øª
@@ -28,6 +28,12 @@ def redis_base_url() -> str:
     return re.sub(r"/\d+$", "", url)
 
 
+def __getattr__(name):
+    if name == 'INTEGRATION_REDIS_URL':
+        return redis_base_url() + '/11'
+    raise AttributeError(name)
+
+
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 REPO_ROOT = BACKEND_DIR.parent
 # Repo-root machinery (roles + RLS bootstrap SQL). In CI the image packages
@@ -40,6 +46,7 @@ INITDB_DIR = Path(os.environ.get("MORGHDARI_INITDB_DIR", REPO_ROOT / "initdb"))
 SEED_MIGRATIONS = [
     BACKEND_DIR / "apps" / "telemetry" / "migrations" / "0003_seed_metric_types.py",
     BACKEND_DIR / "apps" / "system_config" / "migrations" / "0003_seed_configuration_and_quotas.py",
+    BACKEND_DIR / "apps" / "system_config" / "migrations" / "0004_alert_tunables.py",
     BACKEND_DIR / "apps" / "geography" / "migrations" / "0002_seed_geo_sample.py",
 ]
 

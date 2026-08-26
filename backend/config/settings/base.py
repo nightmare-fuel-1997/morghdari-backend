@@ -263,6 +263,11 @@ CELERY_TASK_ROUTES = {
 # Drain tasks are BEAT-DRIVEN (one cycle per kick, 10s): stateless workers,
 # crash-simple self-healing. No self-rescheduling recursion to reason about.
 CELERY_BEAT_SCHEDULE = {
+    "alerts-daily-thresholds": {
+        "task": "alerts.cache_daily_thresholds",
+        "schedule": __import__("celery.schedules", fromlist=["crontab"]).crontab(hour=0, minute=0),  # Asia/Tehran via CELERY_TIMEZONE
+        "options": {"queue": "alerts"},
+    },
     "telemetry-historical-drain-kick": {
         "task": "telemetry.process_historical_payload",
         "schedule": 10.0,

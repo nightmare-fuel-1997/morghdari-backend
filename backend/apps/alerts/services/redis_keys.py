@@ -12,10 +12,11 @@ def thresholds_hash(saloon_id: int) -> str:
     return f"saloon:{saloon_id}:thresholds"
 
 
-def grace_key(saloon_id: int) -> str:
-    """Written ONLY when a hash actually changes (D9) — suppresses non-velocity
-    firing for a short window while rules settle."""
-    return f"saloon:{saloon_id}:grace"
+def transition_grace_key(saloon_id: int) -> str:
+    """Written ONLY when a threshold hash actually changes (D9 / Walkthrough
+    §4.1 line 663): suppresses non-velocity firing while rules settle.
+    TTL comes from seeded threshold_transition_grace_sec (=300)."""
+    return f"threshold:transition:{saloon_id}"
 
 
 def breach_key(saloon_id: int, metric: str) -> str:

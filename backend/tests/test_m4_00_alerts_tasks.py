@@ -40,7 +40,7 @@ class RedisKeyShapeTests(TestCase):
         from apps.alerts.services import redis_keys as keys
 
         self.assertEqual(keys.thresholds_hash(7), "saloon:7:thresholds")
-        self.assertEqual(keys.grace_key(7), "saloon:7:grace")
+        self.assertEqual(keys.transition_grace_key(7), "threshold:transition:7")
         self.assertEqual(keys.breach_key(7, "temp"), "saloon:7:breach:temp")
         self.assertEqual(
             keys.active_alert_key(7, "nh3"), "alert:active:saloon:7:nh3"

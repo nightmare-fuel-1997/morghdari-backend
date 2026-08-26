@@ -8,3 +8,7 @@ class AlertsConfig(AppConfig):
     # MUST equal the dotted path or Django raises duplicate-app errors and
     # migrations split-brain (v0.1 TUTORIAL §3.5 pitfall table).
     name = "apps.alerts"
+
+    def ready(self):
+        # M4-01: threshold re-cache fast paths (Walkthrough §4.1 lines 667-671)
+        from . import signals  # noqa: F401
