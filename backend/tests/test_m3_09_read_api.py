@@ -29,7 +29,9 @@ from morghdari.subscriber.pipeline import handle_message
 
 PASSWORD = "strong-pass-123"
 from tests.conftest import redis_base_url
-REDIS_URL = redis_base_url() + "/13"  # scratch DB
+
+CONSUMER_REDIS_URL = redis_base_url() + "/13"  # scratch DB
+REDIS_URL = CONSUMER_REDIS_URL
 
 
 def _redis():

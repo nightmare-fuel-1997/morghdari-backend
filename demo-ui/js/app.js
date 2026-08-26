@@ -159,6 +159,7 @@ async function doLogin(slot, event) {
   };
   renderIdentity(slot);
   refreshButtons();
+  if (slot === "A") refreshPipeline();
 }
 
 async function doubleRefresh() {
@@ -429,6 +430,52 @@ async function fetchTelemetry() {
   }
 }
 
+/* ── v0.3 live pipeline panel ────────────────────────────────────────────── */
+
+let plTimer = null;
+
+async function refreshPipeline() {
+  const result = await api("GET", "/demo/api/pipeline/");
+  if (!result.ok) return;
+  const s = result.data.streams;
+  $("pl-rt").textContent = s.realtime;
+  $("pl-hist").textContent = s.historical;
+  $("pl-dlq").textContent = s.dead_letter;
+  $("pl-pend").textContent =
+    (result.data.groups.realtime?.pending || 0) +
+    (result.data.groups.historical?.pending || 0);
+
+  const dlq = await api("GET", "/demo/api/dlq/?count=5");
+  const table = $("pl-dlq-table");
+  const rows = dlq.ok ? dlq.data.entries : [];
+  table.hidden = rows.length === 0;
+  table.querySelector("tbody").innerHTML = rows
+    .map((e) => {
+      const tail = e.topic.length > 42 ? "…" + e.topic.slice(-42) : e.topic;
+      return `<tr><td><span class="pill-off">${esc(e.reason)}</span></td>` +
+             `<td><code>${esc(tail)}</code></td>` +
+             `<td><code>${esc(e.payload_preview)}</code></td></tr>`;
+    })
+    .join("");
+}
+
+async function pipelinePublish(buffered) {
+  const result = await api("POST", "/demo/api/simulate/", { body: { buffered } });
+  const note = $("pl-note");
+  note.textContent = result.ok
+    ? `${result.data.outcome.toUpperCase()} · lane=${result.data.lane} · device_ts=${result.data.device_ts} — ${result.data.note}`
+    : `HTTP ${result.status}: ${JSON.stringify(result.data)}`;
+  await Promise.allSettled([refreshPipeline(), fetchTelemetry()]);
+}
+
+function toggleAutoRefresh(enabled) {
+  if (plTimer) { clearInterval(plTimer); plTimer = null; }
+  if (enabled && SLOTS.A) {
+    plTimer = setInterval(refreshPipeline, 2000);
+    refreshPipeline();
+  }
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
   $("login-form-a").addEventListener("submit", (e) => doLogin("A", e));
   $("login-form-b").addEventListener("submit", (e) => doLogin("B", e));
@@ -443,6 +490,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("btn-sup-blank").addEventListener("click", supportBlank);
   $("btn-sup-open").addEventListener("click", supportOpen);
   $("btn-tx").addEventListener("click", fetchTelemetry);
+  $("btn-pl-live").addEventListener("click", () => pipelinePublish(false));
+  $("btn-pl-buffered").addEventListener("click", () => pipelinePublish(true));
+  $("btn-pl-refresh").addEventListener("click", refreshPipeline);
+  $("pl-auto").addEventListener("change", (e) => toggleAutoRefresh(e.target.checked));
 
   // connection chip: anonymous ping against a protected route (expect 401)
   const probe = await api("GET", "/org/members/");

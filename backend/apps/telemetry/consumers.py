@@ -46,14 +46,17 @@ logger = logging.getLogger(__name__)
 CONSUMER_GROUP = "telemetry_workers"   # Q2: contract name (Tracker Â§4k)
 BATCH_SIZE_DEFAULT = 50
 
+CONSUMERS_REDIS_URL = os.environ.get(
+    "REDIS_URL", "redis://:dev_redis_password@localhost:6379"
+)  # captured ONCE at import — test modules may point this elsewhere via patching
+
 _redis_client = None
 
 
 def _redis():
     global _redis_client
     if _redis_client is None:
-        url = os.environ.get("REDIS_URL", "redis://:dev_redis_password@localhost:6379")
-        _redis_client = redis.Redis.from_url(url, decode_responses=True)
+        _redis_client = redis.Redis.from_url(CONSUMERS_REDIS_URL, decode_responses=True)
     return _redis_client
 
 
@@ -126,10 +129,21 @@ class HistoricalPacer:
         self._seen[org] = stamps
 
 
-def resolve_saloon(fields: dict) -> str:
+def resolve_saloon(fields: dict):
+    """Slot pk → saloon id. Unknown/deleted slots dead-letter (never crash).
+
+    Pipeline guarantees resolution pre-publish, but stale entries can outlive
+    their slot rows (demo resets, provisioning deletions) — those are poison
+    and belong in the DLQ with a reason, exactly like the subscriber treats
+    UNKNOWN_SLOT (Q1 family).
+    فارسی: اسلاتِ ناشناخته در زمانِ درین = پیامِ سالم به صندوق مرده، نه کرش.
+    """
     from apps.devices.models import SaloonSensorSlot
 
-    slot = SaloonSensorSlot.objects.only("saloon_id").get(pk=fields["slot_id"])
+    try:
+        slot = SaloonSensorSlot.objects.only("saloon_id").get(pk=fields["slot_id"])
+    except SaloonSensorSlot.DoesNotExist:
+        return None
     return slot.saloon_id
 
 
@@ -159,8 +173,21 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None) -> in
         for entry_id, fields in entries:
             ids.append(entry_id)
             kwargs = _to_model_kwargs(fields)
-            kwargs["saloon_id"] = resolve_saloon(fields)
-            by_org.setdefault(kwargs["org_id"], []).append(kwargs)
+            saloon_id = resolve_saloon(fields)
+            if saloon_id is None:
+                # Stale slot (deleted/reset): poison → DLQ with reason,
+                # then ack — never crash the worker over it (Q1 family).
+                from morghdari.subscriber.dlq import send_to_dlq
+
+                send_to_dlq(
+                    client,
+                    fields.get("gateway_slot_id", "unknown-topic"),
+                    fields.get("payload", ""),
+                    "UNKNOWN_SLOT",
+                )
+            else:
+                kwargs["saloon_id"] = saloon_id
+                by_org.setdefault(kwargs["org_id"], []).append(kwargs)
 
         for org, rows in by_org.items():
             from apps.tenants.context import tenant_context
