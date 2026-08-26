@@ -105,7 +105,7 @@ entries always carry a reason.
 
 ```python
 # realtime — latency-sensitive, no rate limit
-entry = redis.xreadgroup("workers", CONSUMER, {"telemetry:realtime": ">"},
+entry = redis.xreadgroup("telemetry_workers", CONSUMER, {"telemetry:realtime": ">"},
                          count=10, block=5000)
 ...validate → insert buffer → XACK after DB commit
 
@@ -218,6 +218,10 @@ everything else. When curl shows YOUR simulated row, the core risk is dead.
 | sqlite for integration tests | Every Timescale behavior hidden until prod |
 | Row-by-row inserts | Insert latency explodes under the first storm |
 | Shared subscription tested with ONE subscriber | Scaling claim never actually tested |
+| recv_ts stamped with plain time.time() | Windows clock granularity collides; the hypertable UNIQUE silently drops a row | stamp strictly monotonic timestamps (10 microsec min step) per subscriber |
+| RLS assertions on a superuser connection | BYPASSRLS makes them vacuous - they pass with broken policies | SET ROLE morghdari_app for the request phase (C-15, Testing Strategy 3.4) |
+| Django <5.2 ORM insert into saloon_telemetry | GENERATED ALWAYS column rejected | generated buffered_delay_mins stays off the model; read via annotate |
+| pytest fixtures injected into TestCase methods | TypeError at collection | PG modules are plain functions or setUpClass vendor-guard classes |
 
 ---
 
