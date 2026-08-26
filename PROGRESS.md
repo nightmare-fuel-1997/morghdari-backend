@@ -79,5 +79,6 @@
 - [x] M3-07 stream trimming (~100k approximate) on the write path, both lanes — `9328a8b`
 - [x] M3-05 Celery consumers: XACK strictly after commit, per-org atomic+tenant_context batches, deterministic recv_ts idempotency (crash-redelivery → exactly one row), beat 10s kick — this commit
 - [x] M3-06 historical lane: pacing from system_configuration every cycle (global sleep + sliding per-org window) — `e41de82`
-- [x] M3-08 full simulator: schema-2.0 multi-pack payloads, `--replay-hours` outage storm then live resume — this commit
-- [x] M3-09 telemetry read API per contract (RLS-scoped; generated column via annotate; cross-org = HTTP 200 empty) — this commit
+- [x] M3-08 full simulator: schema-2.0 multi-pack payloads, `--replay-hours` outage storm then live resume — `396b17d`
+- [x] M3-09 telemetry read API per contract (RLS-scoped; generated column via annotate; cross-org = HTTP 200 empty) — `396b17d`
+- [x] M3-10 storm integration: 240-window backlog + 20 live stay lane-separated; dedup holds across FULL replay (60→60); hypertable chunking verified; monotonic recv_ts kills silent UNIQUE collisions — this commit

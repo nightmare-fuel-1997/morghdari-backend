@@ -39,7 +39,7 @@ def _next_recv_ts() -> str:
     global _last_recv_ts
     now = time.time()
     if now <= _last_recv_ts[0]:
-        now = _last_recv_ts[0] + 0.000001
+        now = _last_recv_ts[0] + 0.00001  # 10µs: safely above µs rounding noise
     _last_recv_ts[0] = now
     return repr(now)
 
