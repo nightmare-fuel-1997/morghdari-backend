@@ -225,6 +225,7 @@
       <tbody></tbody>
     </table>
     <p id="pl-note" class="hint">Sign in (Session A) to enable publishing.</p>
+    <p class="hint">If a publish doesn't move the counters on a long-running dev server, restart <code>runserver</code> once — a stale consumer-group cursor from earlier debug sessions can hold delivery back (production Celery workers never hit this).</p>
   </section>
 
   <!-- ══════════ 7 · EVENT LOG ══════════ -->
