@@ -278,6 +278,14 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 10.0,
         "options": {"queue": "telemetry_realtime"},
     },
+    # M4-05 escalation heartbeat: Tier 2 at 15 min / Tier 3 at 30 min of
+    # unresolved breach; sweep cadence 2 min keeps worst-case promotion lag
+    # inside the tier window (TUTORIAL §3.4).
+    "alerts-escalation-sweep": {
+        "task": "alerts.escalate_alerts",
+        "schedule": 120.0,
+        "options": {"queue": "alerts"},
+    },
 }
 # Historical lane is throttled IN THE WORKER from system_configuration (Saas §4);
 # Celery-level rates are intentionally NOT set here to avoid two sources of truth.

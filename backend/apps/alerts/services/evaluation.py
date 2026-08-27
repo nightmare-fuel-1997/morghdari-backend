@@ -7,17 +7,16 @@ passes, fires (or coalesces) an AlertInstance row inside tenant_context.
 Evaluation order (Decision 10 / Walkthrough §4.2):
   ① Velocity emergency → instant Tier 1 (bypasses ALL suppression)
   ② Midnight transition grace → suppresses non-velocity
-  ③ Threshold comparison + breach accumulation + hysteresis
+  ③ Threshold comparison + breach accumulation + 900 s duration gate + hysteresis
 
 فارسی: ارزیابیِ هشدار بعد از درجِ تله‌متری و قبل از امضا؛ اولویت با سرعت است.
 """
 
 import logging
+import time
 
-from apps.alerts.services.breach import track_breach
-from apps.alerts.services.grace import is_graced
+from apps.alerts.services.breach import consume_fire, track_breach
 from apps.alerts.services.redis_keys import thresholds_hash
-from apps.alerts.services.velocity import check_velocity_emergency
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +61,7 @@ def evaluate_entry(
     if not thresholds:
         return None  # no thresholds cached ⇒ no alerts possible (fail-silent)
 
-    clock_now = clock_now or 0.0
+    clock_now = time.time() if clock_now is None else clock_now
 
     # ── ① velocity emergency (bypasses ALL suppression) ────────────────────
     from apps.alerts.services.velocity import check_velocity_emergency
@@ -96,7 +95,7 @@ def evaluate_entry(
         logger.debug("grace key active for saloon %s — suppressing non-velocity", saloon_id)
         return None
 
-    # ── ③ threshold comparison + breach accumulation ───────────────────────
+    # ── ③ threshold comparison + breach accumulation + duration gate ──────
     duration_sec = _config_int("breach_duration_sec", 900)
     hysteresis = _config_float("hysteresis_buffer_units", 0.5)
 
@@ -114,17 +113,15 @@ def evaluate_entry(
         result = track_breach(
             redis_client, saloon_id, metric_key,
             float(metric_values["avg"]), max_threshold,
-            hysteresis, duration_sec,
+            hysteresis, duration_sec, clock_now=clock_now,
         )
-        if result == "breaching":
-            breach_ttl_remaining = redis_client.ttl(
-                __import__("apps.alerts.services.redis_keys",
-                           fromlist=["breach_key"]).breach_key(saloon_id, metric_key)
-            )
-            if breach_ttl_remaining <= duration_sec - 5 or breach_ttl_remaining < 0:
-                continue  # duration filter not met yet — skip silently
+        if result != "breaching":
+            continue
 
-        if result == "breaching" and breach_ttl_remaining > 0:
+        # Duration filter (TUTORIAL §3.3): Tier 1 fires exactly once per
+        # episode, only after breach_duration_sec of SUSTAINED breach.
+        if consume_fire(redis_client, saloon_id, metric_key,
+                        duration_sec, clock_now=clock_now):
             fire = fire_or_coalesce(
                 redis_client, org_id, farm_id, saloon_id,
                 metric=metric_key, value=float(metric_values["avg"]),

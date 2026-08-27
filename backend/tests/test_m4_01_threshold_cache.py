@@ -45,6 +45,17 @@ def _redis():
 
 
 @pytest.fixture(autouse=True)
+def _fresh_scratch_redis():
+    """The docstring promised flushed-per-test. Flush the URL the SERVICE
+    actually resolves (env may have been re-pointed by another test module
+    at collection time) — stale hashes otherwise collide once --create-db
+    resets saloon PKs and 'first write' finds an old value → phantom grace."""
+    url = os.environ.get("REDIS_URL", SCRATCH_REDIS_URL)
+    redis_lib.Redis.from_url(url, decode_responses=True).flushdb()
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _fresh_scratch():
     """Flush the threshold-service scratch DB before every test."""
     _redis().flushdb()
@@ -153,11 +164,16 @@ def test_grace_key_only_when_values_change(timescale_db):
         min_value="18",
     )
 
+    # Eager post_save signals (CELERY_TASK_ALWAYS_EAGER) already re-cached on
+    # every create above — canon-correct, but this test needs a controlled
+    # baseline: wipe and let the EXPLICIT recache below be the first writer.
+    client = _redis()
+    client.flushdb()
+
     status1 = svc.recache_saloon(saloon.id, clock=Clock(now_fn=lambda: dj_tz.now().timestamp()))
     hash_key = thresholds_hash(saloon.id)
     grace_key = transition_grace_key(saloon.id)
 
-    client = _redis()
     assert client.hgetall(hash_key) != {}
     assert not client.exists(grace_key)
 
@@ -166,12 +182,27 @@ def test_grace_key_only_when_values_change(timescale_db):
     assert status2 == "unchanged"
     assert not client.exists(grace_key)
 
-    # farmer tightens the band mid-flock ⇒ REAL change ⇒ grace appears
-    rule.max_value = "35.00"
-    rule.save(update_fields=["max_value"])
-    status3 = svc.recache_saloon(saloon.id, clock=Clock(now_fn=lambda: dj_tz.now().timestamp()))
-    assert status3 == "changed"
-    assert client.exists(grace_key)
+    # Detach the fast-path signals so the EXPLICIT recache below is what
+    # observes the edit (eager Celery would otherwise pre-apply it).
+    # NOTE: disconnect/connect MUST repeat the registration dispatch_uid or
+    # Django silently keeps the original binding.
+    from django.db.models.signals import post_save
+
+    from apps.alerts.signals import flock_saved, rules_changed
+    from apps.telemetry.models import FlockCycle as _FC
+
+    post_save.disconnect(flock_saved, sender=_FC, dispatch_uid="alerts_flock_recache")
+    post_save.disconnect(rules_changed, sender=LifecycleThresholdRule, dispatch_uid="alerts_rules_recache")
+    try:
+        # farmer tightens the band mid-flock ⇒ REAL change ⇒ grace appears
+        rule.max_value = "35.00"
+        rule.save(update_fields=["max_value"])
+        status3 = svc.recache_saloon(saloon.id, clock=Clock(now_fn=lambda: dj_tz.now().timestamp()))
+        assert status3 == "changed"
+        assert client.exists(grace_key)
+    finally:
+        post_save.connect(flock_saved, sender=_FC, dispatch_uid="alerts_flock_recache")
+        post_save.connect(rules_changed, sender=LifecycleThresholdRule, dispatch_uid="alerts_rules_recache")
 
 
 # ── harvested state (Q3) ──────────────────────────────────────────────────
@@ -200,8 +231,9 @@ def test_flock_end_flips_state_keeps_flags(seeded_rls_db):
         min_value="5",
     )
 
-    clock_fn = lambda: dj_tz.now().timestamp()  # noqa: E731
-    status1 = svc.recache_saloon(saloon.id, clock=clock_fn)
+    status1 = svc.recache_saloon(
+        saloon.id, clock=Clock(now_fn=lambda: dj_tz.now().timestamp())
+    )
     assert status1 in ("changed", "unchanged")
 
     # flock END flips operational state while keeping flags intact (Q3)
@@ -209,7 +241,9 @@ def test_flock_end_flips_state_keeps_flags(seeded_rls_db):
     flock.end_date = dj_tz.now()
     flock.save(update_fields=["end_date"])
 
-    status2 = svc.recache_saloon(saloon.id, clock=clock_fn)
+    status2 = svc.recache_saloon(
+        saloon.id, clock=Clock(now_fn=lambda: dj_tz.now().timestamp())
+    )
     mapping = build_hash_now(saloon)
 
     assert mapping["operational_state"] == "HARVESTED_VACANT"

@@ -50,6 +50,11 @@ EXPECTED_CONFIG_KEYS = {
     "farm_power_outage_los_ratio",
     "farm_power_outage_window_min",
     "correlation_suppress_minutes",
+    # M4-01 alert-engine tunables (Tracker §4l Q1, 0004_alert_tunables).
+    "breach_duration_sec",
+    "sensor_status_ttl_sec",
+    "escalation_tier2_min",
+    "escalation_tier3_min",
 }
 
 

@@ -76,9 +76,19 @@ def _install_cascade_flush(connection) -> None:
     original = connection.ops.sql_flush
 
     def with_unmanaged(style, tables, *args, **kwargs):
-        tables = list(dict.fromkeys([*tables, *_UNMANAGED_TABLES]))
+        # Include unmanaged hypertables ONLY when they actually exist: modules
+        # that never request the timescale fixture otherwise die in teardown
+        # on fresh --create-db sessions purely due to module ordering.
+        candidates = list(dict.fromkeys([*tables, *_UNMANAGED_TABLES]))
+        with connection.cursor() as cursor:
+            existing = [
+                t for t in candidates
+                if cursor.execute(
+                    "SELECT to_regclass('public.' || quote_ident(%s)) IS NOT NULL", (t,)
+                ).fetchone()[0]
+            ]
         kwargs["allow_cascade"] = True
-        return original(style, tables, *args, **kwargs)
+        return original(style, existing, *args, **kwargs)
 
     connection.ops.sql_flush = with_unmanaged
     connection.ops._morghdari_cascade_patch = True

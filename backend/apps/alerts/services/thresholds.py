@@ -40,14 +40,19 @@ _redis_client = None
 
 
 def _redis():
+    """Client for the CURRENT env URL — re-binds if REDIS_URL changes between
+    modules (pytest collection imports every test module before ANY test runs,
+    so last-writer-wins env stomping must not freeze the first caller's DB).
+    Production: env never changes → identical to a plain lazy singleton."""
     global _redis_client
-    if _redis_client is None:
+    url = os.environ.get(
+        "REDIS_URL", "redis://:dev_redis_password@localhost:6379"
+    )
+    if _redis_client is None or getattr(_redis_client, "_bound_url", None) != url:
         import redis as redis_lib
 
-        url = os.environ.get(
-            "REDIS_URL", "redis://:dev_redis_password@localhost:6379"
-        )
         _redis_client = redis_lib.Redis.from_url(url, decode_responses=True)
+        _redis_client._bound_url = url
     return _redis_client
 
 TEHRAN = ZoneInfo("Asia/Tehran")
@@ -120,8 +125,13 @@ def build_hash_for_saloon(saloon, clock: Clock | None = None) -> dict | None:
     if any_flock is None:
         return None  # never flocked → inert (no thresholds possible)
 
-    # Q3: harvested/vacant — keep whatever flags exist, flip the state field.
-    return {"operational_state": "HARVESTED_VACANT"}
+    # Q3 (Tracker §4l): a FINISHED flock keeps its hash with
+    # operational_state=HARVESTED_VACANT and the *_enabled flags INTACT —
+    # the velocity lane stays armed in empty saloons; only never-flocked
+    # saloons have no hash (inert).
+    previous = _redis().hgetall(keys.thresholds_hash(saloon.id))
+    flags = {k: v for k, v in previous.items() if k.endswith("_enabled")}
+    return {"operational_state": "HARVESTED_VACANT", **flags}
 
 
 def _hash_for_flock(flock: FlockCycle, now_dt) -> dict:

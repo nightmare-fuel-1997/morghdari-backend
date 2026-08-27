@@ -98,4 +98,7 @@
 - [x] M4-00 alerts scaffold: canonical task names registered, redis-key builders, injectable clock — `a921d48`
 - [x] M4-01 threshold cache + midnight cron + re-cache signals + 4 seeded tunables (breach 900s, status TTL 300s, tiers 15/30) — `74d5ac1`
 - [x] test infra: all PG modules standardized on integration redis /11 via conftest INTEGRATION_REDIS_URL — `ade9e18`
-- [x] M4-02 breach accumulation + hysteresis flapping prevention + midnight grace key suppression — this commit
+- [x] M4-02 breach accumulation + hysteresis flapping prevention + midnight grace key suppression — `7f570cb` (opened in `02efb51`; closed with velocity-lane completion)
+- [x] M4-03 NH₃ velocity bypass lanes: config key + max_ts duration filter → instant Tier 1, skips grace/mute/suppression entirely — `7f570cb`
+- [x] M4-04 alert_instances writes: inline evaluation after telemetry commit / before ack; REALTIME row stamps last breach value — `383c835`
+- [x] M4-05 escalation sweep + 3-tier timeline: breach key holds JSON state (started_at/alerted/value) so Tier 1 fires EXACTLY ONCE at 900 s of sustained breach; 2-min sweep promotes Tier 2 @ 15 min / Tier 3 @ 30 min, never demotes, ack-pause freezes the timer, breach-key absence ⇒ RESOLVED + active pointer cleared, REPLAY_ANALYSIS rows untouched; delivery stub logs per-tier sinks (push_workers/sms_engineer/manager_and_doctor); beat entry `alerts-escalate-alerts` every 120 s — this commit

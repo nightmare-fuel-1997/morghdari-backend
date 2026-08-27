@@ -32,6 +32,14 @@ User = get_user_model()
 PASSWORD = "strong-pass-123"
 
 
+@pytest.fixture(scope="class", autouse=True)
+def _bootstrap_rls_artifacts(request, seeded_rls_db):
+    """These tests SET ROLE morghdari_app — the roles/grants/policies MUST
+    exist. Declared explicitly instead of hoping an alphabetically-earlier
+    module bootstrapped them first (fresh --create-db sessions broke that)."""
+    yield
+
+
 def _make_org_with_saloon(name: str):
     province = Province.objects.create(name=f"P-{name}")
     city = City.objects.create(province=province, name=f"C-{name}")

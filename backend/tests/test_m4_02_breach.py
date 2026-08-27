@@ -30,9 +30,10 @@ DURATION = 900
 
 
 def _track(client, value, saloon=SALOON, metric=METRIC,
-           mx=MAX_T, buf=BUFFER, dur=DURATION):
+           mx=MAX_T, buf=BUFFER, dur=DURATION, clock_now=None):
     return track_breach(
         client, saloon, metric, value, mx, buf, dur,
+        clock_now=clock_now,
     )
 
 
@@ -55,15 +56,34 @@ class TestBreachAccumulation:
         _track(redis_client, 33.0)
         assert redis_client.ttl(key) > DURATION - 10
 
+    def test_consecutive_breach_preserves_started_at(self, redis_client):
+        """TTL refresh must NOT restart the duration clock (AU-BREACH-TTL)."""
+        import json
+
+        _track(redis_client, 32.0, dur=DURATION)  # no clock → wall time
+        key = breach_key(SALOON, METRIC)
+        first = json.loads(redis_client.get(key))["started_at"]
+
+        import time as _t
+
+        _track(redis_client, 33.0, clock_now=first + 120)
+        second = json.loads(redis_client.get(key))["started_at"]
+        assert second == first, "started_at must survive consecutive breaches"
+
     def test_value_below_max_never_breaches(self, redis_client):
         result = _track(redis_client, 25.0)
         assert result == "normal"
 
     def test_breach_key_holds_last_value(self, redis_client):
+        """State blob keeps the last breaching value (JSON, TUTORIAL §3.3)."""
+        import json
+
         _track(redis_client, 32.0)
         key = breach_key(SALOON, METRIC)
-        stored = float(redis_client.get(key))
-        assert stored == 32.0
+        stored = json.loads(redis_client.get(key))
+        assert stored["value"] == 32.0
+        assert stored["alerted"] is False
+        assert stored["started_at"] > 0
 
 
 class TestHysteresisFlappingPrevention:
