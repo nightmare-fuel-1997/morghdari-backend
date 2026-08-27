@@ -51,6 +51,12 @@ SEED_MIGRATIONS = [
 ]
 
 
+# C-16 session state: healthy catalog counts captured at bootstrap time; the
+# autouse `_reference_seed_guard` repairs against these whenever starvation
+# strikes. Deliberately module-global: fixtures must share it across scopes.
+_EXPECTED_REFERENCE_COUNTS: dict = {}
+
+
 def _sql_from_migration(path: Path) -> str:
     spec = importlib.util.spec_from_file_location(path.stem, path)
     module = importlib.util.module_from_spec(spec)
@@ -59,6 +65,15 @@ def _sql_from_migration(path: Path) -> str:
 
 
 _UNMANAGED_TABLES = ("saloon_telemetry", "metric_hourly_aggregates")
+# Reference catalogs (C-16): seeded once per session by seeded_rls_db and read
+# at runtime by services — transactional teardowns must NOT truncate them away
+# from later modules in the same pytest process (found by M4-06: config reads
+# silently fell back to code defaults after an earlier module flushed them).
+_REFERENCE_TABLES = (
+    "system_configuration",
+    "tier_quota_mapping",
+    "sensor_metric_types",
+)
 
 
 def _install_cascade_flush(connection) -> None:
@@ -79,7 +94,13 @@ def _install_cascade_flush(connection) -> None:
         # Include unmanaged hypertables ONLY when they actually exist: modules
         # that never request the timescale fixture otherwise die in teardown
         # on fresh --create-db sessions purely due to module ordering.
-        candidates = list(dict.fromkeys([*tables, *_UNMANAGED_TABLES]))
+        # Reference catalogs are REMOVED from the list instead (C-16): their
+        # rows are session infrastructure, exactly like roles/RLS/policies.
+        candidates = [
+            t
+            for t in dict.fromkeys([*tables, *_UNMANAGED_TABLES])
+            if t not in _REFERENCE_TABLES
+        ]
         with connection.cursor() as cursor:
             existing = [
                 t for t in candidates
@@ -126,6 +147,98 @@ def seeded_rls_db(django_db_setup, django_db_blocker):
             )
             for path in SEED_MIGRATIONS:
                 cursor.execute(_sql_from_migration(path))
+
+        # C-16: capture the baseline after full bootstrap so the autouse
+        # `_reference_seed_guard` knows what "healthy" looks like.
+        with connection.cursor() as cursor:
+            _EXPECTED_REFERENCE_COUNTS["counts"] = _reference_seed_counts(cursor)
+    yield
+
+
+def _reference_seed_counts(cursor) -> dict:
+    """Live row counts for the reference catalogs (C-16 guard)."""
+    counts = {}
+    for table in _REFERENCE_TABLES:
+        counts[table] = cursor.execute(
+            f'SELECT count(*) FROM "{table}"'  # noqa: S608 — name is a module constant
+        ).fetchone()[0]
+    return counts
+
+
+@pytest.fixture(autouse=True)
+def _reference_seed_guard(request):
+    """C-16 containment: verify-or-reseed the reference catalogs per test.
+
+    Rationale (2026-08-27 investigation): on PG sessions the seeded catalogs
+    (system_configuration / tier_quota_mapping / sensor_metric_types) were
+    observed EMPTIED mid-session by an execution channel that no instrument
+    could attribute — full statement audit (flush payloads, wrapper-traced
+    SQL), FK-graph analysis (no inbound references ⇒ no CASCADE path), and
+    DB-identity checks all came back clean, while seeds verifiably commit
+    (independent-process probe saw 30 rows post-bootstrap). The flush
+    exclusion above narrows one channel; this guard closes the CLASS of
+    channel entirely: before each test on PostgreSQL, cheaply COUNT the
+    catalogs; any starvation is repaired from the SAME idempotent seed
+    migrations (ON CONFLICT DO NOTHING) before the test body runs. Tests can
+    therefore rely on seeded truth unconditionally, and config-driven
+    behavior (D21) is testable against real DB values instead of code-level
+    fallbacks.
+    فارسی: پیش از هر تستِ پستگرس، شمارشِ کاتالوگ‌ها کنترل و در صورت کمبود، از
+    همین مهاجرت‌های بذریِ تکرارپذیر ترمیم می‌شود تا رفتارِ وابسته به پیکربندی
+    همیشه با مقادیرِ واقعی دیتابیس آزموده شود.
+    """
+    # Only arm where a test declares database usage; detect via the MARKER
+    # (canonical), not fixturenames — pytest-django exposes internals there.
+    if request.node.get_closest_marker("django_db") is None:
+        # Pure-Redis/non-DB tests must never touch the blocked connection.
+        yield
+        return
+    if connection.vendor != "postgresql":
+        yield
+        return
+
+    with connection.cursor() as cursor:
+        # Ensure tables exist at all (first test may run pre-seeding).
+        missing_setup = cursor.execute(
+            "SELECT to_regclass('public.system_configuration') IS NULL"
+            " OR to_regclass('public.sensor_metric_types') IS NULL"
+        ).fetchone()[0]
+        if not missing_setup:
+            counts = _reference_seed_counts(cursor)
+            expected = _EXPECTED_REFERENCE_COUNTS.get("counts")
+            starved = (
+                expected is None
+                or counts["system_configuration"] < expected["system_configuration"]
+                or counts["sensor_metric_types"] < expected["sensor_metric_types"]
+                or counts["tier_quota_mapping"] < expected["tier_quota_mapping"]
+            )
+        else:
+            starved = True
+
+        if starved:
+            # Deterministic commit boundary: repairs must land even when the
+            # surrounding fixture state is mid-transaction.
+            from django.db import transaction as dj_tx
+
+            with dj_tx.atomic():
+                with connection.cursor() as repair_cursor:
+                    if missing_setup:
+                        repair_cursor.execute(
+                            (INITDB_DIR / "01_roles.sql").read_text(encoding="utf-8")
+                        )
+                        repair_cursor.execute(
+                            (INITDB_DIR / "02_rls.sql").read_text(encoding="utf-8")
+                        )
+                        repair_cursor.execute(
+                            "GRANT USAGE ON SCHEMA public TO morghdari_app;"
+                            "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO morghdari_app;"
+                            "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO morghdari_app;"
+                        )
+                    for path in SEED_MIGRATIONS:
+                        repair_cursor.execute(_sql_from_migration(path))
+            with connection.cursor() as verify_cursor:
+                counts = _reference_seed_counts(verify_cursor)
+            _EXPECTED_REFERENCE_COUNTS["counts"] = counts
     yield
 
 
