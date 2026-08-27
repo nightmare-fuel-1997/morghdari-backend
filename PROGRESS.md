@@ -91,7 +91,7 @@
 ## M4 — alert engine (v0.4)
 
 > EN: Live mirror of `versions/v0.4/TASKS.md`. Decisions Q1–Q10 recorded in
-> backend_docs Tracker §4l (all approved 2026-08-25). Contract bumped to v1.4.5.
+> backend_docs Tracker §4l (all approved 2026-08-26). Contract bumped to v1.4.5.
 >
 > فارسی: آینهٔ زندهٔ تسک‌های نسخهٔ ۰٫۴؛ ده تصمیم در سند ردیابی ثبت شد.
 

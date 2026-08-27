@@ -275,7 +275,10 @@ CELERY_BEAT_SCHEDULE = {
     },
     "telemetry-realtime-drain-kick": {
         "task": "telemetry.process_realtime_payload",
-        "schedule": 10.0,
+        # §4l-Q7: 10s -> 2s so the Tier-1 "<2 s" exit-demo claim holds end to
+        # end (settings-only change per the §4k-Q5 precedent). The historical
+        # lane deliberately keeps its 10s kick.
+        "schedule": 2.0,
         "options": {"queue": "telemetry_realtime"},
     },
     # M4-05 escalation heartbeat: Tier 2 at 15 min / Tier 3 at 30 min of

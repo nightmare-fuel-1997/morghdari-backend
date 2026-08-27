@@ -1,6 +1,6 @@
 """Breach accumulation + hysteresis — the detection gate before any firing.
 
-Canon (Walkthrough §4.2, TUTORIAL §3.3 lines 69–77, AU-BREACH-TTL): the breach
+Canon (Walkthrough §4.2, TUTORIAL §3.2 lines 69–77, AU-BREACH-TTL): the breach
 key holds JSON STATE — {"started_at", "alerted", "value"} — with TTL =
 breach_duration_sec refreshed on EVERY consecutive breach observation
 (including ones arriving after an alert already fired). The key TTL answers

@@ -75,7 +75,7 @@ class TestBreachAccumulation:
         assert result == "normal"
 
     def test_breach_key_holds_last_value(self, redis_client):
-        """State blob keeps the last breaching value (JSON, TUTORIAL §3.3)."""
+        """State blob keeps the last breaching value (JSON, TUTORIAL §3.2)."""
         import json
 
         _track(redis_client, 32.0)

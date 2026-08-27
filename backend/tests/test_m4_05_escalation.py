@@ -56,7 +56,7 @@ def _fresh_redis(monkeypatch):
 
 
 class TestDurationGate:
-    """TUTORIAL §3.3: fire exactly ONCE per episode, exactly AT 900 s."""
+    """TUTORIAL §3.2: fire exactly ONCE per episode, exactly AT 900 s."""
 
     SALOON, METRIC, MAX_T = 7, "temp", 30.0
     T0 = 1_000_000.0

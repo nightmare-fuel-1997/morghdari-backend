@@ -118,7 +118,7 @@ def evaluate_entry(
         if result != "breaching":
             continue
 
-        # Duration filter (TUTORIAL §3.3): Tier 1 fires exactly once per
+        # Duration filter (TUTORIAL §3.2): Tier 1 fires exactly once per
         # episode, only after breach_duration_sec of SUSTAINED breach.
         if consume_fire(redis_client, saloon_id, metric_key,
                         duration_sec, clock_now=clock_now):
