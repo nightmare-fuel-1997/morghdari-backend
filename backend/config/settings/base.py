@@ -289,6 +289,15 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 120.0,
         "options": {"queue": "alerts"},
     },
+    # M4-07 LOS heartbeat: 60 s sweep; the 300 s grace lives in the
+    # sensor:status TTL (consumer-written on every live reading). Fully
+    # suppressed after a Redis restart for los_suppress_after_redis_restart_min
+    # (DR T3 — keys repopulate slower than the sweep runs). Blueprint §5.
+    "alerts-los-watchdog": {
+        "task": "alerts.los_watchdog_sweep",
+        "schedule": 60.0,
+        "options": {"queue": "alerts"},
+    },
 }
 # Historical lane is throttled IN THE WORKER from system_configuration (Saas §4);
 # Celery-level rates are intentionally NOT set here to avoid two sources of truth.

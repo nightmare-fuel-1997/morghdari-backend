@@ -47,6 +47,7 @@ SEED_MIGRATIONS = [
     BACKEND_DIR / "apps" / "telemetry" / "migrations" / "0003_seed_metric_types.py",
     BACKEND_DIR / "apps" / "system_config" / "migrations" / "0003_seed_configuration_and_quotas.py",
     BACKEND_DIR / "apps" / "system_config" / "migrations" / "0004_alert_tunables.py",
+    BACKEND_DIR / "apps" / "system_config" / "migrations" / "0005_los_suppress_tunable.py",
     BACKEND_DIR / "apps" / "geography" / "migrations" / "0002_seed_geo_sample.py",
 ]
 

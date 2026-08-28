@@ -38,6 +38,14 @@ def sensor_status_key(saloon_id, slot_id) -> str:
     return f"sensor:status:{saloon_id}:{slot_id}"
 
 
+def los_fired_key(saloon_id, slot_id) -> str:
+    """SET NX guard (Blueprint §5 'setnx') so the 60 s LOS sweep raises at most
+    ONE alert per outage episode. Deleted by the sweep's recovery path once
+    every sensor:status key of the saloon is live again, so the NEXT outage
+    can page again. فارسی: قفلِ یک‌بارِ صدورِ هشدارِ LOS برای هر رخدادِ قطع."""
+    return f"los:fired:{saloon_id}:{slot_id}"
+
+
 def replay_pending(gateway_slot: str) -> str:
     return f"replay:pending:{gateway_slot}"
 

@@ -147,6 +147,21 @@ def resolve_saloon(fields: dict):
     return slot.saloon_id
 
 
+def touch_sensor_status(client, pairs) -> None:
+    """M4-07 pipeline step 5 (Walkthrough Part 3): every LIVE reading refreshes
+    sensor:status:{saloon}:{slot} with TTL = sensor_status_ttl_sec (seeded
+    300). That TTL IS the LOS watchdog's 300 s grace. Buffered/replayed
+    readings carry OLD device_ts — they prove history, not liveness — so they
+    never refresh the key (a replay storm must never mask a real outage).
+    فارسی: هر خوانشِ زنده کلیدِ وضعیت حسگر را تازه می‌کند؛ خوانشِ بازپخش هرگز.
+    """
+    from apps.alerts.services.redis_keys import sensor_status_key
+
+    ttl = _config_int("sensor_status_ttl_sec", 300)
+    for saloon_id, slot_id in pairs:
+        client.set(sensor_status_key(saloon_id, slot_id), "ONLINE", ex=ttl)
+
+
 def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None) -> int:
     """One consumer cycle: read NEW entries PLUS this consumer's own pending
     ones (crash recovery between read and ack), insert per-org batches,
@@ -229,6 +244,17 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None) -> in
                             )
 
             processed += len(rows)
+
+            # M4-07: LIVE readings of THIS org refresh the LOS watchdog keys
+            # ( AFTER the telemetry commit, matching the doc's pipeline order).
+            live = [
+                (raw["saloon_id"], raw["fields"].get("slot_id", ""))
+                for entry_org, raw in raw_entries
+                if entry_org == org and raw["fields"].get("is_buffered") != "True"
+            ]
+            if live:
+                touch_sensor_status(client, live)
+
             if pacer is not None:
                 time.sleep(pacer.sleep_seconds(org))
                 pacer.wait_for_org(org)
