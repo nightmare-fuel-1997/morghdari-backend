@@ -129,4 +129,30 @@ def evaluate_entry(
             )
             fired = {**fire, "metric": metric_key, "tier": 1}
 
+    # ── ④ D23 capability-gated derived rules (M4-09) ───────────────────────
+    # THI heat-stress: rule exists (thi_max in the hash) but the index is
+    # DERIVED — computed only when temp AND humidity are co-present in this
+    # reading (D23: "live temp + humidity"). One input missing ⇒ unavailable,
+    # never assumed normal. Sensor-scarce keys (co/power_*) need no extra
+    # branch: the ③ loop above already evaluates only keys the entry carries.
+    from apps.alerts.services.capability import compute_thi, metric_is_live
+
+    thi_max_str = thresholds.get("thi_max")
+    if thi_max_str is not None and metric_is_live(metrics, "temp") \
+            and metric_is_live(metrics, "humidity"):
+        thi = compute_thi(float(metrics["temp"]["avg"]),
+                          float(metrics["humidity"]["avg"]))
+        result = track_breach(
+            redis_client, saloon_id, "thi", thi,
+            float(thi_max_str), hysteresis, duration_sec, clock_now=clock_now,
+        )
+        if result == "breaching" and consume_fire(
+            redis_client, saloon_id, "thi", duration_sec, clock_now=clock_now
+        ):
+            fire = fire_or_coalesce(
+                redis_client, org_id, farm_id, saloon_id,
+                metric="thi", value=thi, clock_now=clock_now,
+            )
+            fired = {**fire, "metric": "thi", "tier": 1}
+
     return fired
