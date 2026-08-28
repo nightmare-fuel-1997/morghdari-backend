@@ -1,3 +1,6 @@
+# Pytest full-suite logs (detached local runs)
+backend/pytest_full.log
+
 # --- Python ---
 __pycache__/
 *.py[cod]

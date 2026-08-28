@@ -180,6 +180,11 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None) -> in
 
     processed = 0
     acked: set[str] = set()
+    # M4-08 counters span the WHOLE drain call, not one batch: the '>' read
+    # and the PEL crash-recovery read arrive as SEPARATE batch tuples and the
+    # same entry legitimately appears in both — countdown once per entry.
+    buffered_by_gw: dict[str, int] = {}  # replay backlog countdown
+    seen_ids: set[str] = set()
     for _stream, entries in batches:
         if not entries:
             continue
@@ -187,6 +192,8 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None) -> in
         ids: list[str] = []
         raw_entries: list[tuple[str, dict]] = []  # (org_id_str, fields)
         for entry_id, fields in entries:
+            first_sight = entry_id not in seen_ids
+            seen_ids.add(entry_id)
             ids.append(entry_id)
             kwargs = _to_model_kwargs(fields)
             saloon_id = resolve_saloon(fields)
@@ -205,6 +212,11 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None) -> in
                 kwargs["saloon_id"] = saloon_id
                 by_org.setdefault(kwargs["org_id"], []).append(kwargs)
                 raw_entries.append((kwargs["org_id"], {"saloon_id": saloon_id, "fields": fields}))
+            if fields.get("is_buffered") == "True" and first_sight:
+                # Count EVERY buffered entry (even DLQ'd ones — the slot was
+                # still processed), else the backlog never reaches zero.
+                gw = fields.get("gateway_slot_id", "")
+                buffered_by_gw[gw] = buffered_by_gw.get(gw, 0) + 1
 
         for org, rows in by_org.items():
             from apps.tenants.context import tenant_context
@@ -273,6 +285,17 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None) -> in
         if ids:
             client.xack(stream, CONSUMER_GROUP, *ids)
             acked.update(ids)
+
+    # M4-08 (Blueprint §5): the historical backlog countdown — when the LAST
+    # buffered entry of a gateway's outage drains, dispatch the retroactive
+    # REPLAY sweep exactly once (replay:sweeping NX guard). Runs ONCE per
+    # drain call, AFTER the batches loop (the '>' read and the PEL read are
+    # separate tuples — per-batch dispatch would double-decrement), and only
+    # after every batch's DB commit above.
+    for gw, count in buffered_by_gw.items():
+        from apps.alerts.services.replay import note_buffered_processed
+
+        note_buffered_processed(client, gw, count)
 
     trim_streams(client)  # M3-07: bounded streams on every touch
     return len(acked)  # unique entries acknowledged; row count may be lower

@@ -53,3 +53,10 @@ def replay_pending(gateway_slot: str) -> str:
 def replay_sweeping(gateway_slot: str) -> str:
     """NX marker so concurrent workers dispatch the sweep exactly once."""
     return f"replay:sweeping:{gateway_slot}"
+
+
+def replay_covered_key(slot_id: str) -> str:
+    """High-water mark (ISO device_ts) of buffered windows already swept for a
+    sensor slot — lets a LATER outage open a NEW batch_id window instead of
+    being swallowed by the first episode's covered check."""
+    return f"replay:covered:{slot_id}"
