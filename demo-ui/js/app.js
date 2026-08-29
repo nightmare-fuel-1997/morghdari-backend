@@ -257,6 +257,42 @@ const I18N = {
     en: "Documented demo — zero JavaScript dependencies",
     fa: "دموی مستند — بدون وابستگی جاوااسکریپتی",
   },
+
+  /* hero + section nav */
+  "hero-badge": { en: "Latest Release", fa: "آخرین نسخه" },
+  "hero-title": { en: "Morghdari Safety Platform", fa: "پلتفرم ایمنی مُرغداری" },
+  "hero-desc": {
+    en: "Multi-tenant industrial IoT monitoring with real-time alerting, JWT authentication, and RLS-scoped data access. This console exercises every guarantee live against the backend.",
+    fa: "پایش صنعتی IoT چنداجاره‌ای با هشدار لحظه‌ای، احراز هویت JWT و دسترسی داده با محدودیت RLS. این کنسول هر تضمین را به‌صورت زنده روی بک‌اند اجرا می‌کند.",
+  },
+  "hero-tests": { en: "Tests Passing", fa: "تست موفق" },
+  "hero-coverage": { en: "Coverage", fa: "پوشش" },
+  "hero-escalation": { en: "Escalation", fa: "تشدید" },
+  "hero-isolation": { en: "Org Isolation", fa: "جداسازی سازمان" },
+  "nav-auth": { en: "Auth", fa: "احراز هویت" },
+  "nav-org": { en: "Organization", fa: "سازمان" },
+  "nav-telemetry": { en: "Telemetry", fa: "تله‌متری" },
+  "nav-alerts": { en: "Alerts", fa: "هشدارها" },
+  "sec-auth-title": { en: "Authentication & Security", fa: "احراز هویت و امنیت" },
+  "sec-auth-desc": {
+    en: "JWT-based multi-tenant auth with session slots, token integrity, and no-rotation design.",
+    fa: "احراز هویت چنداجاره‌ای مبتنی بر JWT با اسلات نشست، یکپارچگی توکن و طراحی بدون چرخش.",
+  },
+  "sec-org-title": { en: "Organization Management", fa: "مدیریت سازمان" },
+  "sec-org-desc": {
+    en: "Multi-tenant membership, owner-only writes, and zero-blacklist offboarding.",
+    fa: "عضویت چنداجاره‌ای، نوشتن فقط توسط مالک و خروج عضو بدون فهرست سیاه.",
+  },
+  "sec-tel-title": { en: "Telemetry & Data Pipeline", fa: "تله‌متری و خط لوله داده" },
+  "sec-tel-desc": {
+    en: "MQTT → EMQX → Celery → TimescaleDB → RLS-scoped API. The complete data flow.",
+    fa: "MQTT → EMQX → Celery → TimescaleDB → API با محدودیت RLS. جریان کامل داده.",
+  },
+  "sec-alert-title": { en: "Alert Engine", fa: "موتور هشدار" },
+  "sec-alert-desc": {
+    en: "Real-time breach detection with 3-tier escalation, LOS watchdog, and farm correlation.",
+    fa: "تشخیص نقض لحظه‌ای با تشدید سه‌سطحی، نگهبان LOS و همبستگی مزرعه.",
+  },
 };
 
 let currentLang = localStorage.getItem("morghdari-lang") || "en";
@@ -911,4 +947,27 @@ document.addEventListener("DOMContentLoaded", async () => {
       : `backend: unexpected (${probe.status})`;
 
   refreshButtons();
+
+  /* ── section nav scroll spy ──────────────────────────── */
+  const sections = document.querySelectorAll(".content-section[id]");
+  const navPills = document.querySelectorAll(".nav-pill");
+  if (sections.length && navPills.length) {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            const id = entry.target.id;
+            navPills.forEach((pill) => {
+              pill.classList.toggle(
+                "active",
+                pill.getAttribute("href") === "#" + id
+              );
+            });
+          }
+        });
+      },
+      { rootMargin: "-20% 0px -60% 0px" }
+    );
+    sections.forEach((sec) => observer.observe(sec));
+  }
 });
