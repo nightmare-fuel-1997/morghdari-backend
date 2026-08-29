@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" dir="ltr">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Morghdari v0.4 Demo Console | کنسول نمایش نسخهٔ ۰٫۴</title>
+<title>Morghdari v0.4 Demo Console</title>
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -14,36 +14,38 @@
     <svg viewBox="0 0 24 24" class="icon" aria-hidden="true"><path d="M12 2l8 4v6c0 5-3.4 8.6-8 10-4.6-1.4-8-5-8-10V6l8-4z"/></svg>
     <div>
       <h1>Morghdari · v0.4 Demo Console</h1>
-      <p class="fa" dir="rtl">کنسول نمایش قابلیت‌های نسخهٔ ۰٫۴ — موتور هشدار</p>
+      <p data-i18n="header-subtitle">Showcasing v0.4 capabilities — Alert Engine</p>
     </div>
   </div>
-  <span id="conn-chip" class="chip chip-muted">backend: checking…</span>
+  <div class="topbar-right">
+    <button id="lang-toggle" class="btn btn-secondary btn-sm">فارسی</button>
+    <span id="conn-chip" class="chip chip-muted">backend: checking…</span>
+  </div>
 </header>
 
 <main id="main" class="grid">
 
   <!-- ══════════ 1 · LOGIN ══════════ -->
   <section class="card" aria-labelledby="login-h">
-    <h2 id="login-h">1 · Sign in / ورود</h2>
-    <p class="sub">JWT carries your org + roles. Claims are decoded live below.</p>
-    <p class="sub fa" dir="rtl">توکن شامل سازمان و نقش‌های شماست؛ ادعاها همان‌جا رمزگشایی می‌شوند.</p>
+    <h2 id="login-h">1 · <span data-i18n="s1-title">Sign in</span></h2>
+    <p data-i18n="s1-desc">JWT carries your org + roles. Claims are decoded live below.</p>
 
     <form id="login-form-a">
-      <h3 class="slot-title slot-a">Session A <span class="fa" dir="rtl">نشست آ</span></h3>
-      <label for="a-user">Username <span class="fa" dir="rtl">نام کاربری</span></label>
+      <h3 class="slot-title slot-a"><span data-i18n="s1-session-a">Session A</span></h3>
+      <label for="a-user"><span data-i18n="s1-username">Username</span></label>
       <input id="a-user" name="username" autocomplete="username" required>
-      <label for="a-pass">Password <span class="fa" dir="rtl">رمز عبور</span></label>
+      <label for="a-pass"><span data-i18n="s1-password">Password</span></label>
       <input id="a-pass" name="password" type="password" autocomplete="current-password" required>
-      <button type="submit" class="btn btn-primary">Login A</button>
+      <button type="submit" class="btn btn-primary"><span data-i18n="s1-login-a">Login A</span></button>
     </form>
 
     <form id="login-form-b">
-      <h3 class="slot-title slot-b">Session B <span class="fa" dir="rtl">نشست ب</span> <small>(victim slot · برای نمایش خروج عضو)</small></h3>
-      <label for="b-user">Username</label>
+      <h3 class="slot-title slot-b"><span data-i18n="s1-session-b">Session B</span> <small><span data-i18n="s1-victim">(victim slot · for demonstrating offboarding)</span></small></h3>
+      <label for="b-user"><span data-i18n="s1-username">Username</span></label>
       <input id="b-user" name="username" autocomplete="username" required>
-      <label for="b-pass">Password</label>
+      <label for="b-pass"><span data-i18n="s1-password">Password</span></label>
       <input id="b-pass" type="password" autocomplete="current-password" required>
-      <button type="submit" class="btn btn-secondary">Login B</button>
+      <button type="submit" class="btn btn-secondary"><span data-i18n="s1-login-b">Login B</span></button>
     </form>
 
     <div id="identity-a" class="identity" hidden></div>
@@ -53,111 +55,105 @@
 
   <!-- ══════════ 2 · NO ROTATION ══════════ -->
   <section class="card" aria-labelledby="rot-h">
-    <h2 id="rot-h">2 · No rotation proof / اثباتِ بدون‌چرخش</h2>
-    <p class="sub">Same refresh token used twice — both succeed. Accepted risk: a leaked refresh lives 7 days.</p>
-    <p class="sub fa" dir="rtl">یک توکن نوسازی دوبار استفاده می‌شود و هر بار معتبر است؛ ریسک پذیرفته‌شدهٔ سند امنیت.</p>
-    <button id="btn-refresh2" class="btn btn-primary" data-slot="A" disabled>Run double-refresh on A</button>
+    <h2 id="rot-h">2 · <span data-i18n="s2-title">No rotation proof</span></h2>
+    <p data-i18n="s2-desc">Same refresh token used twice — both succeed. Accepted risk: a leaked refresh lives 7 days.</p>
+    <button id="btn-refresh2" class="btn btn-primary" data-slot="A" disabled><span data-i18n="s2-btn">Run double-refresh on A</span></button>
     <div id="refresh-out" class="mono-out" hidden></div>
   </section>
 
   <!-- ══════════ 3 · TAMPER ══════════ -->
   <section class="card" aria-labelledby="tamper-h">
-    <h2 id="tamper-h">3 · Tamper test / آزمایش دست‌کاری</h2>
-    <p class="sub">Flips one character of the access token — signature check must reject it.</p>
-    <p class="sub fa" dir="rtl">یک نویسه از توکن عوض می‌شود؛ امضا باید رد شود.</p>
-    <button id="btn-tamper" class="btn btn-secondary" data-slot="A" disabled>Send tampered token</button>
+    <h2 id="tamper-h">3 · <span data-i18n="s3-title">Tamper test</span></h2>
+    <p data-i18n="s3-desc">Flips one character of the access token — signature check must reject it.</p>
+    <button id="btn-tamper" class="btn btn-secondary" data-slot="A" disabled><span data-i18n="s3-btn">Send tampered token</span></button>
     <div id="tamper-out" class="mono-out" hidden></div>
   </section>
 
   <!-- ══════════ 4 · MEMBERS BOARD ══════════ -->
   <section class="card wide" aria-labelledby="mem-h">
-    <h2 id="mem-h">4 · Org members / اعضای سازمان</h2>
-    <p class="sub">Reads: any member of the org. Writes: owner only (buttons auto-disable).</p>
-    <p class="sub fa" dir="rtl">خواندن برای همهٔ اعضا؛ نوشتن فقط مالک — دکمه‌ها خودکار غیرفعال می‌شوند.</p>
+    <h2 id="mem-h">4 · <span data-i18n="s4-title">Org members</span></h2>
+    <p data-i18n="s4-desc">Reads: any member of the org. Writes: owner only (buttons auto-disable).</p>
 
     <details class="invite-box">
-      <summary>Invite a member <span class="fa" dir="rtl">دعوت عضو</span> (owner)</summary>
+      <summary><span data-i18n="s4-invite">Invite a member</span> <span data-i18n="s4-owner">(owner)</span></summary>
       <form id="invite-form">
         <label for="inv-user">Username</label>
         <input id="inv-user" required pattern="[^\s]+">
-        <label for="inv-role">Role <span class="fa" dir="rtl">نقش</span></label>
+        <label for="inv-role"><span data-i18n="s4-role">Role</span></label>
         <select id="inv-role">
           <option>worker</option><option>manager</option><option>engineer</option>
           <option>doctor</option><option>installer</option><option>owner</option>
         </select>
-        <button type="submit" class="btn btn-primary">Invite</button>
+        <button type="submit" class="btn btn-primary"><span data-i18n="s4-invite-btn">Invite</span></button>
       </form>
-      <p class="hint">New users are created with an UNUSABLE password — credentials travel out-of-band.</p>
+      <p class="hint"><span data-i18n="s4-invite-hint">New users are created with an UNUSABLE password — credentials travel out-of-band.</span></p>
     </details>
 
-    <button id="btn-members" class="btn btn-secondary" data-slot="A" disabled>List members</button>
+    <button id="btn-members" class="btn btn-secondary" data-slot="A" disabled><span data-i18n="s4-list-btn">List members</span></button>
     <table id="members-table" class="members" hidden aria-live="polite">
       <thead><tr><th scope="col">#</th><th scope="col">User</th><th scope="col">Role</th><th scope="col">Active</th><th scope="col">Action</th></tr></thead>
       <tbody></tbody>
     </table>
-    <p id="members-empty" class="empty" hidden>No rows visible — exactly what an unauthorized or org-less session must see.</p>
+    <p id="members-empty" class="empty" hidden><span data-i18n="s4-empty">No rows visible — exactly what an unauthorized or org-less session must see.</span></p>
   </section>
 
-  <!-- ══════════ 5 · OFFBOARDING (C-14) ══════════ -->
+  <!-- ══════════ 5 · OFFBOARDING ══════════ -->
   <section class="card wide" aria-labelledby="off-h">
-    <h2 id="off-h">5 · Offboarding chain / زنجیرهٔ خروج عضو</h2>
-    <p class="sub">Owner deactivates Session&nbsp;B's member → B refreshes (still valid!) → new token has NO org claim → B's reads return HTTP 200 with an EMPTY payload. No blacklist needed.</p>
-    <p class="sub fa" dir="rtl">مالک عضوِ نشست ب را غیرفعال می‌کند؛ نوسازی بعدی توکنِ بدونِ سازمان می‌دهد و خواندن‌ها با کد ۲۰۰ و نتیجهٔ خالی انجام می‌شود — رفتار صحیحِ بسته-به-خطا (C-14).</p>
+    <h2 id="off-h">5 · <span data-i18n="s5-title">Offboarding chain</span></h2>
+    <p data-i18n="s5-desc">Owner deactivates Session B's member → B refreshes (still valid!) → new token has NO org claim → B's reads return HTTP 200 with an EMPTY payload. No blacklist needed.</p>
     <ol class="steps">
-      <li>Login B as a normal member (step 1, slot B)</li>
-      <li>Login A as the owner, press “Deactivate B” below</li>
-      <li>Press “B: refresh &amp; read” — watch authority vanish</li>
+      <li><span data-i18n="s5-step1">Login B as a normal member (step 1, slot B)</span></li>
+      <li><span data-i18n="s5-step2">Login A as the owner, press "Deactivate B" below</span></li>
+      <li><span data-i18n="s5-step3">Press "B: refresh & read" — watch authority vanish</span></li>
     </ol>
-    <button id="btn-deact-b" class="btn btn-danger" data-needs="owner-A" disabled>Deactivate Session-B member</button>
-    <button id="btn-ghost-b" class="btn btn-secondary" data-slot="B" disabled>B: refresh &amp; read</button>
+    <button id="btn-deact-b" class="btn btn-danger" data-needs="owner-A" disabled><span data-i18n="s5-deact-btn">Deactivate Session-B member</span></button>
+    <button id="btn-ghost-b" class="btn btn-secondary" data-slot="B" disabled><span data-i18n="s5-ghost-btn">B: refresh & read</span></button>
     <div id="off-out" class="mono-out" hidden></div>
   </section>
 
   <!-- ══════════ 6 · SUPPORT SESSION ══════════ -->
   <section class="card" aria-labelledby="sup-h">
-    <h2 id="sup-h">6 · Support session / نشست پشتیبانی</h2>
-    <p class="sub">Platform-staff only (superuser rejected). Blank incident → 400. Opened sessions see ONLY the target org.</p>
-    <p class="sub fa" dir="rtl">فقط کارکنان پلتفرم (سوپریوزر رد می‌شود)؛ شماره حادثه اجباری؛ نشست باز فقط سازمانِ مقصد را می‌بیند.</p>
-    <label for="sup-org">Target org_id (UUID)</label>
+    <h2 id="sup-h">6 · <span data-i18n="s6-title">Support session</span></h2>
+    <p data-i18n="s6-desc">Platform-staff only (superuser rejected). Blank incident → 400. Opened sessions see ONLY the target org.</p>
+    <label for="sup-org"><span data-i18n="s6-org-label">Target org_id (UUID)</span></label>
     <input id="sup-org" placeholder="00000000-0000-0000-0000-000000000000">
-    <label for="sup-inc">Incident ID <span class="fa" dir="rtl">شماره حادثه</span></label>
+    <label for="sup-inc"><span data-i18n="s6-incident">Incident ID</span></label>
     <input id="sup-inc" placeholder="INC-7">
-    <label for="sup-reason">Reason <span class="fa" dir="rtl">علت</span></label>
+    <label for="sup-reason"><span data-i18n="s6-reason">Reason</span></label>
     <input id="sup-reason" placeholder="gateway offline">
-    <button id="btn-sup-blank" class="btn btn-secondary" data-needs="staff" disabled>Try blank incident (400)</button>
-    <button id="btn-sup-open" class="btn btn-primary" data-needs="staff" disabled>Open audited session</button>
+    <button id="btn-sup-blank" class="btn btn-secondary" data-needs="staff" disabled><span data-i18n="s6-blank-btn">Try blank incident (400)</span></button>
+    <button id="btn-sup-open" class="btn btn-primary" data-needs="staff" disabled><span data-i18n="s6-open-btn">Open audited session</span></button>
     <div id="sup-out" class="mono-out" hidden></div>
-    <p class="hint">Every opening writes a <code>SUPPORT_ORG_ENTER</code> row into <code>account_activity_logs</code>.</p>
+    <p class="hint"><span data-i18n="s6-hint">Every opening writes a SUPPORT_ORG_ENTER row into account_activity_logs.</span></p>
   </section>
 
-  <!-- ══════════ 8 · TELEMETRY EXPLORER (v0.3) ══════════ -->
+  <!-- ══════════ 8 · TELEMETRY EXPLORER ══════════ -->
   <section class="card wide" aria-labelledby="tx-h">
-    <h2 id="tx-h">8 · Telemetry explorer / کاوشگر تله‌متری <span class="badge staff">v0.3</span></h2>
-    <p class="sub">The loop closes: readings that entered via MQTT come back here through the RLS-scoped read API.</p>
-    <p class="sub fa" dir="rtl">حلقه بسته می‌شود: داده‌هایی که از MQTT وارد شدند از همین API با رعایت مرز سازمان برمی‌گردند.</p>
+    <h2 id="tx-h">8 · <span data-i18n="s8-title">Telemetry explorer</span> <span class="badge staff">v0.3</span></h2>
+    <p data-i18n="s8-desc">The loop closes: readings that entered via MQTT come back here through the RLS-scoped read API.</p>
 
     <div class="tx-controls">
       <div>
-        <label for="tx-saloon">Saloon id <span class="fa" dir="rtl">شناسه سالن</span></label>
+        <label for="tx-saloon"><span data-i18n="s8-saloon">Saloon id</span></label>
         <input id="tx-saloon" type="number" min="1" placeholder="e.g. 1">
       </div>
       <div>
-        <label for="tx-slot">Slot id (optional)</label>
+        <label for="tx-slot"><span data-i18n="s8-slot">Slot id (optional)</span></label>
         <input id="tx-slot" placeholder="S01-PACK-A">
       </div>
       <div>
-        <label for="tx-since">Since <span class="fa" dir="rtl">از</span></label>
+        <label for="tx-since"><span data-i18n="s8-since">Since</span></label>
         <input id="tx-since" type="datetime-local">
       </div>
       <div>
-        <label for="tx-until">Until <span class="fa" dir="rtl">تا</span></label>
+        <label for="tx-until"><span data-i18n="s8-until">Until</span></label>
         <input id="tx-until" type="datetime-local">
       </div>
       <div class="tx-toggle">
         <input id="tx-buffered" type="checkbox">
-        <label for="tx-buffered">include buffered<br><span class="fa hint" dir="rtl">شامل بازپخش‌ها</span></label>
+        <label for="tx-buffered"><span data-i18n="s8-buffered">include buffered</span></label>
       </div>
-      <button id="btn-tx" class="btn btn-primary" data-slot="A" disabled>Fetch telemetry</button>
+      <button id="btn-tx" class="btn btn-primary" data-slot="A" disabled><span data-i18n="s8-fetch-btn">Fetch telemetry</span></button>
     </div>
 
     <table id="tx-table" class="members tx" hidden aria-live="polite">
@@ -170,91 +166,83 @@
     <p id="tx-empty" class="empty" hidden></p>
   </section>
 
-  <!-- ══════════ 9 · DATA PATH (static walkthrough) ══════════ -->
+  <!-- ══════════ 9 · DATA PATH ══════════ -->
   <section class="card wide" aria-labelledby="flow-h">
-    <h2 id="flow-h">9 · How your data flows / مسیر داده <span class="badge staff">v0.3</span></h2>
-    <p class="sub">Every guarantee below is enforced by code you can read, and pinned by tests that run on every push.</p>
-    <p class="sub fa" dir="rtl">هر تضمین زیر با کد و تست‌های خودکار پشتیبانی می‌شود.</p>
+    <h2 id="flow-h">9 · <span data-i18n="s9-title">How your data flows</span> <span class="badge staff">v0.3</span></h2>
+    <p data-i18n="s9-desc">Every guarantee below is enforced by code you can read, and pinned by tests that run on every push.</p>
 
     <div class="flow" role="list">
-      <div class="fstep" role="listitem"><b>Gateway</b><br>schema-2.0 payload<br><span class="hint">qos=1 · one device_ts / window</span></div>
+      <div class="fstep" role="listitem"><b><span data-i18n="s9-gw">Gateway</span></b><br><span data-i18n="s9-gw-sub">schema-2.0 payload</span><br><span class="hint"><span data-i18n="s9-gw-hint">qos=1 · one device_ts / window</span></span></div>
       <div class="arrow">→</div>
-      <div class="fstep" role="listitem"><b>EMQX broker</b><br>authenticates the path<br><span class="hint">the topic IS the identity</span></div>
+      <div class="fstep" role="listitem"><b><span data-i18n="s9-broker">EMQX broker</span></b><br><span data-i18n="s9-broker-sub">authenticates the path</span><br><span class="hint"><span data-i18n="s9-broker-hint">the topic IS the identity</span></span></div>
       <div class="arrow">→</div>
-      <div class="fstep" role="listitem"><b>Subscriber bridge</b><br>$share/telemetry_workers<br><span class="hint">dedup NX 90000 · DLQ with reasons</span></div>
+      <div class="fstep" role="listitem"><b><span data-i18n="s9-bridge">Subscriber bridge</span></b><br><span data-i18n="s9-bridge-sub">$share/telemetry_workers</span><br><span class="hint"><span data-i18n="s9-bridge-hint">dedup NX 90000 · DLQ with reasons</span></span></div>
       <div class="arrow">→</div>
-      <div class="fstep" role="listitem"><b>Two lanes</b><br>realtime | historical<br><span class="hint">trim ~100k · storms never delay live</span></div>
+      <div class="fstep" role="listitem"><b><span data-i18n="s9-lanes">Two lanes</span></b><br><span data-i18n="s9-lanes-sub">realtime | historical</span><br><span class="hint"><span data-i18n="s9-lanes-hint">trim ~100k · storms never delay live</span></span></div>
       <div class="arrow">→</div>
-      <div class="fstep" role="listitem"><b>Celery drain</b><br>XACK after commit<br><span class="hint">per-org RLS batches · crash-safe</span></div>
+      <div class="fstep" role="listitem"><b><span data-i18n="s9-drain">Celery drain</span></b><br><span data-i18n="s9-drain-sub">XACK after commit</span><br><span class="hint"><span data-i18n="s9-drain-hint">per-org RLS batches · crash-safe</span></span></div>
       <div class="arrow">→</div>
-      <div class="fstep" role="listitem"><b>TimescaleDB</b><br>hypertable · 180d retention<br><span class="hint">UNIQUE + ignore_conflicts = once</span></div>
+      <div class="fstep" role="listitem"><b><span data-i18n="s9-db">TimescaleDB</span></b><br><span data-i18n="s9-db-sub">hypertable · 180d retention</span><br><span class="hint"><span data-i18n="s9-db-hint">UNIQUE + ignore_conflicts = once</span></span></div>
       <div class="arrow">→</div>
-      <div class="fstep" role="listitem"><b>This API</b><br>RLS-scoped reads<br><span class="hint">cross-org ⇒ HTTP 200 empty</span></div>
+      <div class="fstep" role="listitem"><b><span data-i18n="s9-api">This API</span></b><br><span data-i18n="s9-api-sub">RLS-scoped reads</span><br><span class="hint"><span data-i18n="s9-api-hint">cross-org ⇒ HTTP 200 empty</span></span></div>
     </div>
 
     <p class="hint" style="margin-top: var(--space-3);">
-      Poison at any step dead-letters WITH a reason — bad_json · UNSUPPORTED_SCHEMA_VERSION ·
-      TOPIC_PAYLOAD_IDENTITY_MISMATCH · UNKNOWN_SLOT · GATEWAY_NOT_PROVISIONED.
-      <span class="fa" dir="rtl">در هر مرحله، پیامِ سالم به‌همراه دلیلش به صندوق مرده می‌رود — هیچ‌چیز بی‌صدا گم نمی‌شود.</span>
+      <span data-i18n="s9-poison">Poison at any step dead-letters WITH a reason — bad_json · UNSUPPORTED_SCHEMA_VERSION · TOPIC_PAYLOAD_IDENTITY_MISMATCH · UNKNOWN_SLOT · GATEWAY_NOT_PROVISIONED.</span>
     </p>
   </section>
 
-  <!-- ══════════ 10 · ALERT ENGINE LIVE (v0.4) ══════════ -->
+  <!-- ══════════ 10 · ALERT ENGINE ══════════ -->
   <section class="card wide" aria-labelledby="al-h">
-    <h2 id="al-h">10 · Alert engine / موتور هشدار <span class="badge staff">v0.4</span></h2>
-    <p class="sub">The safety brain: threshold cache → breach state machine → 3-tier escalation. Live rows from alert_instances + Redis state keys.</p>
-    <p class="sub fa" dir="rtl">مغز ایمنی: کش آستانه → ماشین حالت نقض → تشدید سه‌سطحی. ردیف‌های زنده از alert_instances و کلیدهای Redis.</p>
-    <button id="btn-alerts" class="btn btn-primary" data-slot="A" disabled>Fetch alerts</button>
-    <button id="btn-state" class="btn btn-secondary" data-slot="A" disabled>State machines</button>
+    <h2 id="al-h">10 · <span data-i18n="s10-title">Alert engine</span> <span class="badge staff">v0.4</span></h2>
+    <p data-i18n="s10-desc">The safety brain: threshold cache → breach state machine → 3-tier escalation. Fires exactly once at 900 s of sustained breach.</p>
+    <button id="btn-alerts" class="btn btn-primary" data-slot="A" disabled><span data-i18n="s10-fetch-btn">Fetch alerts</span></button>
+    <button id="btn-state" class="btn btn-secondary" data-slot="A" disabled><span data-i18n="s10-state-btn">State machines</span></button>
     <div id="alerts-out" class="mono-out" hidden></div>
   </section>
 
+  <!-- ══════════ 11 · ALERT QUALITY ══════════ -->
   <section class="card wide" aria-labelledby="quality-h">
-    <h2 id="quality-h">11 · Alert quality dashboard / کیفیت هشدار <span class="badge staff">v0.4</span></h2>
-    <p class="sub">MET-ALERT-QUALITY counters from the live backend (quality.py): MTTR by tier, acked vs never-acked resolution, alerts per flock.</p>
-    <p class="sub fa" dir="rtl">شمارنده‌های کیفیت هشدار از بک‌اند زنده (quality.py): MTTR به تفکیک سطح، تأثیر تأیید دستی، هشدار به ازای هر دورهٔ پرورش.</p>
-    <button id="btn-quality-live" class="btn btn-primary" data-slot="A" disabled>Refresh quality metrics</button>
+    <h2 id="quality-h">11 · <span data-i18n="s11-title">Alert quality dashboard</span> <span class="badge staff">v0.4</span></h2>
+    <p data-i18n="s11-desc">MET-ALERT-QUALITY counters from the live backend (quality.py): MTTR by tier, acked vs never-acked resolution, alerts per flock.</p>
+    <button id="btn-quality-live" class="btn btn-primary" data-slot="A" disabled><span data-i18n="s11-refresh-btn">Refresh quality metrics</span></button>
     <div id="quality-live-out" class="mono-out" hidden></div>
   </section>
 
-  <!-- ══════════ 12 · ALERT FLOW (static walkthrough, v0.4) ══════════ -->
+  <!-- ══════════ 12 · ALERT FLOW ══════════ -->
   <section class="card wide" aria-labelledby="alflow-h">
-    <h2 id="alflow-h">12 · How alerts fire / موتور هشدار <span class="badge staff">v0.4</span></h2>
-    <p class="sub">Every guarantee is enforced by a Redis state machine with exactly-once semantics, pinned by tests.</p>
-    <p class="sub fa" dir="rtl">هر تضمین زیر با یک ماشین حالت در Redis اجرا می‌شود و دقیقاً یک‌بار فعال می‌شود.</p>
+    <h2 id="alflow-h">12 · <span data-i18n="s12-title">How alerts fire</span> <span class="badge staff">v0.4</span></h2>
+    <p data-i18n="s12-desc">Every guarantee is enforced by a Redis state machine with exactly-once semantics, pinned by tests.</p>
 
     <div class="flow" role="list">
-      <div class="fstep" role="listitem"><b>Reading commits</b><br>telemetry row saved<br><span class="hint">evaluation runs after commit, before XACK</span></div>
+      <div class="fstep" role="listitem"><b><span data-i18n="s12-reading">Reading commits</span></b><br><span data-i18n="s12-reading-sub">telemetry row saved</span><br><span class="hint"><span data-i18n="s12-reading-hint">evaluation runs after commit, before XACK</span></span></div>
       <div class="arrow">→</div>
-      <div class="fstep" role="listitem"><b>Threshold hash</b><br>per saloon/day cache<br><span class="hint">midnight cron · flock-change re-cache</span></div>
+      <div class="fstep" role="listitem"><b><span data-i18n="s12-threshold">Threshold hash</span></b><br><span data-i18n="s12-threshold-sub">per saloon/day cache</span><br><span class="hint"><span data-i18n="s12-threshold-hint">midnight cron · flock-change re-cache</span></span></div>
       <div class="arrow">→</div>
-      <div class="fstep" role="listitem"><b>Gates first</b><br>velocity → mute → capability<br><span class="hint">velocity bypasses everything</span></div>
+      <div class="fstep" role="listitem"><b><span data-i18n="s12-gates">Gates first</span></b><br><span data-i18n="s12-gates-sub">velocity → mute → capability</span><br><span class="hint"><span data-i18n="s12-gates-hint">velocity bypasses everything</span></span></div>
       <div class="arrow">→</div>
-      <div class="fstep" role="listitem"><b>Breach key</b><br>JSON state + TTL refresh<br><span class="hint">Tier 1 fires exactly once at 900 s</span></div>
+      <div class="fstep" role="listitem"><b><span data-i18n="s12-breach">Breach key</span></b><br><span data-i18n="s12-breach-sub">JSON state + TTL refresh</span><br><span class="hint"><span data-i18n="s12-breach-hint">Tier 1 fires exactly once at 900 s</span></span></div>
       <div class="arrow">→</div>
-      <div class="fstep" role="listitem"><b>Escalation sweep</b><br>every 2 min<br><span class="hint">Tier 2 @ 15 min · Tier 3 @ 30 · never demotes</span></div>
+      <div class="fstep" role="listitem"><b><span data-i18n="s12-escalation">Escalation sweep</span></b><br><span data-i18n="s12-escalation-sub">every 2 min</span><br><span class="hint"><span data-i18n="s12-escalation-hint">Tier 2 @ 15 min · Tier 3 @ 30 · never demotes</span></span></div>
       <div class="arrow">→</div>
-      <div class="fstep" role="listitem"><b>Resolution</b><br>hysteresis +0.5<br><span class="hint">breach key gone ⇒ RESOLVED</span></div>
+      <div class="fstep" role="listitem"><b><span data-i18n="s12-resolution">Resolution</span></b><br><span data-i18n="s12-resolution-sub">hysteresis +0.5</span><br><span class="hint"><span data-i18n="s12-resolution-hint">breach key gone ⇒ RESOLVED</span></span></div>
     </div>
 
     <p class="hint" style="margin-top: var(--space-3);">
-      Sidecars: LOS watchdog (60 s sweep, 300 s grace, restart suppression 10 min) · replay sweep (REPLAY_ANALYSIS rows,
-      never pushed) · farm correlation (≥ 0.7 slots LOS in 3 min ⇒ one page). Ack writes row + pause key in one atomic
-      block; pause freezes the escalation timer.
-      <span class="fa" dir="rtl">هشدار دقیقاً یک‌بار؛ تشدید هرگز به عقب برنمی‌گردد؛ طوفانِ بازپخش هرگز پیامی نمی‌فرستد.</span>
+      <span data-i18n="s12-sidecars">Sidecars: LOS watchdog (60 s sweep, 300 s grace, restart suppression 10 min) · replay sweep (REPLAY_ANALYSIS rows, never pushed) · farm correlation (≥ 0.7 slots LOS in 3 min ⇒ one page). Ack writes row + pause key in one atomic block; pause freezes the escalation timer.</span>
     </p>
   </section>
 
-  <!-- ══════════ 7 · EVENT LOG ══════════ -->
+  <!-- ══════════ EVENT LOG ══════════ -->
   <section class="card wide" aria-labelledby="log-h">
-    <h2 id="log-h">Event log / گزارش رویدادها</h2>
+    <h2 id="log-h"><span data-i18n="log-title">Event log</span></h2>
     <div id="event-log" class="event-log" role="log" aria-live="polite"></div>
   </section>
 </main>
 
 <footer class="foot">
-  <span>v0.4 tag · branch demo/v0.4-showcase · contract v1.4.5</span>
-  <span class="fa" dir="rtl">دموی مستند — بدون وابستگی جاوااسکریپتی</span>
+  <span data-i18n="footer-contract">v0.4 tag · branch demo/v0.4-showcase · contract v1.4.5</span>
+  <span data-i18n="footer-note">Documented demo — zero JavaScript dependencies</span>
 </footer>
 
 <script src="js/app.js"></script>
