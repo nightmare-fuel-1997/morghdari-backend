@@ -44,6 +44,7 @@ if settings.DEBUG or os.environ.get("MORGHDARI_DEMO_UI") == "1":
     # the repo-root demo-ui folder is TWO parents up, not one.
     _DEMO_ROOT = str(settings.BASE_DIR.parent.parent / "demo-ui")
 
+    from apps.alerts import demo_views as _alert_demo_views
     from apps.telemetry import demo_views
 
     urlpatterns += [
@@ -53,4 +54,8 @@ if settings.DEBUG or os.environ.get("MORGHDARI_DEMO_UI") == "1":
         path("demo/api/pipeline/", demo_views.pipeline_status, name="demo-pipeline"),
         path("demo/api/dlq/", demo_views.dlq_tail, name="demo-dlq"),
         path("demo/api/simulate/", demo_views.simulate_reading, name="demo-simulate"),
+        # v0.4 alert-engine introspection (JWT-required; read-only)
+        path("demo/api/alerts/quality/", _alert_demo_views.alert_quality, name="demo-alert-quality"),
+        path("demo/api/alerts/overview/", _alert_demo_views.alert_overview, name="demo-alert-overview"),
+        path("demo/api/alerts/state-machines/", _alert_demo_views.alert_state_machines, name="demo-alert-state"),
     ]

@@ -159,7 +159,6 @@ async function doLogin(slot, event) {
   };
   renderIdentity(slot);
   refreshButtons();
-  if (slot === "A") refreshPipeline();
 }
 
 async function doubleRefresh() {
@@ -430,50 +429,97 @@ async function fetchTelemetry() {
   }
 }
 
-/* ── v0.3 live pipeline panel ────────────────────────────────────────────── */
+/* ── v0.4 alert engine ─────────────────────────────────────────────────── */
 
-let plTimer = null;
-
-async function refreshPipeline() {
-  const result = await api("GET", "/demo/api/pipeline/");
-  if (!result.ok) return;
-  const s = result.data.streams;
-  $("pl-rt").textContent = s.realtime;
-  $("pl-hist").textContent = s.historical;
-  $("pl-dlq").textContent = s.dead_letter;
-  $("pl-pend").textContent =
-    (result.data.groups.realtime?.pending || 0) +
-    (result.data.groups.historical?.pending || 0);
-
-  const dlq = await api("GET", "/demo/api/dlq/?count=5");
-  const table = $("pl-dlq-table");
-  const rows = dlq.ok ? dlq.data.entries : [];
-  table.hidden = rows.length === 0;
-  table.querySelector("tbody").innerHTML = rows
-    .map((e) => {
-      const tail = e.topic.length > 42 ? "…" + e.topic.slice(-42) : e.topic;
-      return `<tr><td><span class="pill-off">${esc(e.reason)}</span></td>` +
-             `<td><code>${esc(tail)}</code></td>` +
-             `<td><code>${esc(e.payload_preview)}</code></td></tr>`;
-    })
-    .join("");
-}
-
-async function pipelinePublish(buffered) {
-  const result = await api("POST", "/demo/api/simulate/", { body: { buffered } });
-  const note = $("pl-note");
-  note.textContent = result.ok
-    ? `${result.data.outcome.toUpperCase()} · lane=${result.data.lane} · device_ts=${result.data.device_ts} — ${result.data.note}`
-    : `HTTP ${result.status}: ${JSON.stringify(result.data)}`;
-  await Promise.allSettled([refreshPipeline(), fetchTelemetry()]);
-}
-
-function toggleAutoRefresh(enabled) {
-  if (plTimer) { clearInterval(plTimer); plTimer = null; }
-  if (enabled && SLOTS.A) {
-    plTimer = setInterval(refreshPipeline, 2000);
-    refreshPipeline();
+/* demo endpoints live at site root (/demo/api/...), NOT under /api/v1 —
+   fetchJSON bypasses the API prefix but keeps the same log envelope. */
+async function fetchJSON(path, token) {
+  const started = performance.now();
+  let status = 0;
+  let data = null;
+  try {
+    const response = await fetch(path, { headers: { Authorization: `Bearer ${token}` } });
+    status = response.status;
+    data = await response.json().catch(() => null);
+    return { status, ok: response.ok, data };
+  } catch (error) {
+    return { status: 0, ok: false, data: { error: String(error) } };
+  } finally {
+    logEvent("GET", path, status, Math.round(performance.now() - started));
   }
+}
+
+async function fetchAlerts() {
+  const session = SLOTS.A;
+  if (!session) return;
+  const result = await fetchJSON("/demo/api/alerts/overview/?limit=15", session.access);
+  if (!result.ok) {
+    show("alerts-out", `HTTP ${result.status} — ${JSON.stringify(result.data)}`);
+    return;
+  }
+  const alerts = result.data.alerts || [];
+  const mutes = result.data.maintenance_mutes || [];
+  const lines = [];
+  lines.push(`recent alerts (${alerts.length}):`);
+  for (const a of alerts) {
+    lines.push(
+      `  [${a.current_status}] ${a.metric_type} saloon=${a.saloon_id} ` +
+      `tier=${a.highest_tier_reached} value=${a.current_value ?? "—"} ` +
+      `@ ${a.triggered_at}${a.resolved_at ? ` → resolved ${a.resolved_at}` : ""}`
+    );
+  }
+  if (alerts.length === 0) lines.push("  (none — no breaches recorded yet)");
+  lines.push("");
+  lines.push(`maintenance mutes (${mutes.length}):`);
+  for (const m of mutes) {
+    lines.push(`  saloon=${m.saloon_id} ${m.starts_at} → ${m.ends_at} · ${m.reason}`);
+  }
+  if (mutes.length === 0) lines.push("  (none)");
+  show("alerts-out", lines.join("\n"));
+}
+
+async function fetchStateMachines() {
+  const session = SLOTS.A;
+  if (!session) return;
+  const result = await fetchJSON("/demo/api/alerts/state-machines/", session.access);
+  if (!result.ok) {
+    show("alerts-out", `HTTP ${result.status} — ${JSON.stringify(result.data)}`);
+    return;
+  }
+  const lines = [];
+  for (const [family, info] of Object.entries(result.data)) {
+    lines.push(`${family}: ${info.count} key(s)`);
+    for (const k of info.keys.slice(0, 5)) {
+      lines.push(`  ${k.key} = ${k.value}${k.ttl >= 0 ? ` (ttl ${k.ttl}s)` : ""}`);
+    }
+  }
+  show("alerts-out", lines.join("\n"));
+}
+
+async function fetchQualityLive() {
+  const session = SLOTS.A;
+  if (!session) return;
+  const result = await fetchJSON("/demo/api/alerts/quality/", session.access);
+  if (!result.ok) {
+    show("quality-live-out", `HTTP ${result.status} — ${JSON.stringify(result.data)}`);
+    return;
+  }
+  const lines = [];
+  lines.push("MTTR seconds by tier:");
+  for (const [tier, sec] of Object.entries(result.data.mttr_seconds_by_tier || {})) {
+    lines.push(`  tier ${tier}: ${sec === null ? "—" : `${sec}s (~${Math.round(sec / 60)}min)`}`);
+  }
+  lines.push("");
+  lines.push("ack → resolve seconds:");
+  for (const [tier, sec] of Object.entries(result.data.ack_to_resolve_seconds || {})) {
+    lines.push(`  tier ${tier}: ${sec === null ? "—" : `${sec}s`}`);
+  }
+  lines.push("");
+  lines.push("alerts per flock (open + closed):");
+  for (const row of result.data.alerts_per_flock || []) {
+    lines.push(`  ${JSON.stringify(row)}`);
+  }
+  show("quality-live-out", lines.join("\n"));
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -490,10 +536,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("btn-sup-blank").addEventListener("click", supportBlank);
   $("btn-sup-open").addEventListener("click", supportOpen);
   $("btn-tx").addEventListener("click", fetchTelemetry);
-  $("btn-pl-live").addEventListener("click", () => pipelinePublish(false));
-  $("btn-pl-buffered").addEventListener("click", () => pipelinePublish(true));
-  $("btn-pl-refresh").addEventListener("click", refreshPipeline);
-  $("pl-auto").addEventListener("change", (e) => toggleAutoRefresh(e.target.checked));
+  $("btn-alerts").addEventListener("click", fetchAlerts);
+  $("btn-state").addEventListener("click", fetchStateMachines);
+  $("btn-quality-live").addEventListener("click", fetchQualityLive);
 
   // connection chip: anonymous ping against a protected route (expect 401)
   const probe = await api("GET", "/org/members/");

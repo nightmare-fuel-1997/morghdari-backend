@@ -219,23 +219,3 @@ form { margin-bottom: var(--space-2); }
   align-self: center; color: var(--color-accent);
   font-family: var(--font-mono); font-size: 1.1rem; padding: 0 var(--space-1);
 }
-
-
-/* ── live pipeline panel ───────────────────────────────────────────────── */
-
-.pl-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
-.pl-auto { display: flex; align-items: center; gap: var(--space-2); margin: 0; font-size: .85rem; }
-.pl-auto input { width: 20px; min-height: 20px; }
-
-.pl-grid {
-  display: grid; gap: var(--space-3);
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  margin: var(--space-4) 0;
-}
-.pl-box {
-  background: var(--color-muted); border: 1px solid var(--color-border);
-  border-radius: var(--radius); padding: var(--space-3);
-  display: flex; flex-direction: column; align-items: center; gap: 2px;
-}
-.pl-num { font-family: var(--font-mono); font-size: 1.6rem; color: var(--color-accent); }
-.pl-lbl { font-size: .78rem; color: var(--color-foreground-dim); text-align: center; }

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Morghdari v0.2 Demo Console | کنسول نمایش نسخهٔ ۰٫۲</title>
+<title>Morghdari v0.4 Demo Console | کنسول نمایش نسخهٔ ۰٫۴</title>
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -13,8 +13,8 @@
   <div class="brand">
     <svg viewBox="0 0 24 24" class="icon" aria-hidden="true"><path d="M12 2l8 4v6c0 5-3.4 8.6-8 10-4.6-1.4-8-5-8-10V6l8-4z"/></svg>
     <div>
-      <h1>Morghdari · v0.2 Demo Console</h1>
-      <p class="fa" dir="rtl">کنسول نمایش قابلیت‌های نسخهٔ ۰٫۲ — احراز هویت و چند-اجاره‌ای</p>
+      <h1>Morghdari · v0.4 Demo Console</h1>
+      <p class="fa" dir="rtl">کنسول نمایش قابلیت‌های نسخهٔ ۰٫۴ — موتور هشدار</p>
     </div>
   </div>
   <span id="conn-chip" class="chip chip-muted">backend: checking…</span>
@@ -199,33 +199,50 @@
     </p>
   </section>
 
-  <!-- ══════════ 10 · LIVE PIPELINE (v0.3) ══════════ -->
-  <section class="card wide" aria-labelledby="pl-h">
-    <h2 id="pl-h">10 · Live pipeline / جریان زنده <span class="badge staff">v0.3</span></h2>
-    <p class="sub">Press publish → the REAL pipeline runs (dedup → enrich → lane → drain) and the counters below move. Card 8 fills up too.</p>
-    <p class="sub fa" dir="rtl">با هر کلیک، خط لولهٔ واقعی اجرا می‌شود؛ شمارنده‌ها حرکت می‌کنند و کارتِ ۸ هم پر می‌شود.</p>
+  <!-- ══════════ 10 · ALERT ENGINE LIVE (v0.4) ══════════ -->
+  <section class="card wide" aria-labelledby="al-h">
+    <h2 id="al-h">10 · Alert engine / موتور هشدار <span class="badge staff">v0.4</span></h2>
+    <p class="sub">The safety brain: threshold cache → breach state machine → 3-tier escalation. Live rows from alert_instances + Redis state keys.</p>
+    <p class="sub fa" dir="rtl">مغز ایمنی: کش آستانه → ماشین حالت نقض → تشدید سه‌سطحی. ردیف‌های زنده از alert_instances و کلیدهای Redis.</p>
+    <button id="btn-alerts" class="btn btn-primary" data-slot="A" disabled>Fetch alerts</button>
+    <button id="btn-state" class="btn btn-secondary" data-slot="A" disabled>State machines</button>
+    <div id="alerts-out" class="mono-out" hidden></div>
+  </section>
 
-    <div class="pl-actions">
-      <button id="btn-pl-live" class="btn btn-primary" data-slot="A" disabled>Publish LIVE reading</button>
-      <button id="btn-pl-buffered" class="btn btn-secondary" data-slot="A" disabled>Publish BUFFERED (-1h)</button>
-      <button id="btn-pl-refresh" class="btn btn-secondary" data-slot="A" disabled>Refresh counters</button>
-      <label class="tx-toggle pl-auto"><input id="pl-auto" type="checkbox"> auto-refresh (2s)</label>
+  <section class="card wide" aria-labelledby="quality-h">
+    <h2 id="quality-h">11 · Alert quality dashboard / کیفیت هشدار <span class="badge staff">v0.4</span></h2>
+    <p class="sub">MET-ALERT-QUALITY counters from the live backend (quality.py): MTTR by tier, acked vs never-acked resolution, alerts per flock.</p>
+    <p class="sub fa" dir="rtl">شمارنده‌های کیفیت هشدار از بک‌اند زنده (quality.py): MTTR به تفکیک سطح، تأثیر تأیید دستی، هشدار به ازای هر دورهٔ پرورش.</p>
+    <button id="btn-quality-live" class="btn btn-primary" data-slot="A" disabled>Refresh quality metrics</button>
+    <div id="quality-live-out" class="mono-out" hidden></div>
+  </section>
+
+  <!-- ══════════ 12 · ALERT FLOW (static walkthrough, v0.4) ══════════ -->
+  <section class="card wide" aria-labelledby="alflow-h">
+    <h2 id="alflow-h">12 · How alerts fire / موتور هشدار <span class="badge staff">v0.4</span></h2>
+    <p class="sub">Every guarantee is enforced by a Redis state machine with exactly-once semantics, pinned by tests.</p>
+    <p class="sub fa" dir="rtl">هر تضمین زیر با یک ماشین حالت در Redis اجرا می‌شود و دقیقاً یک‌بار فعال می‌شود.</p>
+
+    <div class="flow" role="list">
+      <div class="fstep" role="listitem"><b>Reading commits</b><br>telemetry row saved<br><span class="hint">evaluation runs after commit, before XACK</span></div>
+      <div class="arrow">→</div>
+      <div class="fstep" role="listitem"><b>Threshold hash</b><br>per saloon/day cache<br><span class="hint">midnight cron · flock-change re-cache</span></div>
+      <div class="arrow">→</div>
+      <div class="fstep" role="listitem"><b>Gates first</b><br>velocity → mute → capability<br><span class="hint">velocity bypasses everything</span></div>
+      <div class="arrow">→</div>
+      <div class="fstep" role="listitem"><b>Breach key</b><br>JSON state + TTL refresh<br><span class="hint">Tier 1 fires exactly once at 900 s</span></div>
+      <div class="arrow">→</div>
+      <div class="fstep" role="listitem"><b>Escalation sweep</b><br>every 2 min<br><span class="hint">Tier 2 @ 15 min · Tier 3 @ 30 · never demotes</span></div>
+      <div class="arrow">→</div>
+      <div class="fstep" role="listitem"><b>Resolution</b><br>hysteresis +0.5<br><span class="hint">breach key gone ⇒ RESOLVED</span></div>
     </div>
 
-    <div class="pl-grid">
-      <div class="pl-box"><span class="pl-num" id="pl-rt">0</span><span class="pl-lbl">realtime stream</span></div>
-      <div class="pl-box"><span class="pl-num" id="pl-hist">0</span><span class="pl-lbl">historical stream</span></div>
-      <div class="pl-box"><span class="pl-num" id="pl-dlq">0</span><span class="pl-lbl">dead letter</span></div>
-      <div class="pl-box"><span class="pl-num" id="pl-pend">0</span><span class="pl-lbl">pending (un-acked)</span></div>
-    </div>
-
-    <h3 class="slot-title">Dead-letter tail / صندوق پیام‌های مردود</h3>
-    <table id="pl-dlq-table" class="members" hidden>
-      <thead><tr><th scope="col">reason</th><th scope="col">topic tail</th><th scope="col">payload preview</th></tr></thead>
-      <tbody></tbody>
-    </table>
-    <p id="pl-note" class="hint">Sign in (Session A) to enable publishing.</p>
-    <p class="hint">If a publish doesn't move the counters on a long-running dev server, restart <code>runserver</code> once — a stale consumer-group cursor from earlier debug sessions can hold delivery back (production Celery workers never hit this).</p>
+    <p class="hint" style="margin-top: var(--space-3);">
+      Sidecars: LOS watchdog (60 s sweep, 300 s grace, restart suppression 10 min) · replay sweep (REPLAY_ANALYSIS rows,
+      never pushed) · farm correlation (≥ 0.7 slots LOS in 3 min ⇒ one page). Ack writes row + pause key in one atomic
+      block; pause freezes the escalation timer.
+      <span class="fa" dir="rtl">هشدار دقیقاً یک‌بار؛ تشدید هرگز به عقب برنمی‌گردد؛ طوفانِ بازپخش هرگز پیامی نمی‌فرستد.</span>
+    </p>
   </section>
 
   <!-- ══════════ 7 · EVENT LOG ══════════ -->
@@ -236,7 +253,7 @@
 </main>
 
 <footer class="foot">
-  <span>v0.2 tag · branch demo/v0.2-showcase · contract v1.4.4</span>
+  <span>v0.4 tag · branch demo/v0.4-showcase · contract v1.4.5</span>
   <span class="fa" dir="rtl">دموی مستند — بدون وابستگی جاوااسکریپتی</span>
 </footer>
 
