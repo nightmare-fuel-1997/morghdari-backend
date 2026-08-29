@@ -14,6 +14,7 @@ Evaluation order (Decision 10 / Walkthrough §4.2):
 
 import logging
 import time
+from datetime import datetime, timezone as dt_timezone
 
 from apps.alerts.services.breach import consume_fire, track_breach
 from apps.alerts.services.redis_keys import thresholds_hash
@@ -93,6 +94,25 @@ def evaluate_entry(
 
     if is_graced(redis_client, saloon_id):
         logger.debug("grace key active for saloon %s — suppressing non-velocity", saloon_id)
+        return None
+
+    # ── ②b GS-MAINT-MUTE (M4-10): planned-maintenance suppression ──────────
+    # Threshold-crossing + duration-filter alerting is silenced while a mute
+    # window is active; readings still log (telemetry committed earlier) and
+    # every suppressed alert feeds the per-window digest. Velocity emergencies
+    # NEVER reach here — lane ① already returned (Decision 10 invariant).
+    from apps.alerts.services.mutes import active_maintenance_mute, note_suppressed
+
+    now_dt = datetime.fromtimestamp(
+        clock_now if clock_now is not None else time.time(), tz=dt_timezone.utc,
+    )
+    mute = active_maintenance_mute(saloon_id, now_dt)
+    if mute is not None:
+        note_suppressed(mute, now_dt)
+        logger.debug(
+            "maintenance mute %s active for saloon %s — threshold alerting suppressed",
+            mute.id, saloon_id,
+        )
         return None
 
     # ── ③ threshold comparison + breach accumulation + duration gate ──────

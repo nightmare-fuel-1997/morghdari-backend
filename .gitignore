@@ -1,5 +1,8 @@
 # Pytest full-suite logs (detached local runs)
 backend/pytest_full.log
+backend/t.log
+backend/m410.log
+backend/*.log
 
 # --- Python ---
 __pycache__/

@@ -46,6 +46,31 @@ def los_fired_key(saloon_id, slot_id) -> str:
     return f"los:fired:{saloon_id}:{slot_id}"
 
 
+def farm_los_events_key(farm_id) -> str:
+    """GS-CORRELATION sliding window: ZSET of slot-LOS episode starts
+    (score = epoch seconds) per farm — feeds the simultaneous-LOS ratio."""
+    return f"farm:los:{farm_id}"
+
+
+def farm_correlation_key(farm_id) -> str:
+    """GS-CORRELATION paging suppression: while present (TTL =
+    correlation_suppress_minutes) individual LOS rows still log but the farm
+    does not re-page."""
+    return f"farm:corr:muted:{farm_id}"
+
+
+def maintenance_mute_count_key(mute_id) -> str:
+    """GS-MAINT-MUTE: how many threshold/duration alerts the window suppressed
+    (storage via config/Redis per Tracker §4i — zero schema change)."""
+    return f"maintenance:mute:count:{mute_id}"
+
+
+def maintenance_mute_digest_key(mute_id) -> str:
+    """GS-MAINT-MUTE: NX guard so the escalation loop writes the digest line
+    for an ended window exactly once."""
+    return f"maintenance:mute:digest:{mute_id}"
+
+
 def replay_pending(gateway_slot: str) -> str:
     return f"replay:pending:{gateway_slot}"
 

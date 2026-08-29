@@ -15,6 +15,7 @@ exactly-once, recovery — is owned by the LOS watchdog below).
 """
 
 import logging
+import time
 
 from django.db import transaction
 from django.utils import timezone as dj_tz
@@ -24,6 +25,8 @@ from apps.alerts.services.breach import breach_value
 from apps.alerts.services.redis_keys import (
     active_alert_key,
     breach_key,
+    farm_correlation_key,
+    farm_los_events_key,
     los_fired_key,
     paused_key,
     sensor_status_key,
@@ -42,6 +45,16 @@ def _config_int(key: str, default: int) -> int:
     raw = SystemConfiguration.objects.filter(key=key).values_list("value", flat=True).first()
     try:
         return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _config_float(key: str, default: float) -> float:
+    from apps.system_config.models import SystemConfiguration
+
+    raw = SystemConfiguration.objects.filter(key=key).values_list("value", flat=True).first()
+    try:
+        return float(raw)
     except (TypeError, ValueError):
         return default
 
@@ -74,6 +87,12 @@ def escalate_all(now_dt=None) -> int:
     """
     client = system_redis()
     now = now_dt or dj_tz.now()
+
+    # GS-MAINT-MUTE: ended mute windows that suppressed alerts get their ONE
+    # digest line here (the escalation loop is the doc-designated writer).
+    from apps.alerts.services.mutes import write_maintenance_mute_digests
+
+    write_maintenance_mute_digests(now)
 
     tier2_sec = max(_config_int("escalation_tier2_min", 15), 1) * 60
     tier3_sec = max(_config_int("escalation_tier3_min", 30), 1) * 60
@@ -192,7 +211,15 @@ def los_watchdog(now_dt=None) -> int:
     for slot in SaloonSensorSlot.objects.filter(is_active=True).iterator():
         by_saloon.setdefault(slot.saloon_id, []).append(slot)
 
+    # GS-CORRELATION pre-pass (M4-10): farms already inside their paging-
+    # suppression window keep logging per-sensor rows but do NOT re-page.
+    new_episodes_by_farm: dict = {}
     fired = 0
+    farm_ids = {slots[0].saloon.farm_id for slots in by_saloon.values()}
+    suppressed_farms = {
+        fid for fid in farm_ids if client.exists(farm_correlation_key(fid))
+    }
+
     for saloon_id, slots in by_saloon.items():
         org_id = str(slots[0].org_id)
         missing = [
@@ -236,11 +263,23 @@ def los_watchdog(now_dt=None) -> int:
                         source="REALTIME",
                     )
                     fired += 1
-                    logger.warning(
-                        "LOS ALERT [installer+hardware_team]: saloon=%s farm=%s "
-                        "slots_without_data=%s (no reading for the status TTL)",
-                        saloon_id, saloon.farm_id, [s.pk for s in missing],
+                    new_episodes_by_farm.setdefault(saloon.farm_id, []).extend(
+                        s.pk for s in winners
                     )
+                    # Per-sensor rows ALWAYS log; the PAGE is what correlation
+                    # suppresses (GS-CORRELATION: "still log, do not re-page").
+                    if saloon.farm_id in suppressed_farms:
+                        logger.info(
+                            "LOS row created (paging SUPPRESSED by farm "
+                            "correlation): saloon=%s farm=%s slots=%s",
+                            saloon_id, saloon.farm_id, [s.pk for s in missing],
+                        )
+                    else:
+                        logger.warning(
+                            "LOS ALERT [installer+hardware_team]: saloon=%s farm=%s "
+                            "slots_without_data=%s (no reading for the status TTL)",
+                            saloon_id, saloon.farm_id, [s.pk for s in missing],
+                        )
                 elif open_alert is not None:
                     # Recovery: every slot reports again → close the episode
                     # and re-arm the NX markers for the next outage.
@@ -253,5 +292,50 @@ def los_watchdog(now_dt=None) -> int:
                         "LOS resolved: saloon=%s — all slots reporting again",
                         saloon_id,
                     )
+
+    # ── GS-CORRELATION (M4-10): farm-wide simultaneous LOS = power outage ──
+    # ≥ farm_power_outage_los_ratio of the farm's ACTIVE slots LOS within
+    # farm_power_outage_window_min ⇒ ONE consolidated page, then
+    # correlation_suppress_minutes of per-farm paging suppression.
+    ratio = _config_float("farm_power_outage_los_ratio", 0.7)
+    window_sec = max(_config_int("farm_power_outage_window_min", 3), 1) * 60
+    suppress_sec = max(_config_int("correlation_suppress_minutes", 10), 1) * 60
+    now_epoch = time.time()
+
+    total_by_farm: dict = {}
+    for slots in by_saloon.values():
+        fid = slots[0].saloon.farm_id
+        total_by_farm[fid] = total_by_farm.get(fid, 0) + len(slots)
+
+    for fid, slot_pks in new_episodes_by_farm.items():
+        zkey = farm_los_events_key(fid)
+        pipe = client.pipeline()
+        for pk in slot_pks:
+            pipe.zadd(zkey, {str(pk): now_epoch})
+        pipe.expire(zkey, window_sec * 2)  # self-cleaning window memory
+        pipe.execute()
+
+    for fid, total in total_by_farm.items():
+        if total <= 0:
+            continue
+        zkey = farm_los_events_key(fid)
+        client.zremrangebyscore(zkey, "-inf", now_epoch - window_sec)
+        recent = client.zcard(zkey)
+        if recent / total < ratio:
+            continue
+        # NX doubles as page-once AND the suppression window: the first sweep
+        # crossing the ratio pages; while the key lives, nobody re-pages.
+        if client.set(farm_correlation_key(fid), "1", nx=True, ex=suppress_sec):
+            logger.warning(
+                "FARM POWER OUTAGE [consolidated page]: farm=%s — %d/%d active "
+                "slots LOS within the window; ONE page for the fleet event, "
+                "per-sensor rows keep logging, re-pages suppressed %dm",
+                fid, recent, total, suppress_sec // 60,
+            )
+        else:
+            logger.info(
+                "farm %s inside correlation suppression — no consolidated re-page",
+                fid,
+            )
 
     return fired
