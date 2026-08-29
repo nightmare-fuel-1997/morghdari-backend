@@ -7,4 +7,4 @@ Full memory notes live in `.opencode/memory/*.md` - read one when its topic beco
 - [Morghdari versions review](morghdari-versions-review.md) — versions/v0.1–v1.0 curriculum drift fixed + triple-verified 2026-08-24; remaining: Tracker §6 decisions + KB resync
 - [Continue until checkpoint](continue-until-checkpoint.md) — user expects autonomous runs to reach milestones without pausing; if interrupted, brief reason + immediate resume
 - [Confirm, don't explain](confirm-dont-explain.md) — no unsolicited system recaps after bulk reads; when a report IS needed, keep it plain-language + decision-oriented (dense exit report → "didn't understand"); end reports with one reply-ready action
-
+- [Language policy](language-policy.md) — NEVER speak/write Chinese in any reply or document (user instruction, 2026-08-29); user communicates in English, reply in English; Persian comments in codebase are not a language signal

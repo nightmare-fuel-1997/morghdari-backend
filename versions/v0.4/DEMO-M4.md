@@ -31,32 +31,32 @@ Acknowledge (mechanism: row + pause key in one atomic block) → escalation time
 freezes; pause expires → Tier 2 SMS to engineer, then Tier 3 to manager+doctor.
 Let the value drop 0.5 units inside the threshold ⇒ RESOLVED, no flapping.
 
-## 3. Hysteresis — no flapping
+## Step 3 — hysteresis — no flapping
 
 Oscillate temp right at the threshold: alerts resolve only after the value drops
 0.5 units inside. Count rows: one alert, one resolution.
 
-## 4. LOS — silence detected
+## Step 4 — LOS — silence detected
 
 Stop the gateway simulator: within ~60 s + 300 s grace the watchdog opens ONE
 saloon-scoped Tier-1 LOS row (routed installer+hardware_team). Restart Redis
 mid-demo → the sweep stays silent for `los_suppress_after_redis_restart_min`=10
 instead of a false fleet-wide page.
 
-## 5. Capability gating — polite unavailability
+## Step 5 — capability gating — polite unavailability
 
 A saloon whose packs lack humidity: THI rules never evaluate; the engine logs
 "THI unavailable — no humidity source", and nothing false ever fires. Add a
 humidity pack → THI arms itself without redeploy. A saloon without a `co` pack:
 `co` rules stay structurally inert.
 
-## 6. Replay sweep — history without panic
+## Step 6 — replay sweep — history without panic
 
 Run a replay storm batch (v0.3 simulator, `--replay-hours 4`): afterwards
 `REPLAY_ANALYSIS` alert rows exist with `batch_id`, none of them pushed
 notifications; re-running the same replay batch is a no-op (idempotent batch_id).
 
-## 7. GS-CORRELATION + maintenance mute
+## Step 7 — GS-CORRELATION + maintenance mute
 
 Kill power to a whole farm: ≥ 0.7 of the farm's ACTIVE slots go LOS within 3 min
 ⇒ ONE consolidated farm-wide page; per-sensor rows still log/alert-instance;
