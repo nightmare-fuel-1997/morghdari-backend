@@ -3,7 +3,108 @@
 All notable changes per version. Format follows the spiral-roadmap discipline:
 one section per version tag, each listing what risk the version killed.
 
-## [v0.3] — 2026-08-26 — ingestion + fake gateway (M3)
+## [v0.4] — 2026-08-29 — alert engine (M4)
+
+The product's safety brain exists end to end: threshold cache, breach state
+machine, 3-tier escalation, LOS watchdog, replay sweep, correlation rule and
+quality metrics — Redis state machines with exactly-once semantics.
+
+### Risk killed
+**Silent alerting failure / false alarms.** Sustained breaches fire exactly-once
+at 900 s; escalation promotes Tier 2/3 with ack-pause freeze; LOS is detected
+within 60 s + 300 s grace; replay storms never page anyone; a missing sensor is
+UNAVAILABLE, never assumed normal.
+
+### Added — M4 alert engine
+- Threshold cache per saloon/day: midnight cron + flock-change signal re-cache;
+  end_date mid-day re-arms; 4 seeded tunables (breach 900s, status TTL 300s,
+  tiers 15/30) — M4-01
+- Breach accumulation with TTL-refresh + hysteresis (+0.5) + midnight grace 300 s;
+  NH3 velocity bypass (config key, max_ts >= 50 -> instant Tier 1, skips
+  grace/mute/suppression entirely) — M4-02/03
+- alert_instances writes: inline evaluation after telemetry commit / before ack;
+  REALTIME row stamps last breach value (M4-04)
+- Escalation sweep + 3-tier timeline: breach key holds JSON state so Tier 1 fires
+  EXACTLY ONCE at 900 s; 2-min sweep promotes Tier 2 @ 15 min / Tier 3 @ 30 min,
+  never demotes, ack-pause freezes the timer; delivery stubs per tier; beat entry
+  `alerts-escalate-alerts` every 120 s — M4-05
+- Ack mechanism: acknowledgement row + pause key written TOGETHER inside one
+  atomic block (Redis SET pre-commit so redis-down rolls back the row); pause TTL
+  from `alert_acknowledgement_pause_minutes` every call (Audit-M5 clause);
+  re-ack adds another audit row and refreshes the window — REST endpoint itself
+  is v0.6/M6-01 (M4-06)
+- LOS watchdog: 60 s beat entry `alerts-los-watchdog`; the 300 s grace IS the
+  `sensor:status:{saloon}:{slot}` TTL written by the consumer on every LIVE
+  reading (buffered/replayed readings never refresh it — a replay storm must not
+  mask a real outage); exactly ONE saloon-scoped Tier-1 row per outage episode
+  via setnx `los:fired:{saloon}:{slot}` + unresolved-row backstop, routed
+  installer+hardware_team; recovery owned by the watchdog (`escalate_all`
+  excludes `metric_type='los'`); DR-T3 suppression: seeded
+  `los_suppress_after_redis_restart_min`=10 (migration 0005 + conftest
+  SEED_MIGRATIONS replay), sweep silent while Redis uptime < window — M4-07
+- Replay sweep: drained backlog => retroactive REPLAY_ANALYSIS rows with
+  `batch_id` = `{slot}:{first_device_ts}` (idempotent re-runs; a
+  `replay:covered:{slot}` high-water mark lets a LATER outage open a fresh
+  window), worst breaching value stamped, NEVER pushed; dispatch per Blueprint
+  §5 — historical drain counts `replay:pending:{gateway_slot}` down once per
+  unique entry, at <= 0 -> `alerts.run_replay_alert_sweep` exactly once via
+  `replay:sweeping` NX, marker deleted in `finally` so the next outage re-arms —
+  M4-08
+- D23 capability-gated rules: THI heat-stress DERIVED in-engine from co-present
+  temp+humidity averages (NRC formula `THI=(1.8T+32)-(0.55-0.0055*RH)(1.8T-26)`
+  — corpus pins the rule but not the constant, recorded for retrospective),
+  evaluated through the normal breach/duration machinery against `thi_max` from
+  the hash; missing input => THI UNAVAILABLE (never derived from one input, no
+  phantom breach state); `co`/`power_*` rules ride the normal `{metric}_max`
+  hash path and evaluate ONLY when an entry carries the key — a saloon without
+  the sensor stays structurally inert (missing metric = unavailable, never
+  assumed normal); canonical `test_capability_profile` deferred to M6 (Tracker
+  §4l-Q5) — M4-09
+- GS-HUMAN-SAFETY REJECTED (owner, 2026-08-23 — Tracker §4i): no flock-independent
+  baselines; alerting stays flock-gated (D10 velocity bypass unchanged). Lands
+  instead: GS-CORRELATION farm-wide LOS correlation — >= 0.7 of a farm's ACTIVE
+  slots LOS within 3 min => ONE consolidated page via `farm:los:{farm_id}`
+  sliding ZSET + NX `farm:corr:muted:{farm_id}` (TTL =
+  `correlation_suppress_minutes`); per-sensor rows still log/alert-instance, zero
+  schema change, suppressed farms log INFO not WARNING; GS-MAINT-MUTE —
+  `maintenance_mutes` windows silence threshold/duration alerting (evaluation
+  step before breach/duration), velocity always bypasses (Decision 10),
+  suppressed-count kept in Redis per mute + the escalation sweep writes ONE
+  structured digest line per ended window (NX-guarded) — M4-10
+- MET-ALERT-QUALITY export (Observability §5.2, Tracker §4l-Q8): implemented as
+  exportable functions so the v0.4 retrospective and (later, M7) Grafana render
+  consume the SAME definitions — `mttr_seconds_by_tier` (mean resolved_at -
+  triggered_at per tier), `ack_to_resolve_seconds` (mean resolution for acked vs
+  never-acked, row truth from the ack table), `alerts_per_flock` (REALTIME
+  alerts + mortality % per flock cycle), `snapshot()` stitching all three;
+  Django 5.0 removed ExtractEpoch — backend-agnostic replacement fetches
+  timestamp pairs and averages durations in Python (exact on Postgres prod and
+  SQLite test fallback) — M4-11
+
+### Verification
+- Full local Postgres mode: **215 passed @ 88.64%** total coverage;
+  `apps.alerts.services` all >= 84%: breach 84%, firing 79%, ack 93%, mutes 97%,
+  sweeps 92%, thresholds 92%, velocity 91%, replay 91%, quality 98%
+- SQLite fallback: 117 passed (98 Postgres-required tests skipped)
+- M4-11 acceptance: 9/9 quality tests green; coverage >= 90% on
+  `apps.alerts.services.quality` (98%)
+
+### Real-world constraints surfaced
+- Django 5.0 removed ExtractEpoch: backend-agnostic replacement fetches
+  timestamp pairs and averages durations in Python (seconds) — exact on both
+  the Postgres prod path and the SQLite test fallback (no native duration
+  extraction on sqlite)
+- `account_activity_logs` NOT-NULL actor FK: system-authored digest rows need an
+  actor decision — friction recorded for the M4-12 retrospective
+- NRC THI formula: corpus pins the rule but not the constant — recorded for the
+  M4-12 retrospective
+
+### Decisions & constraints
+Q1–Q10 approved (backend_docs Tracker §4l, all approved 2026-08-26): contract
+bumped to v1.4.5. GS-HUMAN-SAFETY rejected by owner (Tracker §4i) — alerting
+stays flock-gated (D10 velocity bypass unchanged).
+
+## [v0.3] — 2026-08-26 — ingestion + fake gateway (M3) — 2026-08-26 — ingestion + fake gateway (M3)
 
 The product's data path exists end to end: a simulated gateway publishes
 schema-2.0 payloads, and the owner's own reading comes back through the API —
