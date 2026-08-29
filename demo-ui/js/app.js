@@ -767,8 +767,11 @@ async function fetchTelemetry() {
 /* ── v0.4 alert engine ───────────────────────────────────── */
 
 async function fetchAlerts() {
+  const btn = $("btn-alerts");
   const session = SLOTS.A;
   if (!session) return;
+  btn.classList.add("loading");
+  try {
   const result = await fetchJSON(
     "/demo/api/alerts/overview/?limit=15",
     session.access
@@ -801,11 +804,15 @@ async function fetchAlerts() {
   }
   if (mutes.length === 0) lines.push("  (none)");
   show("alerts-out", lines.join("\n"));
+  } finally { btn.classList.remove("loading"); }
 }
 
 async function fetchStateMachines() {
+  const btn = $("btn-state");
   const session = SLOTS.A;
   if (!session) return;
+  btn.classList.add("loading");
+  try {
   const result = await fetchJSON(
     "/demo/api/alerts/state-machines/",
     session.access
@@ -825,13 +832,16 @@ async function fetchStateMachines() {
         `  ${k.key} = ${k.value}${k.ttl >= 0 ? ` (ttl ${k.ttl}s)` : ""}`
       );
     }
-  }
-  show("alerts-out", lines.join("\n"));
+  }  show("alerts-out", lines.join("\n"));
+  } finally { btn.classList.remove("loading"); }
 }
 
 async function fetchQualityLive() {
+  const btn = $("btn-quality-live");
   const session = SLOTS.A;
   if (!session) return;
+  btn.classList.add("loading");
+  try {
   const result = await fetchJSON(
     "/demo/api/alerts/quality/",
     session.access
@@ -865,6 +875,7 @@ async function fetchQualityLive() {
     lines.push(`  ${JSON.stringify(row)}`);
   }
   show("quality-live-out", lines.join("\n"));
+  } finally { btn.classList.remove("loading"); }
 }
 
 /* ── wiring ───────────────────────────────────────────────── */
