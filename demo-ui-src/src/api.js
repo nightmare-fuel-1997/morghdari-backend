@@ -40,7 +40,10 @@ async function req(method, path, { body, token } = {}) {
 
 async function demoGet(path, token) {
   try {
-    const r = await fetch(path, { headers: { Authorization: `Bearer ${token}` } })
+    // Public endpoints (e.g. the login identity) are called without a token;
+    // a "Bearer undefined" header would 401 before permission checks run.
+    const headers = token ? { Authorization: `Bearer ${token}` } : {}
+    const r = await fetch(path, { headers })
     const data = await r.json().catch(() => null)
     return { status: r.status, ok: r.ok, data }
   } catch (e) {
@@ -56,8 +59,14 @@ export function fetchFarm(token) {
   return demoGet(`${DEMO}/farm/`, token)
 }
 
-export function fetchAlerts(token) {
-  return demoGet(`${DEMO}/alerts/overview/?limit=10`, token)
+// Public barn identity for the login backdrop — no token on purpose; the
+// landing shows WHICH barn you are about to sign into (real counts only).
+export function fetchIdentity() {
+  return demoGet(`${DEMO}/identity/`)
+}
+
+export function fetchAlerts(token, { limit = 10 } = {}) {
+  return demoGet(`${DEMO}/alerts/overview/?limit=${limit}`, token)
 }
 
 export function fetchQuality(token) {
@@ -104,4 +113,26 @@ export function simulate(token, { buffered = false, dangerous = false } = {}) {
   })
     .then((r) => r.json().then((d) => ({ status: r.status, ok: r.ok, data: d })))
     .catch((e) => ({ status: 0, ok: false, data: { error: String(e) } }))
+}
+
+// ── v0.4 demo dashboard: per-saloon pages ──
+export function fetchSaloonSensors(token, saloonId) {
+  return demoGet(`${DEMO}/saloons/${saloonId}/sensors/`, token)
+}
+
+export function fetchSaloonStats(token, saloonId, { window = '1h', slotId = null } = {}) {
+  const q = new URLSearchParams({ window })
+  if (slotId) q.set('slot_id', slotId)
+  return demoGet(`${DEMO}/saloons/${saloonId}/stats/?${q}`, token)
+}
+
+export function fetchSaloonTelemetry(token, saloonId, { since, slotId = null } = {}) {
+  const q = new URLSearchParams()
+  if (since) q.set('since', since)
+  if (slotId) q.set('slot_id', slotId)
+  return req('GET', `/saloons/${saloonId}/telemetry/?${q}`, { token })
+}
+
+export function fetchEmqxStatus(token) {
+  return demoGet(`${DEMO}/emqx-status/`, token)
 }

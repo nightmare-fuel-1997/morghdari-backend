@@ -1,111 +1,41 @@
-# PROGRESS — v0.1 Walking Skeleton + Schema/RLS
+# Progress — v0.5 Provisioning + Zero-Touch
 
-> EN: Live mirror of `versions/v0.1/TASKS.md`. A task is done when its ACCEPTANCE
-> passes (not when code "looks right"). Each line links to the commit that closed it.
->
-> فارسی: فهرست زندهٔ وظایف نسخهٔ v0.1 — هر وظیفه فقط با قبولیِ «پذیرش» بسته می‌شود.
+## Session start — 2026-09-01
 
-## M0 — walking skeleton
+- Inspected git status and confirmed a dirty v0.4 showcase checkout.
+- Created branch `v0.5-m5`, but this initially inherited the `demo/v0.4-showcase` presentation branch rather than the v0.4 release baseline. This is now treated as a branch-baseline error requiring recovery before further implementation.
+- Read the v0.5 task contract, README, tutorial, walkthrough, and relevant Django settings/models/services.
+- Chosen first implementation slice: M5-01 status-transition service, because it is the prerequisite for all remaining v0.5 flows.
 
-- [x] M0-01 git branch `v0.1-m0` created; `backend/` folder exists — `bfb4b93`
-- [x] M0-02 requirements per Blueprint §2 pins (`pip list` shows psycopg 3.x) — `9ad0228`
-- [x] M0-03 project scaffold: manage.py + config/ package; `manage.py check` passes — `8a2b13d`
-- [x] M0-04 settings split w/ DATABASE_URL/REDIS_URL convention; production raises without env vars — `8a2b13d`
-- [x] M0-05 the 12 Blueprint §1 app packages with AppConfig `name="apps.X"` — `076d2b8`
-- [x] M0-06 trivial test + pytest.ini; `pytest -q` green locally (sqlite fallback) — `7ae6875`
-- [x] M0-07 docker-compose.dev.yml up → postgres/redis/emqx healthy — `030a966`
-- [x] M0-08 multi-stage Dockerfile builds (`docker build ./backend`) — `817afdb`
-- [x] M0-09 docker-compose.ci.yml test run GREEN ← **M0 exit gate** — `e089ef7` (3 passed @100% cov in-container)
-- [x] M0-10 .env.example documents every settings-read env var; initdb/ placeholder — `d26fd58`
-- [x] M0-11 commit sweep + demo recorded per WALKTHROUGH — this commit (transcript: `versions/v0.1/DEMO-M0.md`; constraints C-03/C-05/C-06 logged)
+## M5-01 implementation
 
-## M1 — full schema + roles + RLS
+- Added `backend/apps/provisioning/services.py` with row-locking `transition()`, audit creation, post-commit cache invalidation, idempotent same-status handling, and cached status lookup.
+- Added `backend/tests/test_m5_01_transition.py` covering the normal transition, idempotence, and cache population.
+- Existing provisioning migrations already contain the audit table; no migration was needed for this slice.
 
-- [x] M1-01 Compartment 1–2 models verbatim from database.md — `4c7a9be`
-- [x] M1-02 Compartment 3: telemetry hypertable + catalog + aggregates + flock_cycles (+placement_count/day_old_weight_g) — `c7de647` (compression dropped per C-11, fix `3d2c2ec`)
-- [x] M1-03 Compartments 4–7 incl. system_configuration seeds, maintenance_mutes, legal_hold columns — `0c3c864`
-- [x] M1-04 D22/D23 tables: weight samples, feed/water intake, dashboard_configs, biosecurity_events — `338befb`
-- [x] M1-05 initdb scripts: 00_extensions / 01_roles (5 roles) / 02_rls — `3209bc5`
-- [x] M1-06 RLS migration over every tenant table (policy list script-checked vs database.md) — `ca6126d` (parity 35/35)
-- [x] M1-07 seed data: metric catalog (8 keys), system_configuration, tier quotas, geo sample — `4d484d0`
-- [x] M1-08 app connects as morghdari_app only; tenant_context() helper; fail-closed proven — `8b67bdf`
-- [x] M1-09 tests/test_rls.py GREEN in CI ← **M1 exit gate** — `291e5b7` (14 passed @84.6% cov in-container)
-- [x] M1-10 scripts/simulate_gateway.py scaffold (--help works) — `88b1ecf`
-- [x] M1-11 DoD sweep: CHANGELOG + tag v0.1 + demo recorded — this commit (`versions/v0.1/DEMO-M1.md`)
+## Validation
 
-## Version gate
+- File-change hooks unavailable in SDK mode.
+- Targeted test command attempted: `python -m pytest tests/test_m5_01_transition.py -q`.
+- Blocked because the active Python environment has no `pytest` module.
 
-- [x] v0.1 EXIT DEMO performed/recorded → STOP for owner retrospective before v0.2 — `cee9210` tag `v0.1` (transcripts: DEMO-M0.md, DEMO-M1.md; this tick is post-tag tidy)
+## M5-02 initial implementation
 
-## M2 — auth & tenancy (v0.2)
+- Added `backend/apps/provisioning/api.py` with authenticated gateway request submit/list and platform review endpoints.
+- Added configured pending-request cap enforcement.
+- Approval creates a gateway slot, bcrypt-compatible credential, and publish ACL row; rejection records reviewer and reason.
+- Added `backend/apps/provisioning/urls.py` and mounted it under `/api/v1/`.
+- This is an initial slice; extensible platform permission support depends on a `PlatformPermission` model that is not yet present and currently fails closed.
 
-> EN: Live mirror of `versions/v0.2/TASKS.md` as updated by decisions D1–D7
-> (backend_docs Open Items Tracker §4j). The doc-first batch (M2-00a..c) and the
-> contract gate (M2-07a) closed BEFORE any code, per the agreed ritual.
->
-> فارسی: آینهٔ زندهٔ تسک‌های نسخهٔ ۰٫۲؛ کارهای سند-اول و گیتِ قرارداد پیش از هر کدی بسته شدند.
+## Validation
 
-- [x] M2-00a Security §4.1 canon: branch order ①–④, verify-once claims delivery, tx topology — backend_docs `cc234cd`
-- [x] M2-00b claim semantics doc-first: ordered active-org pick, union roles, parked selector, login/refresh key asymmetry — backend_docs `406c006` + `cc234cd`
-- [x] M2-00c offboarding semantics + Tracker §4j record + §6 parked rows — backend_docs `8a3b253`
-- [x] M2-07a **GATE** contract v1.4.3 diff published + owner sign-off — backend_docs `406c006`, cleared 2026-08-25
-- [x] M2-01 SIMPLE_JWT settings block (15m access / 7d refresh; rotation+blacklist OFF forever; no token_blacklist app; test SECRET_KEY ≥32B for HS256) — `b130cad`
-- [x] M2-02 claims serializer: oldest-active-org pick (401 on zero), sorted role union, staff-flag-when-true — `2766648`
-- [x] M2-03 login/refresh endpoints per contract keys + CachedJWTAuthentication registered (stash fallback verified) — `bd75633`
-- [x] M2-04 no-rotation proof: same refresh reused twice ⇒ two valid accesses; blacklist app unreachable; tampered signature 401 — `fa196c4`
-- [x] M2-05 TenantOrgMiddleware: verify-once stash, branch order ①–④, whole-view atomic GUC, fail-closed proofs on real Postgres — `bb38928` ← mid-round checkpoint cleared
-- [x] M2-06 RBAC choke point: require_role/RequireRole + farm/saloon/province narrowing truth table — `90e710a`
-- [x] M2-07 org-member endpoints per contract v1.4.3: owner-exclusive writes, unusable-password invite, reactivation, soft-off deactivate — `cb33f65`
-- [x] M2-08 support-session endpoint: staff-not-superuser, mandatory incident, 900s scoped token via branch ①, SUPPORT_ORG_ENTER audit before return — `b2c7073` (staff org-less login encoded doc-first: docs `ba2384b`)
-- [x] M2-09 offboarding chain proven end to end: refresh re-derives claims → org-less token → HTTP 200 empty reads; GUC dies at real commit — `98f9e27`
-- [x] M2-10 RBAC matrix: 18 parametrized role×endpoint verdicts on the real middleware path — `db74ee8`
-- [x] M2-11 DoD sweep: CHANGELOG [v0.2], DEMO-M2.md, README look-back answers, HANDOFF v0.2 block, final CI gate 91 passed @87.25%, annotated tag `v0.2` — this commit
+- Not rerun after M5-02 edits; the prior environment is still missing `pytest`.
 
-## Version gate (v0.2)
+## Baseline correction required
 
-- [x] v0.2 EXIT DEMO recorded (`versions/v0.2/DEMO-M2.md`); risk killed = app-layer isolation & role enforcement; STOP for owner review before v0.3 — `676014b` + tag `v0.2`
+- The user clarified that v0.5 must continue from the v0.4 release implementation, not the demo showcase branch.
+- Existing v0.5 edits are on disk but must not be blindly carried into a corrected baseline.
 
-## M3 — ingestion + fake gateway (v0.3)
+## Next
 
-> EN: Live mirror of `versions/v0.3/TASKS.md`. Decisions Q1–Q6 recorded in
-> backend_docs Tracker §4k (all approved 2026-08-25). Contract untouched (v1.4.4).
->
-> فارسی: آینهٔ زندهٔ تسک‌های نسخهٔ ۰٫۳؛ شش تصمیمِ برنامه‌ریزی در سند ردیابی ثبت شد.
-
-- [x] M3-01 subscriber package: shared group `$share/telemetry_workers/`, qos=1, persistent session, required unique client id — `6d0c866`
-- [x] M3-02 topic parser + identity cross-check + pack→slot resolver (cache-first 24h, DB fallback, UNKNOWN_SLOT DLQ) + DLQ writer — tests written FIRST — `cf00cc1`
-- [x] M3-03 dedup guard `SET NX EX 90000` (gateway-level key) + schema/device_ts gates — `3ed8f40`
-- [x] M3-04 enrich → XADD per reading to realtime/historical lane by `is_buffered`; flat fields incl `recv_ts`+`trace_id`; raw JSON intact; resolve-ALL-before-publish — `9328a8b`
-- [x] M3-07 stream trimming (~100k approximate) on the write path, both lanes — `9328a8b`
-- [x] M3-05 Celery consumers: XACK strictly after commit, per-org atomic+tenant_context batches, deterministic recv_ts idempotency (crash-redelivery → exactly one row), beat 10s kick — this commit
-- [x] M3-06 historical lane: pacing from system_configuration every cycle (global sleep + sliding per-org window) — `e41de82`
-- [x] M3-08 full simulator: schema-2.0 multi-pack payloads, `--replay-hours` outage storm then live resume — `396b17d`
-- [x] M3-09 telemetry read API per contract (RLS-scoped; generated column via annotate; cross-org = HTTP 200 empty) — `396b17d`
-- [x] M3-10 storm integration: 240-window backlog + 20 live stay lane-separated; dedup holds across FULL replay (60→60); hypertable chunking verified; monotonic recv_ts kills silent UNIQUE collisions — `bb02d69` (+`d7291bc` CI-host-aware redis URLs)
-- [x] M3-11 DoD sweep: CHANGELOG [v0.3], DEMO-M3.md, look-back answers, HANDOFF refresh, C-15 stamped, final CI gate **130 passed @87.37%**, annotated tag `v0.3` — this commit
-
-## Version gate (v0.3)
-
-- [x] v0.3 EXIT DEMO recorded (`versions/v0.3/DEMO-M3.md`, storm included); risk killed = silent telemetry loss / absent ingestion path; STOP for owner review before v0.4 — tag `v0.3`
-
-## M4 — alert engine (v0.4)
-
-> EN: Live mirror of `versions/v0.4/TASKS.md`. Decisions Q1–Q10 recorded in
-> backend_docs Tracker §4l (all approved 2026-08-26). Contract bumped to v1.4.5.
->
-> فارسی: آینهٔ زندهٔ تسک‌های نسخهٔ ۰٫۴؛ ده تصمیم در سند ردیابی ثبت شد.
-
-- [x] M4-00 alerts scaffold: canonical task names registered, redis-key builders, injectable clock — `a921d48`
-- [x] M4-01 threshold cache + midnight cron + re-cache signals + 4 seeded tunables (breach 900s, status TTL 300s, tiers 15/30) — `74d5ac1`
-- [x] test infra: all PG modules standardized on integration redis /11 via conftest INTEGRATION_REDIS_URL — `ade9e18`
-- [x] M4-02 breach accumulation + hysteresis flapping prevention + midnight grace key suppression — `7f570cb` (opened in `02efb51`; closed with velocity-lane completion)
-- [x] M4-03 NH₃ velocity bypass lanes: config key + max_ts duration filter → instant Tier 1, skips grace/mute/suppression entirely — `7f570cb`
-- [x] M4-04 alert_instances writes: inline evaluation after telemetry commit / before ack; REALTIME row stamps last breach value — `383c835`
-- [x] M4-05 escalation sweep + 3-tier timeline: breach key holds JSON state (started_at/alerted/value) so Tier 1 fires EXACTLY ONCE at 900 s of sustained breach; 2-min sweep promotes Tier 2 @ 15 min / Tier 3 @ 30 min, never demotes, ack-pause freezes the timer, breach-key absence ⇒ RESOLVED + active pointer cleared, REPLAY_ANALYSIS rows untouched; delivery stub logs per-tier sinks (push_workers/sms_engineer/manager_and_doctor); beat entry `alerts-escalate-alerts` every 120 s — `218e761`
-- [x] M4-06 ack MECHANISM: acknowledgement row + pause key written TOGETHER inside one atomic block (Redis SET pre-commit so redis-down rolls back the row; REST endpoint itself is v0.6/M6-01); pause TTL from `alert_acknowledgement_pause_minutes` every call (Audit-M5 clause enforced); re-ack adds another audit row and refreshes the window — `0f3dc01`
-- [x] M4-07 LOS watchdog: 60 s beat entry `alerts-los-watchdog`; the 300 s grace IS the `sensor:status:{saloon}:{slot}` TTL now written by the consumer on every LIVE reading (buffered/replayed readings never refresh it — a replay storm must not mask a real outage); exactly ONE saloon-scoped Tier-1 row per outage episode via Blueprint §5 setnx `los:fired:{saloon}:{slot}` + unresolved-row backstop, routed installer+hardware_team; recovery owned by the watchdog (all slots reporting ⇒ resolve + re-arm) — `escalate_all` now excludes `metric_type='los'` (no breach key ⇒ sweep would falsely resolve a live LOS row within 2 min); DR-T3 suppression: seeded `los_suppress_after_redis_restart_min`=10 (migration 0005 + conftest SEED_MIGRATIONS replay), sweep silent while Redis uptime < window — `2728b88`
-- [x] M4-08 replay sweep: drained backlog ⇒ retroactive REPLAY_ANALYSIS rows with `batch_id` = `{slot}:{first_device_ts}` (idempotent re-runs; a `replay:covered:{slot}` high-water mark lets a LATER outage open a fresh window), worst breaching value stamped, NEVER pushed (no delivery, and the escalation sweep already skips REPLAY_ANALYSIS); dispatch per Blueprint §5 — historical drain counts `replay:pending:{gateway_slot}` down once per unique entry (the `>` read and PEL crash-recovery read are separate batch tuples, so the countdown + dispatch span the whole drain call), at ≤ 0 → `alerts.run_replay_alert_sweep` exactly once via `replay:sweeping` NX, marker deleted in `finally` so the next outage re-arms — `2f0c70c`
-- [x] M4-09 D23 capability-gated rules: THI heat-stress DERIVED in-engine from co-present temp+humidity averages (NRC formula `THI=(1.8T+32)−(0.55−0.0055·RH)(1.8T−26)` — corpus pins the rule but not the constant, recorded for M4-12 retrospective), evaluated through the normal breach/duration machinery against `thi_max` from the hash; missing input ⇒ THI UNAVAILABLE (never derived from one input, no phantom breach state); `co`/`power_*` rules ride the normal `{metric}_max` hash path and evaluate ONLY when an entry carries the key — a saloon without the sensor stays structurally inert (missing metric = unavailable, never assumed normal); canonical `test_capability_profile` deferred to M6 (Tracker §4l-Q5) — `301e654`
-- [x] M4-10 GS-CORRELATION + maintenance-mute windows: farm-wide LOS correlation — ≥ `farm_power_outage_los_ratio` (0.7) of a farm's ACTIVE slots LOS within `farm_power_outage_window_min` (3) ⇒ ONE consolidated page via `farm:los:{farm_id}` sliding ZSET + NX `farm:corr:muted:{farm_id}` (TTL = `correlation_suppress_minutes`) — per-sensor rows still log/alert-instance, zero schema change, and suppressed farms log INFO not WARNING; GS-MAINT-MUTE — `maintenance_mutes` windows silence threshold/duration alerting (evaluation step ②b, BEFORE breach/before duration), velocity always bypasses (Decision 10), suppressed-count kept in Redis per mute + the escalation sweep writes ONE structured digest line per ended window (NX-guarded; `account_activity_logs` has a NOT-NULL actor FK — system-authored-row friction recorded for the M4-12 retrospective) — this commit
-- [x] M4-11 MET-ALERT-QUALITY export: `apps/alerts/services/quality.py` — `mttr_seconds_by_tier` (mean resolved_at - triggered_at per tier), `ack_to_resolve_seconds` (acked vs never-acked mean resolution, row truth from the ack table), `alerts_per_flock` (REALTIME alerts + mortality % per flock cycle), `snapshot()` stitching all three for the retrospective (and later M7 Grafana — same definitions); Django 5.0 removed ExtractEpoch, backend-agnostic replacement averages durations in Python (exact on Postgres prod and SQLite CI fallback); 9 acceptance tests — `6b52006`
-- [x] M4-12 DoD sweep: CHANGELOG [v0.4] with MET-ALERT-QUALITY numbers; DEMO-M4.md transcript; docs swept; final CI gate **215 passed @ 88.64%** (Postgres mode; SQLite fallback 117 passed), quality.py 98% — this commit
+Recover from the v0.4 release baseline and then reapply the intended v0.5 changes selectively.

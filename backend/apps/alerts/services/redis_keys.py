@@ -38,6 +38,16 @@ def sensor_status_key(saloon_id, slot_id) -> str:
     return f"sensor:status:{saloon_id}:{slot_id}"
 
 
+def pack_lwt_key(saloon_id, slot_id) -> str:
+    """Last-known pack status mirrored from the farm/{farm}/gateways/{gw}/
+    status MQTT topic: 'online' (retained publish on connect) or 'offline'
+    (the pack's Last Will on unclean death, or its clean-shutdown publish).
+    NO TTL by design — the retained MQTT state is the durable truth, so a
+    dead pack stays visible on the board until its replacement says online.
+    فارسی: آخرین وضعیت شناخته‌شدهٔ پک از تاپیک وضعیت — بدون انقضا، عینِ حالت باقی‌مانده."""
+    return f"sensor:lwt:{saloon_id}:{slot_id}"
+
+
 def los_fired_key(saloon_id, slot_id) -> str:
     """SET NX guard (Blueprint §5 'setnx') so the 60 s LOS sweep raises at most
     ONE alert per outage episode. Deleted by the sweep's recovery path once

@@ -47,3 +47,67 @@ worker you invite from card 4, walk cards 2 → 3 → 5 → 6, then run the
 simulator (`python scripts/simulate_gateway.py --gateway FARM-01-GW-A --org
 <org-uuid> --hardware hw-demo --packs P-A --interval 2` with MQTT_* env) and
 watch card 8 fill up in real time.
+
+## Live dashboard (fake gateways → real pipeline)
+
+The demo branch also ships a **live dashboard** at `http://127.0.0.1:8000/demo/dashboard/`
+that renders REAL charts and numbers from fake-but-realistic gateways and
+sensors. Every payload travels the production path: EMQX → subscriber →
+Redis lanes → Celery → TimescaleDB → RLS-scoped read API.
+
+### One-click launcher
+
+```powershell
+backend\demo_live.bat
+```
+
+This starts the dev stack, migrates, runs the seed, opens subscriber / Celery
+worker / beat / Django windows, and launches the feed simulator — then opens
+the dashboard.
+
+### By hand
+
+```powershell
+# 1. stack + migrations as above
+# 2. seed the demo farm (org, saloons, slots, thresholds, demo pacing)
+backend\.venv\Scripts\python.exe backend\manage.py demo_farm_seed --manifest-out backend\farm_manifest.json
+#    re-runnable: --restore reverts breach pacing to the seeded 900 s
+
+# 3. subscriber + workers (one window each)
+set SUBSCRIBER_CLIENT_ID=demo-sub
+backend\.venv\Scripts\python.exe -m morghdari.subscriber
+backend\.venv\Scripts\celery.exe -A config worker -l info -Q telemetry_realtime,telemetry_historical
+backend\.venv\Scripts\celery.exe -A config beat -l info
+
+# 4. Django (demo routes only under DEBUG or this env)
+set MORGHDARI_DEMO_UI=1
+backend\.venv\Scripts\python.exe backend\manage.py runserver 8000
+
+# 5. the feed — fake gateways + fake devices over the REAL MQTT path
+backend\.venv\Scripts\python.exe scripts\simulate_farm.py --manifest backend\farm_manifest.json --interval 5
+```
+
+If your EMQX requires a dev user, export `MQTT_USERNAME` / `MQTT_PASSWORD`
+before steps 3 and 5 (the feed read them from env too — see `--mqtt-username`).
+The launcher assumes the dev credentials `dev` / `devpass`; create them once
+via the EMQX dashboard API (login returns a token — basic auth is not the
+default in EMQX 5.5+):
+
+```powershell
+$TOKEN = (curl.exe -s -X POST http://127.0.0.1:18083/api/v5/login `
+  -H 'Content-Type: application/json' `
+  -d '{"username":"admin","password":"dev_password"}' | ConvertFrom-Json).token
+curl.exe -X POST http://127.0.0.1:18083/api/v5/authentication/password_based:built_in_database/users `
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' `
+  -d '{"user_id":"dev","password":"devpass"}'
+```
+
+The seed command prints a full topology manifest; `simulate_farm.py --dry-run`
+shows payloads without touching the broker. Windows note: the launcher runs
+Celery with `-P solo` — the default prefork/spawn pool is unstable on Windows
+dev boxes.
+
+Scripted scenario: every few minutes a pack drifts NH₃ past the threshold
+(Tier-1 after the 30 s demo pace) and an instant velocity spike fires via the
+NH₃ `max_ts` lane, then everything recovers — the alert strip on the
+dashboards shows it happen live. `--scenario calm` disables breaches.

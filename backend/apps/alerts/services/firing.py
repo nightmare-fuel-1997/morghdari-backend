@@ -56,15 +56,22 @@ def fire_or_coalesce(
     with transaction.atomic():
         with tenant_context(org_id):
             if existing_json:
-                # Coalesce: refresh the existing open alert's value/tier.
+                # Coalesce: refresh the existing open alert's value/tier. The
+                # pointer can outlive its DB row (row deleted/legal-purged or a
+                # demo reset) — treat that as a fresh fire, not a crash.
                 existing = json.loads(existing_json)
-                alert = AlertInstance.objects.get(id=existing["alert_id"])
-                alert.current_value = value
-                if existing.get("current_tier", 1) > alert.highest_tier_reached:
-                    alert.highest_tier_reached = existing["current_tier"]
-                alert.save(update_fields=["current_value", "highest_tier_reached"])
-                action = "coalesced"
-            else:
+                try:
+                    alert = AlertInstance.objects.get(id=existing["alert_id"])
+                except AlertInstance.DoesNotExist:
+                    existing_json = None
+                    alert = None
+                if alert is not None:
+                    alert.current_value = value
+                    if existing.get("current_tier", 1) > alert.highest_tier_reached:
+                        alert.highest_tier_reached = existing["current_tier"]
+                    alert.save(update_fields=["current_value", "highest_tier_reached"])
+                    action = "coalesced"
+            if existing_json is None or alert is None:
                 alert = AlertInstance.objects.create(
                     org_id=org_id,
                     farm_id=farm_fk_id,

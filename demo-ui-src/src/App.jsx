@@ -1,10 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { T } from './i18n.js'
 import {
-  loadSession, saveSession, login, fetchFarm, fetchAlerts, fetchQuality, fetchStateMachines, simulate,
+  loadSession, saveSession, login, fetchFarm, fetchIdentity, fetchAlerts, fetchQuality, fetchStateMachines, simulate,
   sensorOff, acknowledgeAlert,
 } from './api.js'
 import Sparkline from './Sparkline.jsx'
+import { useHashRoute } from './router.js'
+import SaloonPage from './SaloonPage.jsx'
+import SensorPage from './SensorPage.jsx'
+import EmqxPage from './EmqxPage.jsx'
+import BossBoard from './BossBoard.jsx'
+import AttentionTicker, { groupSaloons } from './AttentionTicker.jsx'
 
 const POLL_MS = 5000
 const WINDOW_MIN = 30
@@ -12,6 +18,14 @@ const WINDOW_MIN = 30
 // NH3 threshold per the seeded lifecycle rules (nh3_max = 25).
 const NH3_MAX = 25
 const TEMP_MAX = 30
+
+// Alert triggered_at arrives as naive-UTC ISO from the API — treat it as UTC
+// (append Z) so the "last hour" cutoff and the shown clock are both correct.
+function parseIso(iso) {
+  if (!iso) return NaN
+  const s = iso.endsWith('Z') || iso.includes('+') ? iso : iso + 'Z'
+  return new Date(s).getTime()
+}
 
 function useInterval(fn, ms) {
   const ref = useRef(fn)
@@ -35,10 +49,11 @@ export default function App() {
   const [history, setHistory] = useState({}) // saloonId -> [{ts, temp, nh3}]
   const [busyBtn, setBusyBtn] = useState(null)
   const [loggingIn, setLoggingIn] = useState(false)
+  const [identity, setIdentity] = useState(null)
   const [toast, setToast] = useState(null)
   const toastTimer = useRef(null)
-  const usernameRef = useRef(null)
   const errorRef = useRef(null)
+  const route = useHashRoute()
 
   const tr = (key) => T[key]?.[lang] ?? key
   const dir = lang === 'fa' ? 'rtl' : 'ltr'
@@ -54,7 +69,7 @@ export default function App() {
     if (!sess) return
     const [farmRes, alertRes, qualityRes, stateRes] = await Promise.all([
       fetchFarm(sess.access),
-      fetchAlerts(sess.access),
+      fetchAlerts(sess.access, { limit: 100 }),
       fetchQuality(sess.access),
       fetchStateMachines(sess.access),
     ])
@@ -103,6 +118,17 @@ export default function App() {
   }, [session?.access])
 
   useInterval(() => refresh(), POLL_MS)
+
+  // Barn identity for the login backdrop — public endpoint, gentle 30s
+  // heartbeat so the etched plaque stays honest while the page sits open.
+  useEffect(() => {
+    if (session) return
+    let alive = true
+    const load = () => fetchIdentity().then((r) => { if (alive && r.ok) setIdentity(r.data) })
+    load()
+    const id = setInterval(load, 30_000)
+    return () => { alive = false; clearInterval(id) }
+  }, [session])
 
   const doLogin = async (e) => {
     e.preventDefault()
@@ -183,6 +209,29 @@ export default function App() {
     [alerts],
   )
 
+  // ── recently-noticed log ──
+  // Saloon/farm names for alert rows, from the same farm payload the strip uses.
+  const saloonNameOf = useMemo(() => {
+    const m = new Map()
+    for (const g of groupSaloons(farm)) {
+      for (const s of g.saloons) m.set(s.id, { saloon: s.name, farm: g.name })
+    }
+    return m
+  }, [farm])
+
+  // Engine-confirmed alerts that fired within the last hour.
+  const noticed = useMemo(() => {
+    const cutoff = Date.now() - 3600_000
+    return (alerts || [])
+      .filter((a) => a.triggered_at && parseIso(a.triggered_at) >= cutoff)
+      .slice(0, 8)
+  }, [alerts])
+
+  const fmtHhmm = (iso) => {
+    const d = new Date(parseIso(iso))
+    return Number.isNaN(d.getTime()) ? '—' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  }
+
   // Live escalation countdown data from /demo/api/farm/ (alert_state block).
   const alertState = farm?.alert_state || {}
   const escalationConfig = farm?.escalation || { tier2_min: 15, tier3_min: 30, ack_pause_min: 10 }
@@ -216,6 +265,16 @@ export default function App() {
               {loggingIn ? tr('busy') : tr('loginBtn')}
             </button>
           </form>
+          {identity && identity.farms > 0 && (
+            <div className="plaque etched" aria-label={tr('mainTitle')}>
+              <span className="plaque-item"><b>{identity.farms}</b>{tr('statFarms')}</span>
+              <span className="plaque-sep" aria-hidden="true">·</span>
+              <span className="plaque-item"><b>{identity.saloons}</b>{tr('statSaloons')}</span>
+              <span className="plaque-sep" aria-hidden="true">·</span>
+              <span className="plaque-item"><b>{identity.sensors_online}</b>{tr('statSensors')}</span>
+              <span className={`live-dot ${identity.sensors_online > 0 ? '' : 'off'}`} aria-hidden="true" />
+            </div>
+          )}
         </section>
         <Promises tr={tr} />
         <Footer tr={tr} />
@@ -224,6 +283,27 @@ export default function App() {
   }
 
   const saloons = farm?.saloons || []
+
+  const chrome = (children) => (
+    <div className="shell wide" dir={dir}>
+      <a className="skip-link" href="#main">{tr('skipToContent')}</a>
+      <Header lang={lang} setLang={setLang} tr={tr} onLogout={signOut} session={session} />
+      <main id="main">{children}</main>
+      <Footer tr={tr} />
+    </div>
+  )
+  if (route.page === 'saloon') {
+    return chrome(<SaloonPage session={session} saloonId={route.saloonId} farm={farm} tr={tr} lang={lang} />)
+  }
+  if (route.page === 'sensor') {
+    return chrome(<SensorPage session={session} saloonId={route.saloonId} slotId={route.slotId} farm={farm} tr={tr} lang={lang} />)
+  }
+  if (route.page === 'emqx') {
+    return chrome(<EmqxPage session={session} tr={tr} lang={lang} />)
+  }
+  if (route.page === 'farms') {
+    return chrome(<BossBoard farm={farm} tr={tr} lang={lang} />)
+  }
 
   return (
     <div className="shell" dir={dir}>
@@ -235,6 +315,7 @@ export default function App() {
 
       {/* ── live strip ── */}
       <main id="main">
+      <AttentionTicker groups={groupSaloons(farm)} tr={tr} link />
       <section className="strip">
         <div className="strip-head">
           <h2>{tr('stripTitle')}</h2>
@@ -252,7 +333,7 @@ export default function App() {
             const anyStale = s.slots.some((sl) => !sl.online)
             const breaching = (latest?.nh3 ?? 0) >= NH3_MAX
             return (
-              <div key={s.id} className={`saloon-card ${breaching ? 'breach' : ''}`}>
+              <a key={s.id} href={`#/saloon/${s.id}`} className={`saloon-card link ${breaching ? 'breach' : ''}`}>
                 <div className="saloon-head">
                   <span className="saloon-name">{tr('saloon')} {s.id}</span>
                   <span className={`status ${allOnline ? 'ok' : anyStale ? 'warn' : 'off'}`}>
@@ -274,11 +355,44 @@ export default function App() {
                     <Sparkline points={nh3Pts} color={breaching ? '#e2574c' : '#f5a94b'} threshold={NH3_MAX} />
                   </div>
                 </div>
-              </div>
+                <span className="saloon-cta">{tr('openSaloon')} →</span>
+              </a>
             )
           })}
           {saloons.length === 0 && <p className="hint">{tr('noData')}</p>}
         </div>
+      </section>
+
+      {/* ── recently noticed: last-hour confirmed alerts ── */}
+      <section className="noticed">
+        <div className="noticed-head">
+          <h2>{tr('noticedTitle')}</h2>
+          <span className="hint">{tr('noticedSub')}</span>
+        </div>
+        {noticed.length === 0 ? (
+          <p className="hint noticed-empty">{tr('noticedEmpty')}</p>
+        ) : (
+          <ul className="noticed-list">
+            {noticed.map((a) => {
+              const where = saloonNameOf.get(a.saloon_id)
+              const tier = (a.current_status || '').match(/ACTIVE_TIER_(\d)/)
+              const chip = tier
+                ? { text: tr('tierActive').replace('{n}', tier[1]), cls: tier[1] === '1' ? 'warn' : 'danger' }
+                : a.current_status === 'RESOLVED'
+                  ? { text: tr('resolved'), cls: 'ok' }
+                  : { text: a.current_status || '—', cls: 'off' }
+              return (
+                <li key={a.id} className="notice-row">
+                  <span className="notice-time mono">{fmtHhmm(a.triggered_at)}</span>
+                  <span className="notice-what">{tr(a.metric_type)} {tr('overLimit')}</span>
+                  {where && <span className="notice-where">{where.saloon} · {where.farm}</span>}
+                  <span className="notice-value mono">{a.current_value != null ? parseFloat(a.current_value) : '—'}</span>
+                  <span className={`notice-chip ${chip.cls}`}>{chip.text}</span>
+                </li>
+              )
+            })}
+          </ul>
+        )}
       </section>
 
       {/* ── alert inbox ── */}
@@ -344,7 +458,7 @@ export default function App() {
 function Header({ lang, setLang, tr, onLogout, session }) {
   return (
     <header className="topbar">
-      <div className="brand">
+      <a className="brand" href="#/">
         <svg viewBox="0 0 24 24" className="brand-icon" role="img" aria-label={tr('brand')}>
           <path d="M12 2l8 4v6c0 5-3.4 8.6-8 10-4.6-1.4-8-5-8-10V6l8-4z" />
         </svg>
@@ -352,7 +466,12 @@ function Header({ lang, setLang, tr, onLogout, session }) {
           <strong>{tr('brand')}</strong>
           <span className="kicker">{tr('heroKicker')}</span>
         </div>
-      </div>
+      </a>
+      <nav className="main-nav" aria-label="Pages">
+        <a href="#/farms" className="nav-link">{tr('navFarms')}</a>
+        <a href="#/overview" className="nav-link">{tr('overviewTitle')}</a>
+        <a href="#/emqx" className="nav-link">{tr('navEmqx')}</a>
+      </nav>
       <div className="top-actions">
         <button className="btn ghost" onClick={() => setLang(lang === 'fa' ? 'en' : 'fa')}>
           {tr('langBtn')}
@@ -427,7 +546,7 @@ function AlertRow({ a, tr, lang, open, escalation, escalationConfig, onAck }) {
       <span className={`pill tier-${tier}`}>{tr(`tier${tier}`)}</span>
       <span className="alert-metric">{a.metric_type === 'nh3' ? tr('nh3') : a.metric_type}</span>
       <span className="alert-val">{a.current_value != null ? `${a.current_value}` : ''}</span>
-      <span className="alert-saloon">{tr('saloon')} {a.saloon_id}</span>
+      <a className="alert-saloon" href={`#/saloon/${a.saloon_id}`}>{tr('saloon')} {a.saloon_id}</a>
       {escLabel && <span className="alert-esc">{escLabel}</span>}
       <span className="alert-time">{open ? timeLabel : tr('resolved')}</span>
       {open && escalation && fuseInfo && (

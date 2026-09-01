@@ -80,6 +80,36 @@ def _config_int(key: str, default: int) -> int:
         return default
 
 
+def _config_snapshot() -> dict:
+    """All drain-cycle knobs in ONE query instead of one query per key per org
+    batch; D21's per-cycle freshness is preserved (still read every cycle)."""
+    return dict(
+        SystemConfiguration.objects.filter(
+            key__in=("sensor_status_ttl_sec", "replay_rate_limit_per_min", "replay_rate_limit_per_org_per_min")
+        ).values_list("key", "value")
+    )
+
+
+def _cfg_getter(snapshot: dict):
+    def getter(key: str, default: int) -> int:
+        try:
+            return int(snapshot.get(key, default))
+        except (TypeError, ValueError):
+            return default
+
+    return getter
+
+
+def _batched_saloon_map(slot_ids: list) -> dict:
+    """slot pk → saloon id in ONE query (replaces the per-entry GET N+1).
+    Unknown slots stay absent → DLQ, same semantics as resolve_saloon."""
+    from apps.devices.models import SaloonSensorSlot
+
+    return dict(
+        SaloonSensorSlot.objects.filter(pk__in=set(slot_ids)).values_list("pk", "saloon_id")
+    )
+
+
 def _to_model_kwargs(entry_fields: dict) -> dict:
     """Stream entry â†’ SaloonTelemetry kwargs. Deterministic timestamps make
     redeliveries conflict-free under the hypertable's UNIQUE constraint."""
@@ -147,7 +177,7 @@ def resolve_saloon(fields: dict):
     return slot.saloon_id
 
 
-def touch_sensor_status(client, pairs) -> None:
+def touch_sensor_status(client, pairs, config_getter=_config_int) -> None:
     """M4-07 pipeline step 5 (Walkthrough Part 3): every LIVE reading refreshes
     sensor:status:{saloon}:{slot} with TTL = sensor_status_ttl_sec (seeded
     300). That TTL IS the LOS watchdog's 300 s grace. Buffered/replayed
@@ -157,9 +187,11 @@ def touch_sensor_status(client, pairs) -> None:
     """
     from apps.alerts.services.redis_keys import sensor_status_key
 
-    ttl = _config_int("sensor_status_ttl_sec", 300)
+    pipe = client.pipeline()  # one round trip for the whole live batch
+    ttl = config_getter("sensor_status_ttl_sec", 300)
     for saloon_id, slot_id in pairs:
-        client.set(sensor_status_key(saloon_id, slot_id), "ONLINE", ex=ttl)
+        pipe.set(sensor_status_key(saloon_id, slot_id), "ONLINE", ex=ttl)
+    pipe.execute()
 
 
 def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None) -> int:
@@ -185,18 +217,43 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None) -> in
     # same entry legitimately appears in both — countdown once per entry.
     buffered_by_gw: dict[str, int] = {}  # replay backlog countdown
     seen_ids: set[str] = set()
+    cfg_getter = pacer._config if pacer is not None else _cfg_getter(_config_snapshot())
     for _stream, entries in batches:
         if not entries:
             continue
         by_org: dict[str, list[dict]] = {}
         ids: list[str] = []
         raw_entries: list[tuple[str, dict]] = []  # (org_id_str, fields)
+        # ONE batched slot→saloon lookup per batch (was one GET per entry).
+        saloon_map = _batched_saloon_map([f["slot_id"] for _, f in entries])
+        # Batch the per-entry alert-evaluation reads: thresholds via ONE
+        # pipelined hgetall round trip, active mutes via ONE query.
+        from apps.alerts.services.redis_keys import thresholds_hash as _thr_key
+
+        saloon_ids = {s for s in saloon_map.values() if s}
+        pipe = client.pipeline()
+        for sid in saloon_ids:
+            pipe.hgetall(_thr_key(sid))
+        thresholds_by_saloon = dict(zip(saloon_ids, pipe.execute()))
+        from apps.alerts.models import MaintenanceMute
+        from django.utils import timezone as _dj_tz
+
+        mute_lookup: dict = {}
+        if saloon_ids:
+            for m in (
+                MaintenanceMute.objects.filter(
+                    saloon_id__in=saloon_ids,
+                    starts_at__lte=_dj_tz.now(),
+                    ends_at__gt=_dj_tz.now(),
+                ).order_by("-starts_at")
+            ):
+                mute_lookup.setdefault(m.saloon_id, m)  # first = latest start
         for entry_id, fields in entries:
             first_sight = entry_id not in seen_ids
             seen_ids.add(entry_id)
             ids.append(entry_id)
             kwargs = _to_model_kwargs(fields)
-            saloon_id = resolve_saloon(fields)
+            saloon_id = saloon_map.get(fields["slot_id"])
             if saloon_id is None:
                 # Stale slot (deleted/reset): poison → DLQ with reason,
                 # then ack — never crash the worker over it (Q1 family).
@@ -248,6 +305,9 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None) -> in
                                 slot_id=raw["fields"].get("slot_id", ""),
                                 metrics=metrics_data,
                                 device_ts=raw["fields"].get("device_ts", ""),
+                                config_getter=cfg_getter,
+                                mute_lookup=mute_lookup,
+                                thresholds=thresholds_by_saloon.get(raw["saloon_id"]),
                             )
                         except Exception:
                             logger.exception(
@@ -265,7 +325,7 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None) -> in
                 if entry_org == org and raw["fields"].get("is_buffered") != "True"
             ]
             if live:
-                touch_sensor_status(client, live)
+                touch_sensor_status(client, live, config_getter=cfg_getter)
 
             if pacer is not None:
                 time.sleep(pacer.sleep_seconds(org))
@@ -274,14 +334,6 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None) -> in
         # THE rule: acknowledge only after the DB commit above succeeded.
         # Same entry may appear in BOTH the '>' read and the PEL read within
         # one cycle — ack counts ENTRIES, so the return value stays honest.
-        if ids:
-            client.xack(stream, CONSUMER_GROUP, *ids)
-            acked.update(ids)
-            if pacer is not None:
-                time.sleep(pacer.sleep_seconds(org))
-                pacer.wait_for_org(org)
-
-        # THE rule: acknowledge only after the DB commit above succeeded.
         if ids:
             client.xack(stream, CONSUMER_GROUP, *ids)
             acked.update(ids)
@@ -315,7 +367,7 @@ def process_realtime_payload(count: int = BATCH_SIZE_DEFAULT) -> int:
 @shared_task(name="telemetry.process_historical_payload")
 def process_historical_payload(count: int = BATCH_SIZE_DEFAULT) -> int:
     """Polite-under-storms lane: config-capped pacing, no redeploy needed."""
-    pacer = HistoricalPacer(lambda key, default: _config_int(key, default))
+    pacer = HistoricalPacer(_cfg_getter(_config_snapshot()))  # 1 query/cycle
     return drain_stream(STREAM_HISTORICAL, count, pacer=pacer)
 
 

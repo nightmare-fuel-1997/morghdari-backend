@@ -3,6 +3,31 @@
 All notable changes per version. Format follows the spiral-roadmap discipline:
 one section per version tag, each listing what risk the version killed.
 
+## [demo live dashboard] — 2026-08-30 — fake gateways, real charts (demo branch)
+
+Fake-but-realistic gateways and sensor packs publish schema-2.0 payloads over
+the REAL MQTT path into the REAL pipeline, and a new `/demo/dashboard/` page
+renders live SVG charts, per-slot liveness LEDs, an alert strip and pipeline
+stats — so a showroom proves the whole stack with moving numbers instead of
+static screenshots.
+
+### Added
+- `manage.py demo_farm_seed`: idempotent demo topology (org, owner, 3 saloons ×
+  2 packs with slot mappings), global default lifecycle template + day-band
+  threshold rules, open flock per saloon, threshold hashes recached; demo
+  pacing `breach_duration_sec=30` (visible Tier-1) with `--restore` back to 900
+- `scripts/simulate_farm.py`: one MQTT client per fake device; realistic
+  diurnal temp sine + NH3 drift + humidity; scripted sustained NH3 breaches and
+  instant velocity spikes (`max_ts >= 50`), then recovery; `--dry-run`,
+  `--scenario calm`
+- `GET /demo/api/farm/` (JWT): caller-org topology + per-slot liveness from the
+  SAME `sensor:status:*` keys the LOS watchdog uses + latest real reading
+- `/demo/dashboard/` page: KPI strip, per-saloon temp/NH3 SVG charts with
+  threshold lines, pack tiles with LED liveness, live alert strip, pipeline
+  stats; EN/FA toggle; 5 s polling paused on hidden tabs
+- `backend/demo_live.bat`: one-click launcher (stack → migrate → seed →
+  subscriber/worker/beat/Django → feed)
+
 ## [v0.4] — 2026-08-29 — alert engine (M4)
 
 The product's safety brain exists end to end: threshold cache, breach state

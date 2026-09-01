@@ -22,24 +22,20 @@ from apps.alerts.services.redis_keys import thresholds_hash
 logger = logging.getLogger(__name__)
 
 
-def _config_int(key: str, default: int) -> int:
+def _db_config(key: str, default):
+    """Default getter for direct calls: one DB read, int/float-tolerant."""
     from apps.system_config.models import SystemConfiguration
 
     raw = SystemConfiguration.objects.filter(key=key).values_list("value", flat=True).first()
+    if raw is None:
+        return default
     try:
         return int(raw)
-    except (TypeError, ValueError):
-        return default
-
-
-def _config_float(key: str, default: float) -> float:
-    from apps.system_config.models import SystemConfiguration
-
-    raw = SystemConfiguration.objects.filter(key=key).values_list("value", flat=True).first()
-    try:
-        return float(raw)
-    except (TypeError, ValueError):
-        return default
+    except ValueError:
+        try:
+            return float(raw)
+        except ValueError:
+            return default
 
 
 def evaluate_entry(
@@ -51,31 +47,33 @@ def evaluate_entry(
     metrics: dict,
     device_ts: str,
     clock_now: float | None = None,
+    config_getter=None,
+    mute_lookup: dict | None = None,
+    thresholds: dict | None = None,
 ) -> dict | None:
     """Evaluate one enriched entry against cached thresholds.
 
     Returns an alert-dict when something fires, else None.
+    Optional batch-pass inputs: config_getter (snapshot), mute_lookup
+    (saloon→mute), thresholds (saloon hash pre-fetched) turn the per-entry
+    DB/Redis reads into one amortized batch read per drain cycle.
     فارسی: یک ردیفِ داده را با آستانه‌های کش‌شده می‌سنجد.
     """
-    thresholds_hash_key = thresholds_hash(saloon_id)
-    thresholds = redis_client.hgetall(thresholds_hash_key)
+    if thresholds is None:
+        thresholds = redis_client.hgetall(thresholds_hash(saloon_id))
     if not thresholds:
         return None  # no thresholds cached ⇒ no alerts possible (fail-silent)
+    if config_getter is None:
+        config_getter = _db_config  # direct calls keep the DB behavior
 
     clock_now = time.time() if clock_now is None else clock_now
 
     # ── ① velocity emergency (bypasses ALL suppression) ────────────────────
     from apps.alerts.services.velocity import check_velocity_emergency
-    from apps.system_config.models import SystemConfiguration as _SC
-
-    def cfg_get(k, d):
-        return (
-            _SC.objects.filter(key=k).values_list("value", flat=True).first() or d
-        )
 
     velocity_result = check_velocity_emergency(
         redis_client, saloon_id, thresholds, metrics,
-        clock_now=clock_now, config_getter=cfg_get,
+        clock_now=clock_now, config_getter=config_getter,
     )
     if velocity_result is not None:
         from apps.alerts.services.firing import fire_or_coalesce
@@ -101,12 +99,17 @@ def evaluate_entry(
     # window is active; readings still log (telemetry committed earlier) and
     # every suppressed alert feeds the per-window digest. Velocity emergencies
     # NEVER reach here — lane ① already returned (Decision 10 invariant).
-    from apps.alerts.services.mutes import active_maintenance_mute, note_suppressed
+    from apps.alerts.services.mutes import note_suppressed
 
     now_dt = datetime.fromtimestamp(
         clock_now if clock_now is not None else time.time(), tz=dt_timezone.utc,
     )
-    mute = active_maintenance_mute(saloon_id, now_dt)
+    if mute_lookup is not None:
+        mute = mute_lookup.get(saloon_id)
+    else:
+        from apps.alerts.services.mutes import active_maintenance_mute
+
+        mute = active_maintenance_mute(saloon_id, now_dt)
     if mute is not None:
         note_suppressed(mute, now_dt)
         logger.debug(
@@ -116,8 +119,16 @@ def evaluate_entry(
         return None
 
     # ── ③ threshold comparison + breach accumulation + duration gate ──────
-    duration_sec = _config_int("breach_duration_sec", 900)
-    hysteresis = _config_float("hysteresis_buffer_units", 0.5)
+    duration_raw = config_getter("breach_duration_sec", 900)
+    try:
+        duration_sec = int(duration_raw)
+    except (TypeError, ValueError):
+        duration_sec = 900
+    hysteresis_raw = config_getter("hysteresis_buffer_units", 0.5)
+    try:
+        hysteresis = float(hysteresis_raw)
+    except (TypeError, ValueError):
+        hysteresis = 0.5
 
     from apps.alerts.services.firing import fire_or_coalesce
 
