@@ -26,9 +26,9 @@ from apps.geography.models import City, Province
 from apps.system_config.models import SystemConfiguration
 from apps.tenants.models import Organization
 
-from tests.conftest import INTEGRATION_REDIS_URL as REDIS_URL  # noqa: E402
+from tests.conftest import INTEGRATION_REDIS_URL as REDIS_URL, redis_base_url  # noqa: E402
 
-SCRATCH_REDIS_URL = "redis://:dev_redis_password@localhost:6379/10"
+SCRATCH_REDIS_URL = redis_base_url() + "/10"
 
 
 @pytest.fixture(autouse=True)

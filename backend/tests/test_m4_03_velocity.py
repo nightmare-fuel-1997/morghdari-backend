@@ -15,7 +15,9 @@ import redis as redis_lib
 from apps.alerts.services.redis_keys import thresholds_hash
 from apps.alerts.services.velocity import check_velocity_emergency
 
-REDIS_URL = "redis://:dev_redis_password@localhost:6379/10"
+from tests.conftest import redis_base_url  # noqa: E402
+
+REDIS_URL = redis_base_url() + "/10"
 SALOON = 42
 
 

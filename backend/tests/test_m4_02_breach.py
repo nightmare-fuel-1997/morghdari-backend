@@ -12,7 +12,9 @@ import redis as redis_lib
 from apps.alerts.services.breach import track_breach
 from apps.alerts.services.redis_keys import breach_key
 
-REDIS_URL = "redis://:dev_redis_password@localhost:6379/10"  # scratch DB
+from tests.conftest import redis_base_url  # noqa: E402
+
+REDIS_URL = redis_base_url() + "/10"  # scratch DB
 
 
 @pytest.fixture(autouse=True)

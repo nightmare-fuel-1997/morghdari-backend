@@ -34,11 +34,11 @@ from apps.system_config.models import SystemConfiguration
 from apps.tenants.models import Organization
 from morghdari.subscriber.pipeline import handle_message
 
-from tests.conftest import INTEGRATION_REDIS_URL as REDIS_URL  # noqa: E402
+from tests.conftest import INTEGRATION_REDIS_URL as REDIS_URL, redis_base_url  # noqa: E402
 
 # Dedicated scratch logical DB for this module (never the demo/dev db0,
 # never the integration /11): wiped per test by the autouse fixture.
-SCRATCH_REDIS_URL = "redis://:dev_redis_password@localhost:6379/13"
+SCRATCH_REDIS_URL = redis_base_url() + "/13"
 
 
 @pytest.fixture(autouse=True)

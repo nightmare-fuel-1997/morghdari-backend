@@ -46,17 +46,19 @@ services:
       - "18083:18083"  # Dashboard / Management API
     environment:
       EMQX_DASHBOARD__DEFAULT_PASSWORD: "dev_password"
-      # Dev mode uses built_in_database — no PostgreSQL auth dependency.
-      # EMQX_AUTHORIZATION__NO_MATCH: "allow" means any client can pub/sub to any topic.
-      # This is acceptable for local dev only. Production uses PostgreSQL auth + deny-all.
-      # No credentials are pre-seeded; use EMQX Dashboard (port 18083, login
-      # admin / dev_password from EMQX_DASHBOARD__DEFAULT_PASSWORD above)
-      # to manually create test users, or run the seed management command.
+      # Same broker profile as scripts/start_demo_stack.sh run_emqx: built-in-DB
+      # authn, deny-by-default authorization, management-API key bootstrap
+      # (EMQX 5.5 /api/v5 requires API keys; scripts/emqx_provision.py and the
+      # M5-06/07/08 sync services need it). NO_MATCH=deny mirrors production —
+      # nothing publishes unless a rule explicitly allows it.
+      EMQX_DASHBOARD__LISTENERS__HTTP__AUTH_TYPE: "basic"
       EMQX_AUTHENTICATION__1__MECHANISM: "password_based"  # C-05: EMQX 5.5 requires mechanism alongside backend
       EMQX_AUTHENTICATION__1__BACKEND: "built_in_database"
-      EMQX_AUTHORIZATION__NO_MATCH: "allow"  # Allow all in dev
+      EMQX_AUTHORIZATION__NO_MATCH: "deny"
+      EMQX_API_KEY__BOOTSTRAP_FILE: "/opt/emqx/etc/api_keys"
     volumes:
       - emqx_dev_data:/opt/emqx/data
+      - ./scripts/emqx-api-keys.txt:/opt/emqx/etc/api_keys:ro
     healthcheck:
       test: ["CMD", "emqx", "ctl", "status"]
       interval: 10s

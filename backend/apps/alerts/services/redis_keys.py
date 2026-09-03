@@ -33,6 +33,10 @@ def paused_key(alert_id: str) -> str:
     return f"alert:paused:{alert_id}"
 
 
+def pack_lwt_key(saloon_id, slot_id) -> str:
+    return f"sensor:lwt:{saloon_id}:{slot_id}"
+
+
 def sensor_status_key(saloon_id, slot_id) -> str:
     # slot pk is a CharField; str() keeps the signature tolerant in tests.
     return f"sensor:status:{saloon_id}:{slot_id}"

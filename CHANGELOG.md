@@ -3,6 +3,108 @@
 All notable changes per version. Format follows the spiral-roadmap discipline:
 one section per version tag, each listing what risk the version killed.
 
+## [v0.5] — 2026-09-02 — provisioning + zero-touch trust boundary (M5)
+
+Unapproved hardware can never inject data: gateway identity, telemetry routing
+and broker credentials all key off the provisioning lifecycle now.
+
+### Risk killed
+**Trust boundary.** Telemetry from a gateway that is not yet approved is HELD
+in a FIFO pending stream (never published, never dropped); a rejected or
+suspended gateway's telemetry is archived to the DLQ with a machine reason;
+EMQX ACLs are revoked on suspension/rejection (no_match=deny) so the broker
+itself drops its traffic; credential rotation is staged and committed ONLY on
+device ACK — no lockout, no plaintext re-issue.
+
+### Added — M5 provisioning + zero-touch
+- **M5-01 transition service** in `apps/provisioning/services.py`: atomic
+  status + `provisioning_audit_log` row + status-cache invalidation; every
+  lifecycle action goes through it (no direct `provisioning_status` saves)
+- **M5-02 gateway-request flow**: manager-submitted requests with config-cap
+  (`max_pending_gateway_requests`), platform review — admin/support by default
+  via the new `User.staff_role` axis (accounts migration 0002), extensible
+  via an optional `PlatformPermission` model (stub) — approval creates slot +
+  bcrypt credentials + EMQX allow-rule; plaintext password issued exactly once
+- **M5-03 installer sync**: `POST /api/v1/provisioning/sync/` — zones,
+  sensor-slot mappings (hardware derived server-side, forged ids ignored),
+  hardware `replacements` (retire the old unit's registry row, re-point the
+  pack under the new unit, drop the stale mapping — validated before ANY
+  write so a malformed list can't leave partial topology), per-slot Redis
+  lock → `PENDING_APPROVAL`; second sync → 409 + Retry-After
+- **M5-04 telemetry trust boundary** in the subscriber pipeline: status-aware
+  routing — `PENDING_APPROVAL` → `telemetry:pending_approval` FIFO, `REJECTED`/
+  `SUSPENDED` → DLQ archive (`gateway_rejected` / `gateway_suspended`), no
+  record (legacy/demo) flows normally
+- **M5-05 FM lifecycle**: approve (drains held FIFO into Postgres in order),
+  reject (archives held telemetry to the DLQ), suspend (revokes ACLs),
+  resume (re-syncs allow-rules); Blueprint §11 state matrices enforced → 409
+  on illegal transitions, zero partial writes
+- **M5-06 gateway config**: `GET /api/v1/gateways/{id}/config/` — R2 contract
+  payload (org/farm ids, MQTT endpoint, credential hash + rotation_pending),
+  no sensor slot_ids; pre/post approval works; 403 on rejected/suspended;
+  dual auth per TASKS: the gateway itself authenticates with HTTP Basic
+  against its bcrypt credential (zero-touch bootstrapping) OR a farm
+  manager/owner fetches with the normal JWT
+- **M5-07 EMQX ACL wiring** (`apps/mqtt_auth/services.py`): built-in-DB
+  authorizer sync from `mqtt_acl_rules`; revocation empties rules ⇒ broker
+  denies; EMQX failures logged and FNV-soft (DB rules remain the truth).
+  NEW: the gateway's **authn user** is created at approval with the one-time
+  plaintext (EMQX 5.5 rejects pre-hashed `password_hash` — verified live)
+  and probed on rule sync; review approval pins the real publish topics
+  (`{org}/farms/{farm}/gateways/{slot}/{telemetry,status}` — the old
+  `org/.../gateway/#` shape matched nothing under no_match=deny)
+- **M5-08 staged rotation**: stage (pending bcrypt hash, old credential
+  stays live), commit-on-ACK (promotes ONLY when the device presents the new
+  password), 24 h stale-rotation beat sweep; rotation commit pushes the new
+  password to the EMQX authn user (404-heal self-converges a wiped broker);
+  request-approval credentials now hashed with EMQX-native `$2b$` bcrypt
+  (C7) instead of `bcrypt_sha256`; dev/CI EMQX profile now deny-by-default
+  with a bootstrap API key, and the demo provisioner migrates the authn
+  chain to bcrypt
+- **Live broker verification** (`scripts/live_verify_emqx.py`): the
+  M5-07/M5-08 broker semantics CI can only mock were proven against real
+  EMQX 5.5.1 — plaintext user creation, wrong-password CONNECT rejection,
+  allow-rule publish delivered, revoke-to-empty drops delivery,
+  rotation (new password connects, old rejected); 10/10 checks green
+- **Real-EMQX CI job**: `docker-compose.ci.yml` now carries an `emqx`
+  service (dev-profile broker: built-in-DB authn, deny-by-default authz,
+  bootstrap API key) plus a `live-verify` job that provisions it via
+  `emqx_provision.py` and runs `scripts/live_verify_emqx.py` against it —
+  `docker compose -f docker-compose.ci.yml run --rm live-verify`, so
+  M5-07/M5-08 broker semantics stay proven against a real broker in CI,
+  never only mocked
+- **Demo dashboard** completed (`apps/telemetry/demo_views.py`): identity,
+  sensor health, rolling telemetry stats, per-sensor-slot breakdown, EMQX
+  status, simulate + farm topology + seed command (`demo_farm_seed`)
+- Subscriber boots resilient to broker downtime (2 s retry), subscribes to
+  the status topic, mirrors LWT into pack-liveness keys
+
+### Verification
+- CI gate (`docker compose -f docker-compose.ci.yml run --rm test`):
+  **284 passed, 3 skipped, 89.24% coverage** on
+  timescale/timescaledb:2.29.2-pg16 + redis:7-alpine (fresh test DB,
+  no background test container racing the runner)
+- Test-suite Redis URLs now derive from the env URL (host `localhost` locally,
+  `redis` service name in Docker) instead of hardcoded scratch URLs; CI Redis
+  URL dropped the invalid `/0` suffix
+- Fresh CI volumes get `morghdari_app` table grants applied at session setup
+  (explicit GRANT on ALL tables — default privileges only cover future
+  tables, so a brand-new test DB was invisible to the app role)
+
+### Deployment notes
+- MQTT auth services speak to EMQX 5.x management API
+  (`EMQX_API_URL`/`EMQX_API_USER`/`EMQX_API_PASSWORD`, default
+  http://127.0.0.1:18083 demo-admin/dev_password); ACL enforcement is
+  FNV-soft — a broker outage logs and leaves DB rules as source of truth
+- Provision the broker for the demo with `scripts/emqx_provision.py`
+  (authn users + per-farm ACL rules; shape pinned by `test_emqx_provision.py`);
+  `no_match=deny` is set at broker bootstrap
+- New env contract for the subscriber: `SUBSCRIBER_CLIENT_ID` (required),
+  `MQTT_HOST`/`MQTT_PORT`/`MQTT_USERNAME`/`MQTT_PASSWORD`, `REDIS_URL`
+- Gateway config payload carries `rate_limit_note`: throttle MQTT CONNECT +
+  publish per gateway at the reverse proxy (nginx `limit_req`); broker-level
+  quotas land with the v1.0 quota engine
+
 ## [v0.4] — 2026-08-29 — alert engine (M4)
 
 The product's safety brain exists end to end: threshold cache, breach state

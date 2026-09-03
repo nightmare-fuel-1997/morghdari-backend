@@ -22,6 +22,7 @@ survive broker restarts and load-balance across N instances, hence:
 import logging
 import os
 import sys
+import time
 
 import paho.mqtt.client as mqtt
 import redis
@@ -35,6 +36,7 @@ logging.basicConfig(
 logger = logging.getLogger("morghdari.subscriber")
 
 SHARED_TOPIC = "$share/telemetry_workers/+/farms/+/gateways/+/telemetry"
+STATUS_TOPIC = "+/farms/+/gateways/+/status"
 SUBSCRIBE_QOS = 1
 
 
@@ -75,18 +77,37 @@ def _on_connect(client, userdata, flags, reason_code, properties=None):
         logger.error("CONNACK failure: %s", reason_code)
         return
     logger.info("connected to broker (session_present=%s)", flags.session_present)
-    result, mid = client.subscribe(SHARED_TOPIC, qos=SUBSCRIBE_QOS)
-    if result == mqtt.MQTT_ERR_SUCCESS:
-        logger.info("subscribed via %s (mid=%s, qos=%s)", SHARED_TOPIC, mid, SUBSCRIBE_QOS)
-    else:
-        logger.error("subscribe failed: %s", result)
+    for topic in (SHARED_TOPIC, STATUS_TOPIC):
+        result, mid = client.subscribe(topic, qos=SUBSCRIBE_QOS)
+        if result == mqtt.MQTT_ERR_SUCCESS:
+            if topic == STATUS_TOPIC:
+                logger.info("subscribed to %s", topic)
+            else:
+                logger.info("subscribed via %s (mid=%s, qos=%s)", topic, mid, SUBSCRIBE_QOS)
+        else:
+            logger.error("subscribe failed: %s", result)
+
+
+def _status_fetch(gateway_slot: str):
+    """M5-04: the gateway's provisioning status from Django, lazily — the
+    subscriber process may run without Django configured (pure-MQTT mode), in
+    which case legacy behavior applies (no record ⇒ telemetry flows)."""
+    try:
+        from apps.devices.models import GatewaySlot
+
+        return GatewaySlot.objects.filter(pk=gateway_slot).values_list(
+            "provisioning_status", flat=True
+        ).first()
+    except Exception:
+        return None
 
 
 def _on_message(client, userdata, message) -> None:
     # M3-02: every message now passes the pipeline's ordered gates; rejections
-    # dead-letter with a reason, happy-path logging stays visible until the
-    # enrich/XADD gate lands (M3-04).
-    handle_message(_redis(), message.topic, message.payload)
+    # dead-letter with a reason. M5-04: telemetry from unapproved gateways is
+    # held in the pending stream; rejected/suspended gateways are archived.
+    handle_message(_redis(), message.topic, message.payload,
+                   status_fetch=_status_fetch)
 
 
 _redis_client = None
@@ -103,6 +124,33 @@ def _redis():
     return _redis_client
 
 
+def _handle_status(client, topic: str, payload: bytes) -> None:
+    """Mirror retained gateway status into the pack liveness key."""
+    import json
+
+    from apps.alerts.services.redis_keys import pack_lwt_key
+    from apps.devices.models import SaloonSensorSlot
+
+    parts = topic.split("/")
+    if len(parts) != 6 or parts[1] != "farms" or parts[3] != "gateways" or parts[5] != "status":
+        return
+    try:
+        body = json.loads(payload)
+    except (TypeError, ValueError):
+        return
+    status = body.get("status")
+    if status not in {"online", "offline"}:
+        return
+    # The status topic's gateway segment is the sensor-slot identity in the
+    # demo/simulator topology (slot_id doubles as the gateway id); the lwt
+    # key lives per (saloon, slot) so the boss board can surface dead packs.
+    slot = SaloonSensorSlot.objects.filter(slot_id=parts[4], org_id=parts[0]).first()
+    if slot is None:
+        return
+    # Gateway-level status is retained; no TTL is used for durable LWT state.
+    client.set(pack_lwt_key(slot.saloon_id, slot.slot_id), status)
+
+
 def _on_disconnect(client, userdata, disconnect_flags, reason_code, properties=None):
     logger.warning("disconnected from broker: %s", reason_code)
 
@@ -112,7 +160,13 @@ def main() -> None:
     port = int(os.environ.get("MQTT_PORT", "1883"))
     client = build_client()
     logger.info("booting subscriber → %s:%s", host, port)
-    client.connect(host, port, keepalive=60)
+    while True:
+        try:
+            client.connect(host, port, keepalive=60)
+            break
+        except OSError as exc:
+            logger.warning("broker unreachable (%s); retrying in 2s", exc)
+            time.sleep(2)
     client.loop_forever()  # reconnects automatically; blocking by design
 
 

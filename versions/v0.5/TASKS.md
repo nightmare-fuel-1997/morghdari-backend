@@ -1,14 +1,19 @@
 # v0.5 TASKS — ordered breakdown
 
-| # | Task | Depends on | Acceptance |
-|---|---|---|---|
-| M5-01 | Status-transition service (atomic: status + audit row + cache delete) used everywhere | v0.2 | no direct .save() on provisioning_status outside service |
-| M5-02 | Gateway-request flow: submit (manager+, cap from config) / list / review endpoint (platform permission: admin+support default, extensible) | M5-01, v0.2 | approval creates slot+credentials; cap 400s at limit |
-| M5-03 | Provisioning sync endpoint (installer-scoped): zones, mappings (hardware derived server-side), replacements → PENDING_APPROVAL | M5-01 | R6 contract tests green |
-| M5-04 | Subscriber status branch: PENDING_APPROVAL → pending buffer; REJECTED/SUSPENDED discarded/archived | M3-04, M5-01 | pre-approval telemetry held (R3 suite) |
-| M5-05 | FM approve/reject endpoints (+audit, cache invalidation, drain dispatch) | M5-01, M5-04 | approve drains in order; reject discards |
-| M5-06 | `GET /gateways/{id}/config/`: Basic-auth vs bcrypt creds, rate-limit note for nginx, R2 payload (org/farm ids, no slot_ids) | M5-01 | config fetch works pre/post approval; 403 on rejected/suspended |
-| M5-07 | EMQX ACL wiring from mqtt_acl_rules (allow-rows, no_match deny) + suspension revocation | M5-01 | suspended gateway cannot publish |
-| M5-08 | Staged rotation: ROTATE_CREDENTIAL command, pending hash, commit-on-ACK, 24h-pending alert | M5-06, v0.3 commands? (stub ok) | rotation dance end-to-end with simulator |
-| M5-09 | Concurrency test: two simultaneous syncs for the same gateway → per-slot Redis lock; second gets **409 + Retry-After**, zero partial topology (AU-RACES closed 2026-08-23, Blueprint §6); transitions checked against the Blueprint §11 state matrices (AU-STATES closed) | M5-03 | `test_sync_conflict_409` green; no partial writes |
-| M5-10 | DoD sweep: CHANGELOG, tag `v0.5`, demo recorded (WALKTHROUGH full sequence), docs swept | all | tag pushed |
+_Status (2026-09-02): M5-01..09 IMPLEMENTED + GREEN on the CI gate (284 passed, 3 skipped,
+89.07–89.24% coverage across two fresh-DB full runs, Docker TimescaleDB/PostgreSQL + Redis;
+M5-07/M5-08 additionally LIVE-verified against EMQX 5.5.1). M5-10 partially done —
+CHANGELOG/README/PROGRESS updated; tag + recorded demo remain owner steps._
+
+| # | Task | Depends on | Acceptance | Status |
+|---|---|---|---|---|
+| M5-01 | Status-transition service (atomic: status + audit row + cache delete) used everywhere | v0.2 | no direct .save() on provisioning_status outside service | ✅ `test_m5_01_transition.py` (3) |
+| M5-02 | Gateway-request flow: submit (manager+, cap from config) / list / review endpoint (platform permission: admin+support default, extensible) | M5-01, v0.2 | approval creates slot+credentials; cap 400s at limit | ✅ `test_m5_02_03_provisioning_api.py` (11) — review approval creates slot + `$2b$` credential + ACL rule (admin AND support default, `User.staff_role` migration 0002), reject records reason + no slot, manager 403, double-review 409, config-cap 400 |
+| M5-03 | Provisioning sync endpoint (installer-scoped): zones, mappings (hardware derived server-side), replacements → PENDING_APPROVAL | M5-01 | R6 contract tests green | ✅ zones/mappings + `replacements` (retire old hardware, re-point pack, drop stale mapping; validated before ANY write) + M5-09 lock |
+| M5-04 | Subscriber status branch: PENDING_APPROVAL → `telemetry:pending_approval`; REJECTED/SUSPENDED discarded/archived | M3-04, M5-01 | pre-approval telemetry held (R3 suite) | ✅ `test_m5_04_05_trust_boundary.py` — held FIFO, DLQ archive gw_rejected/gw_suspended, legacy flows |
+| M5-05 | FM approve/reject endpoints (+audit, cache invalidation, drain dispatch) | M5-01, M5-04 | approve drains in order; reject discards | ✅ lifecycle endpoints + state-matrix guards (Blueprint §11 → 409) |
+| M5-06 | `GET /gateways/{id}/config/`: Basic-auth vs bcrypt creds, rate-limit note for nginx, R2 payload (org/farm ids, no slot_ids) | M5-01 | config fetch works pre/post approval; 403 on rejected/suspended | ✅ device Basic-auth vs bcrypt (zero-touch) OR manager JWT; 401/403/404 fences; `test_m5_06_07_08_enforcement.py` |
+| M5-07 | EMQX ACL wiring from mqtt_acl_rules (allow-rows, no_match deny) + suspension revocation | M5-01 | suspended gateway cannot publish | ✅ `sync_gateway_acls`/`revoke_gateway_acls` (FNV-soft, DB rules = truth) + **LIVE-verified against EMQX 5.5.1** (2026-09-02, `scripts/live_verify_emqx.py`: plaintext user creation is the broker contract, allow-rule publish delivered, revoke-to-empty drops delivery — broker ACL cache TTL ~1m bounds connected-client latency) |
+| M5-08 | Staged rotation: ROTATE_CREDENTIAL command, pending hash, commit-on-ACK, 24h-pending alert | M5-06, v0.3 commands? (stub ok) | rotation dance end-to-end with simulator | ✅ rotate/ack endpoints (v0.3 command-channel stub), stale-rotation beat sweep, rotation commit pushes the new password to the EMQX authn user (404-heal self-converges a wiped broker) + **LIVE-verified** (2026-09-02: new password connects, old rejected after commit) |
+| M5-09 | Concurrency test: two simultaneous syncs for the same gateway → per-slot Redis lock; second gets **409 + Retry-After**, zero partial topology (AU-RACES closed 2026-08-23, Blueprint §6); transitions checked against the Blueprint §11 state matrices (AU-STATES closed) | M5-03 | `test_sync_conflict_409` green; no partial writes | ✅ `test_sync_conflict_returns_retry_after` + `test_wrong_state_transitions_conflict` |
+| M5-10 | DoD sweep: CHANGELOG, tag `v0.5`, demo recorded (WALKTHROUGH full sequence), docs swept | all | tag pushed | 🔶 CHANGELOG + README + PROGRESS updated; **tag/demo recording: owner** |

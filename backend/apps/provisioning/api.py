@@ -1,0 +1,561 @@
+"""Gateway request and review API for v0.5."""
+
+from __future__ import annotations
+
+import base64
+import secrets
+from datetime import timedelta
+
+from django.contrib.auth import get_user_model
+from django.db import transaction
+from django.utils import timezone
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.response import Response
+
+from apps.accounts.permissions import _claims
+from apps.devices.models import (
+    GatewayHardwareRegistry,
+    GatewayRequest,
+    GatewaySaloonZone,
+    GatewaySensorMapping,
+    GatewaySlot,
+    SaloonSensorSlot,
+)
+from apps.mqtt_auth.models import MqttAclRule, MqttDeviceCredential
+from apps.provisioning.services import (
+    SyncConflict,
+    acquire_sync_lock,
+    release_sync_lock,
+    transition,
+)
+from apps.system_config.models import SystemConfiguration
+
+User = get_user_model()
+REVIEW_PERMISSION = "gateway_review"
+REVIEW_ROLES = {"admin", "support"}
+MANAGER_ROLES = {"manager", "owner"}
+
+
+def _org_id(request):
+    return _claims(request).get("org_id")
+
+
+def _can_review(request) -> bool:
+    user = request.user
+    if user.is_superuser:
+        return True
+    if user.is_platform_staff and getattr(user, "staff_role", None) in REVIEW_ROLES:
+        return True
+    # Keep the extension point data-driven when a deployment adds a platform
+    # permission model; deployments without that optional model use defaults.
+    try:
+        from apps.accounts.models import PlatformPermission
+    except ImportError:
+        return False
+    return PlatformPermission.objects.filter(user=user, codename=REVIEW_PERMISSION).exists()
+
+
+def _config_int(key: str, default: int) -> int:
+    row = SystemConfiguration.objects.filter(pk=key).values_list("value", flat=True).first()
+    try:
+        return int(row) if row is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _request_out(row):
+    return {
+        "id": row.id,
+        "org_id": str(row.org_id),
+        "farm_id": row.farm_id,
+        "status": row.status,
+        "requested_by": row.requested_by_id,
+        "requested_at": row.requested_at.isoformat() if row.requested_at else None,
+        "approved_by": row.approved_by_id,
+        "approved_at": row.approved_at.isoformat() if row.approved_at else None,
+        "rejection_reason": row.rejection_reason,
+        "details": row.details,
+    }
+
+
+@api_view(["POST", "GET"])
+@permission_classes([IsAuthenticated])
+def gateway_requests(request):
+    """Submit or list requests within the caller's organization."""
+    org_id = _org_id(request)
+    if request.method == "GET":
+        if not _can_review(request) and not org_id:
+            return Response({"error": "organization context required"}, status=400)
+        queryset = GatewayRequest.objects.filter(org_id=org_id).order_by("id")
+        return Response([_request_out(row) for row in queryset])
+
+    if not org_id or not (MANAGER_ROLES & set(_claims(request).get("roles", []))):
+        return Response({"error": "manager role required"}, status=403)
+
+    pending = GatewayRequest.objects.filter(org_id=org_id, status="PENDING").count()
+    if pending >= _config_int("max_pending_gateway_requests", 4):
+        return Response({"error": "pending gateway request cap reached"}, status=400)
+
+    row = GatewayRequest.objects.create(
+        org_id=org_id,
+        farm_id=request.data.get("farm_id"),
+        requested_by=request.user,
+        details=request.data.get("details") or {},
+    )
+    return Response(_request_out(row), status=201)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def review_gateway_request(request, request_id: int):
+    """Approve/reject a request; approval creates credentials and a slot."""
+    if not _can_review(request):
+        return Response({"error": "platform review permission required"}, status=403)
+
+    with transaction.atomic():
+        row = GatewayRequest.objects.select_for_update().filter(pk=request_id).first()
+        if row is None:
+            return Response({"error": "request not found"}, status=404)
+        if row.status != "PENDING":
+            return Response({"error": "request already reviewed"}, status=409)
+
+        decision = str(request.data.get("decision", "")).upper()
+        if decision == "REJECT":
+            row.status = "REJECTED"
+            row.rejection_reason = str(request.data.get("reason", "")).strip() or "rejected"
+            row.approved_by = request.user
+            row.approved_at = timezone.now()
+            row.save(update_fields=["status", "rejection_reason", "approved_by", "approved_at"])
+            return Response(_request_out(row))
+        if decision != "APPROVE":
+            return Response({"error": "decision must be APPROVE or REJECT"}, status=400)
+
+        slot_id = str(request.data.get("slot_id") or f"GW-{secrets.token_hex(8).upper()}")
+        password = secrets.token_urlsafe(32)
+        slot = GatewaySlot.objects.create(
+            slot_id=slot_id,
+            org=row.org,
+            farm=row.farm,
+            request=row,
+            created_by=request.user,
+        )
+        from apps.mqtt_auth.services import ensure_gateway_user, hash_password
+
+        credential = MqttDeviceCredential.objects.create(
+            device_id=slot.slot_id,
+            username=slot.slot_id,
+            password_hash=hash_password(password),  # $2b$ — EMQX-native (C7)
+        )
+        # Allow rules MUST name the topics the gateway actually publishes
+        # (`{org}/farms/{farm}/gateways/{slot}/...` — the subscriber's grammar,
+        # verified against the live broker; the old `org/.../gateway/#` shape
+        # matched nothing and no_match=deny dropped every publish).
+        MqttAclRule.objects.create(
+            username=credential.username,
+            topic=f"{row.org_id}/farms/{slot.farm_id}/gateways/{slot.slot_id}/telemetry",
+            permission="allow",
+            action="publish",
+        )
+        MqttAclRule.objects.create(
+            username=credential.username,
+            topic=f"{row.org_id}/farms/{slot.farm_id}/gateways/{slot.slot_id}/status",
+            permission="allow",
+            action="publish",
+        )
+        # The broker's authn user — plaintext is in hand exactly here (one-time
+        # issue). FNV-soft: a broker hiccup never fails the review; a missing
+        # user is healed by the next credential rotation (404-heal in
+        # mqtt_auth.services.update_gateway_user_password).
+        ensure_gateway_user(slot.slot_id, password)
+        row.status = "APPROVED"
+        row.approved_by = request.user
+        row.approved_at = timezone.now()
+        row.save(update_fields=["status", "approved_by", "approved_at"])
+
+    return Response({**_request_out(row), "gateway_slot_id": slot.slot_id, "username": credential.username, "password": password}, status=200)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def provisioning_sync(request):
+    """Apply installer topology and move the gateway to PENDING_APPROVAL.
+
+    Organization and hardware identity come from server-side records. The
+    short Redis lock prevents two offline installers from merging overlapping
+    topology updates at the same time.
+    """
+    roles = set(_claims(request).get("roles", []))
+    org_id = _org_id(request)
+    if not org_id or "installer" not in roles:
+        return Response({"error": "installer role required"}, status=403)
+
+    slot_id = str(request.data.get("gateway_slot_id") or "")
+    if not slot_id:
+        return Response({"error": "gateway_slot_id required"}, status=400)
+
+    try:
+        lock_client, lock_token = acquire_sync_lock(slot_id)
+    except SyncConflict:
+        response = Response({"error": "gateway sync already in progress"}, status=409)
+        response["Retry-After"] = str(3)
+        return response
+
+    try:
+        with transaction.atomic():
+            slot = GatewaySlot.objects.select_for_update().filter(
+                pk=slot_id, org_id=org_id
+            ).first()
+            if slot is None:
+                return Response({"error": "gateway not found in caller organization"}, status=404)
+
+            hardware = GatewayHardwareRegistry.objects.filter(
+                slot=slot, org_id=org_id, removed_at__isnull=True
+            ).order_by("-installed_at").first()
+            if hardware is None:
+                return Response({"error": "active gateway hardware not registered"}, status=400)
+
+            zones = request.data.get("zones") or request.data.get("zone_assignments") or []
+            mappings = request.data.get("sensor_slot_mappings") or []
+
+            # M5-03 replacements — a hardware unit swap on this gateway slot:
+            # retire the OLD registry row, re-point `pack_id` to a (possibly
+            # new) sensor slot under the NEW hardware, and drop the stale pack
+            # mapping left under the old unit. Server-side truth everywhere:
+            # both hardware rows must be active rows of THIS slot in the
+            # caller's org — an unknown row is a 400, never a silent no-op.
+            # VALIDATED UP FRONT (before zones/mappings write anything) so a
+            # malformed list can never yield partial topology (M5-09).
+            replacements = request.data.get("replacements") or []
+            replacement_plan = []
+            for item in replacements:
+                old_hw = str(item.get("old_hardware_id") or "")
+                new_hw = str(item.get("new_hardware_id") or "")
+                pack_id = str(item.get("pack_id") or "")
+                sensor_slot_id = str(item.get("slot_id") or "")
+                if not (old_hw and new_hw and pack_id and sensor_slot_id):
+                    return Response(
+                        {"error": "replacement requires old_hardware_id, new_hardware_id, pack_id and slot_id"},
+                        status=400,
+                    )
+                old_active = GatewayHardwareRegistry.objects.filter(
+                    hardware_id=old_hw, slot=slot, org_id=org_id, removed_at__isnull=True
+                ).first()
+                new_active = GatewayHardwareRegistry.objects.filter(
+                    hardware_id=new_hw, slot=slot, org_id=org_id, removed_at__isnull=True
+                ).first()
+                sensor_slot = SaloonSensorSlot.objects.filter(
+                    pk=sensor_slot_id, org_id=org_id, is_active=True
+                ).first()
+                if old_active is None or new_active is None or sensor_slot is None:
+                    return Response(
+                        {"error": "replacement references unknown hardware or sensor slot"},
+                        status=400,
+                    )
+                replacement_plan.append(
+                    (old_active, new_active, pack_id, sensor_slot)
+                )
+
+            for saloon_id in zones:
+                zone = GatewaySaloonZone.objects.filter(
+                    gateway_slot=slot, saloon_id=saloon_id, org_id=org_id
+                ).first()
+                if zone is None:
+                    GatewaySaloonZone.objects.create(
+                        gateway_slot=slot, saloon_id=saloon_id, org_id=org_id,
+                        assigned_by=request.user,
+                    )
+
+            for item in mappings:
+                pack_id = str(item.get("pack_id") or "")
+                sensor_slot_id = str(item.get("slot_id") or "")
+                if not pack_id or not sensor_slot_id:
+                    return Response({"error": "mapping requires pack_id and slot_id"}, status=400)
+                sensor_slot = SaloonSensorSlot.objects.filter(
+                    pk=sensor_slot_id, org_id=org_id, is_active=True
+                ).first()
+                if sensor_slot is None:
+                    return Response({"error": "sensor slot not found in caller organization"}, status=400)
+                GatewaySensorMapping.objects.update_or_create(
+                    gateway_hardware_id=hardware.hardware_id,
+                    pack_id=pack_id,
+                    defaults={"slot": sensor_slot, "org_id": org_id, "created_by": request.user},
+                )
+
+            now = timezone.now()
+            for old_active, new_active, pack_id, sensor_slot in replacement_plan:
+                if old_active.pk != new_active.pk:
+                    old_active.removed_at = now
+                    old_active.removed_by = request.user
+                    old_active.save(update_fields=["removed_at", "removed_by"])
+                    # The retired unit's mapping for this pack is stale.
+                    GatewaySensorMapping.objects.filter(
+                        gateway_hardware_id=old_active.hardware_id,
+                        pack_id=pack_id,
+                    ).delete()
+                GatewaySensorMapping.objects.update_or_create(
+                    gateway_hardware_id=new_active.hardware_id,
+                    pack_id=pack_id,
+                    defaults={"slot": sensor_slot, "org_id": org_id, "created_by": request.user},
+                )
+
+            transition(slot.slot_id, "PENDING_APPROVAL", request.user, reason="installer sync")
+            return Response({
+                "gateway_slot_id": slot.slot_id,
+                "gateway_hardware_id": hardware.hardware_id,
+                "status": "PENDING_APPROVAL",
+                "zones_count": len(zones),
+                "mappings_count": len(mappings),
+                "replacements_count": len(replacement_plan),
+            }, status=200)
+    finally:
+        release_sync_lock(slot_id, lock_token, client=lock_client)
+
+
+# ---------------------------------------------------------------------------
+# M5-05 — farm-manager lifecycle: approve / reject / suspend / resume.
+# The transaction + audit row come from the shared transition service; each
+# action's broker-consistency step (pending drain, DLQ discard, EMQX ACL
+# sync/revoke) runs AFTER the status commit, so a broker hiccup never rolls
+# the decision back — the next sweep/appointment converges it.
+# ---------------------------------------------------------------------------
+
+
+def _manager_or_error(request):
+    """Return the org id when the caller holds a manager/owner role, else None.
+    Every M5-05/06/08 gateway action starts with this gate."""
+    org_id = _org_id(request)
+    if not org_id or not (MANAGER_ROLES & set(_claims(request).get("roles", []))):
+        return None
+    return org_id
+
+
+def _owned_slot(slot_id: str, org_id: str):
+    return GatewaySlot.objects.filter(pk=slot_id, org_id=org_id).first()
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def approve_gateway(request, slot_id: str):
+    """Approve a PENDING_APPROVAL gateway: PROVISIONED + held telemetry drain
+    (FIFO), then EMQX allow-rule sync. Farm manager/owner only."""
+    org_id = _manager_or_error(request)
+    if org_id is None:
+        return Response({"error": "manager role required"}, status=403)
+    slot = _owned_slot(slot_id, org_id)
+    if slot is None:
+        return Response({"error": "gateway not found in caller organization"}, status=404)
+
+    from apps.provisioning.services import approve_gateway as _approve
+
+    try:
+        _approve(slot.slot_id, request.user)
+    except ValueError as exc:  # wrong starting status
+        return Response({"error": str(exc)}, status=409)
+    slot = GatewaySlot.objects.get(pk=slot_id)
+    return Response({"gateway_slot_id": slot.slot_id, "status": slot.provisioning_status})
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def reject_gateway(request, slot_id: str):
+    """Reject a PENDING_APPROVAL gateway: REJECTED + held telemetry archived
+    to the DLQ with a reason + EMQX ACL removal."""
+    org_id = _manager_or_error(request)
+    if org_id is None:
+        return Response({"error": "manager role required"}, status=403)
+    slot = _owned_slot(slot_id, org_id)
+    if slot is None:
+        return Response({"error": "gateway not found in caller organization"}, status=404)
+
+    from apps.provisioning.services import reject_gateway as _reject
+
+    try:
+        _reject(slot.slot_id, request.user, reason=str(request.data.get("reason", "")).strip() or None)
+    except ValueError as exc:
+        return Response({"error": str(exc)}, status=409)
+    slot = GatewaySlot.objects.get(pk=slot_id)
+    return Response({"gateway_slot_id": slot.slot_id, "status": slot.provisioning_status})
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def suspend_gateway(request, slot_id: str):
+    """Suspend a PROVISIONED gateway: SUSPENDED + EMQX ACL revocation
+    (no_match=deny drops every publish until resume)."""
+    org_id = _manager_or_error(request)
+    if org_id is None:
+        return Response({"error": "manager role required"}, status=403)
+    slot = _owned_slot(slot_id, org_id)
+    if slot is None:
+        return Response({"error": "gateway not found in caller organization"}, status=404)
+
+    from apps.provisioning.services import suspend_gateway as _suspend
+
+    try:
+        _suspend(slot.slot_id, request.user, reason=str(request.data.get("reason", "")).strip() or None)
+    except ValueError as exc:
+        return Response({"error": str(exc)}, status=409)
+    slot = GatewaySlot.objects.get(pk=slot_id)
+    return Response({"gateway_slot_id": slot.slot_id, "status": slot.provisioning_status})
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def resume_gateway(request, slot_id: str):
+    """Resume a SUSPENDED gateway back to PROVISIONED and restore EMQX ACLs."""
+    org_id = _manager_or_error(request)
+    if org_id is None:
+        return Response({"error": "manager role required"}, status=403)
+    slot = _owned_slot(slot_id, org_id)
+    if slot is None:
+        return Response({"error": "gateway not found in caller organization"}, status=404)
+
+    from apps.provisioning.services import resume_gateway as _resume
+
+    try:
+        _resume(slot.slot_id, request.user)
+    except ValueError as exc:
+        return Response({"error": str(exc)}, status=409)
+    slot = GatewaySlot.objects.get(pk=slot_id)
+    return Response({"gateway_slot_id": slot.slot_id, "status": slot.provisioning_status})
+
+
+# ---------------------------------------------------------------------------
+# M5-06 — gateway config fetch (R2 contract payload). Works pre- AND
+# post-approval; a rejected or suspended gateway gets 403 (its traffic is
+# denied, so its config must not be refreshed either).
+#
+# Two auth paths, by design (TASKS M5-06 "Basic-auth vs bcrypt creds"):
+#   ① the GATEWAY proves itself with HTTP Basic against its own
+#      mqtt_device_credentials bcrypt hash (zero-touch bootstrapping);
+#   ② a farm manager/owner fetches with the normal JWT.
+# Pre-approval the gateway has no credential row yet, so ① only exists
+# post-approval — the manager path covers the pre-approval fetch.
+# ---------------------------------------------------------------------------
+
+
+def _basic_device(request):
+    """Resolve a gateway identity from an HTTP Basic header against its bcrypt
+    credential hash. Returns the MqttDeviceCredential row or None (bad/missing
+    credentials). Never raises for malformed headers — fail closed."""
+    header = request.META.get("HTTP_AUTHORIZATION", "")
+    if not header.startswith("Basic "):
+        return None
+    try:
+        decoded = base64.b64decode(header[6:], validate=True).decode("utf-8")
+        username, _, password = decoded.partition(":")
+    except (ValueError, UnicodeDecodeError):
+        return None
+    if not username or not password:
+        return None
+
+    from apps.mqtt_auth.models import MqttDeviceCredential
+    from apps.mqtt_auth.services import verify_password
+
+    credential = MqttDeviceCredential.objects.filter(username=username).first()
+    if credential is None or not verify_password(password, credential.password_hash):
+        return None
+    return credential
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def gateway_config(request, slot_id: str):
+    """GET /gateways/{id}/config/ — org/farm identity + MQTT endpoint +
+    credential shape. Never echoes the one-time plaintext password.
+    Authentication is resolved IN the view (device Basic vs manager JWT)
+    because the two callers use different auth systems."""
+    slot = GatewaySlot.objects.filter(pk=slot_id).first()
+    if slot is None:
+        return Response({"error": "gateway not found"}, status=404)
+
+    from apps.mqtt_auth.models import MqttDeviceCredential
+    from apps.mqtt_auth.services import gateway_config_payload
+
+    credential = MqttDeviceCredential.objects.filter(username=slot.slot_id).first()
+    device = _basic_device(request)
+    if device is None:
+        # Manager/owner JWT path.
+        claims = _claims(request)
+        org_id = claims.get("org_id") if claims else None
+        roles = set(claims.get("roles", [])) if claims else set()
+        if org_id is None and not request.user.is_authenticated:
+            return Response(
+                {"error": "gateway Basic credentials or manager role required"},
+                status=401,
+            )
+        if not (MANAGER_ROLES & roles):
+            return Response({"error": "manager role required"}, status=403)
+        if str(slot.org_id) != str(org_id):  # UUID vs claim-string comparison
+            return Response({"error": "gateway not found in caller organization"}, status=404)
+    elif device.username != slot.slot_id:
+        # A valid device identity asking about ANOTHER gateway is a probe.
+        return Response({"error": "gateway not found"}, status=404)
+
+    if slot.provisioning_status in ("REJECTED", "SUSPENDED"):
+        return Response(
+            {"error": f"gateway {slot.provisioning_status.lower()} — config locked"},
+            status=403,
+        )
+    return Response(gateway_config_payload(slot, credential))
+
+
+# ---------------------------------------------------------------------------
+# M5-08 — staged credential rotation (stub for the v0.3 command channel).
+# stage: new hash into pending (old stays active — no lockout); ack: promote
+# the pending hash ONLY when the device presents the new password. The
+# plaintext is returned exactly once, at stage time.
+# ---------------------------------------------------------------------------
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def rotate_credential(request, slot_id: str):
+    """ROTATE_CREDENTIAL: stage a rotation and return the new plaintext
+    password EXACTLY once. The old credential keeps working at the broker
+    until the device confirms the new one."""
+    org_id = _manager_or_error(request)
+    if org_id is None:
+        return Response({"error": "manager role required"}, status=403)
+    slot = _owned_slot(slot_id, org_id)
+    if slot is None:
+        return Response({"error": "gateway not found in caller organization"}, status=404)
+    if slot.provisioning_status != "PROVISIONED":
+        return Response(
+            {"error": f"rotation requires PROVISIONED gateway (status: {slot.provisioning_status})"},
+            status=409,
+        )
+
+    from apps.mqtt_auth.services import stage_rotation
+
+    raw = secrets.token_urlsafe(32)
+    stage_rotation(slot.slot_id, raw)
+    return Response({
+        "gateway_slot_id": slot.slot_id,
+        "username": slot.slot_id,
+        "password": raw,  # one-time issue; subsequent fetches see only the hash
+        "rotation_pending": True,
+    }, status=200)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def rotation_ack(request, slot_id: str):
+    """Commit-on-ACK: promote the staged hash when the presented password
+    matches it (proof the device received the rotated credential)."""
+    org_id = _manager_or_error(request)
+    if org_id is None:
+        return Response({"error": "manager role required"}, status=403)
+    slot = _owned_slot(slot_id, org_id)
+    if slot is None:
+        return Response({"error": "gateway not found in caller organization"}, status=404)
+
+    from apps.mqtt_auth.services import commit_pending_rotation
+
+    committed = commit_pending_rotation(
+        slot.slot_id, str(request.data.get("new_password", ""))
+    )
+    if not committed:
+        return Response({"error": "no staged rotation or password mismatch"}, status=409)
+    return Response({"gateway_slot_id": slot.slot_id, "rotation_committed": True})

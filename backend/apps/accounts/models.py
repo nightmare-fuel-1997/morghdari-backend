@@ -21,6 +21,10 @@ class User(AbstractUser):
     # GS-fix 2026-08-22 platform-support path flag; BYPASSRLS deliberately NOT
     # granted at the DB level (Security §4.5).
     is_platform_staff = models.BooleanField(default=False)
+    # M5-02: platform review role — "admin"/"support" are the DEFAULT
+    # reviewers per TASKS M5-02; `_can_review` in apps/provisioning/api.py
+    # reads this axis (superuser always passes). NULL = no platform role.
+    staff_role = models.CharField(max_length=30, null=True, blank=True)
 
     class Meta:
         db_table = "accounts_user"

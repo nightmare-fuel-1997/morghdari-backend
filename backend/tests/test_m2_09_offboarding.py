@@ -74,8 +74,13 @@ def test_full_offboarding_chain(seeded_rls_db):
 
     # 1. Access-token lifetime is the ONLY revocation guarantee: 15 min.
     payload = AccessToken(fresh["access_token"]).payload
-    assert payload["exp"] - payload["iat"] == 900
+    # SimpleJWT pairs the access exp to the refresh's issue instant while the
+    # access iat uses its own clock read; a second boundary between the two
+    # mints (borne by a slow/loaded CI runner) yields 899, never less — the
+    # 15-min guarantee (exp measured from pair issue) holds either way.
+    assert 899 <= payload["exp"] - payload["iat"] <= 900
     refresh_payload = RefreshToken(fresh["refresh_token"]).payload
+    # exp/iat of a single token share one current_time — always exact.
     assert refresh_payload["exp"] - refresh_payload["iat"] == 7 * 24 * 3600
 
     # 2. Owner deactivates via the REAL contract endpoint.

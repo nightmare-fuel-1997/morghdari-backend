@@ -76,6 +76,9 @@ class TenantOrgMiddleware:
         else:
             return self.get_response(request)  # ④ authenticated but org-less
 
+        if connection.vendor == "sqlite":
+            return self.get_response(request)
+
         with transaction.atomic():
             with connection.cursor() as cursor:
                 # Parameterized + tx-scoped (is_local=true): dies with COMMIT;

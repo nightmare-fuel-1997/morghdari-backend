@@ -93,7 +93,7 @@ def test_geo_sample_usable(seeded_rls_db):
 def test_seeds_idempotent(seeded_rls_db):
     from django.db import connection
 
-    from tests.conftest import SEED_MIGRATIONS, _sql_from_migration
+    from tests.conftest import SEED_MIGRATIONS, _execute_sql, _sql_from_migration
 
     def counts():
         return (
@@ -107,5 +107,5 @@ def test_seeds_idempotent(seeded_rls_db):
     # Re-run every seed payload — ON CONFLICT DO NOTHING must make it a no-op.
     with connection.cursor() as cursor:
         for path in SEED_MIGRATIONS:
-            cursor.execute(_sql_from_migration(path))
+            _execute_sql(cursor, _sql_from_migration(path))
     assert counts() == before

@@ -22,7 +22,18 @@ SUPPORTED_SCHEMA_VERSION = "2.0"   # Firmware Spec §3.8 — gates the parser
 DEDUP_TTL_SECONDS = 90_000         # ≥ EMQX session expiry (AU-fix invariant)
 STREAM_REALTIME = "telemetry:realtime"
 STREAM_HISTORICAL = "telemetry:historical"
+# M5-04 trust boundary: pre-approval telemetry is HELD here (FIFO), never
+# dropped and never allowed into the realtime/historical lanes until a farm
+# manager approves the gateway (drain dispatch) — or archived to the DLQ on
+# rejection (discard).
+STREAM_PENDING = "telemetry:pending_approval"
 STREAM_MAXLEN = 100_000            # Tracker AU-STREAMS: bounded, approximate
+
+# M5-04 statuses: telemetry from a gateway that is not yet provisioned is
+# held; a rejected or suspended gateway is archived to the DLQ with a reason.
+STATUS_PENDING_APPROVAL = "PENDING_APPROVAL"
+STATUS_REJECTED = "REJECTED"
+STATUS_SUSPENDED = "SUSPENDED"
 
 _last_recv_ts = [0.0]              # monotonic guard (single-threaded bridge)
 
@@ -65,12 +76,20 @@ def dedup_key(org_id: str, sensor_slot: str, device_ts: str) -> str:
     return f"dedup:{org_id}:{sensor_slot}:{device_ts}"
 
 
-def handle_message(redis_client, topic: str, payload: bytes, db_fetch=None) -> str | None:
+def handle_message(redis_client, topic: str, payload: bytes, db_fetch=None,
+                   status_fetch=None) -> str | None:
     """Process one MQTT message.
 
     Returns None on success/duplicate, or a DLQ entry id on rejection.
     `payload` is raw bytes exactly as received — they travel intact into the
     stream entry so workers never depend on this process's parsing choices.
+
+    M5-04 trust boundary (`status_fetch(gateway_slot_id) -> status|None`):
+    when a provisioning status record EXISTS for the gateway, its telemetry is
+    routed by status — PENDING_APPROVAL is held in STREAM_PENDING (FIFO until
+    approval drains it), REJECTED/SUSPENDED is archived to the DLQ with a
+    reason (never silently dropped, never inserted). No record (legacy/demo
+    worlds) flows normally.
     """
     # Gate 1 — transport identity.
     try:
@@ -116,6 +135,17 @@ def handle_message(redis_client, topic: str, payload: bytes, db_fetch=None) -> s
             return send_to_dlq(redis_client, topic, payload, UNKNOWN_SLOT)
         resolved.append((reading, slot_id))
 
+    # Gate 5.5 — M5-04 trust boundary: route by the gateway's provisioning
+    # status BEFORE anything is published. Absent record = legacy/demo world
+    # (flows normally); provisioned gateways flow; unapproved ones are held;
+    # rejected/suspended ones are archived with a reason. One status lookup
+    # per MESSAGE (a gateway's status is common to all its packs).
+    status = status_fetch(gateway_slot) if status_fetch is not None else None
+    if status in (STATUS_REJECTED, STATUS_SUSPENDED):
+        return send_to_dlq(
+            redis_client, topic, payload, f"gateway_{status.lower()}"
+        )
+
     # Gate 6 — per-slot dedup; duplicates skip publishing silently.
     fresh = []
     for reading, slot_id in resolved:
@@ -126,13 +156,17 @@ def handle_message(redis_client, topic: str, payload: bytes, db_fetch=None) -> s
         return None  # full duplicate — success, nothing to do
 
     # Gate 7 — enrich + XADD, one entry PER READING (workers derive saloon
-    # from the resolved slot). Lane by is_buffered; flat fields per decision
-    # Q4 incl recv_ts + trace_id; raw JSON travels untouched. Buffered
-    # publishes also bump the replay counter (Blueprint §4:139).
-    lane = STREAM_HISTORICAL if data.get("is_buffered") else STREAM_REALTIME
+    # from the resolved slot). Lane: pending (M5-04) when the gateway is not
+    # yet approved, else by is_buffered; flat fields per decision Q4 incl
+    # recv_ts + trace_id; raw JSON travels untouched. Buffered publishes also
+    # bump the replay counter (Blueprint §4:139).
+    if status == STATUS_PENDING_APPROVAL:
+        lane = STREAM_PENDING
+    else:
+        lane = STREAM_HISTORICAL if data.get("is_buffered") else STREAM_REALTIME
     raw_str = payload.decode("utf-8", errors="replace")
     for reading, slot_id in fresh:
-        if data.get("is_buffered"):
+        if data.get("is_buffered") and lane != STREAM_PENDING:
             redis_client.incr(f"replay:pending:{gateway_slot}")
         redis_client.xadd(
             lane,

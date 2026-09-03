@@ -25,7 +25,9 @@ from .base import *  # noqa: F401,F403
 # very first run while local sqlite runs never executed that branch.
 from .base import _database_from_url  # noqa: F401
 
-DEBUG = False
+# DEBUG enables the GATED demo-console routes (config/urls.py) so the demo
+# dashboard tests can exercise them; test env by definition, never prod.
+DEBUG = True
 ALLOWED_HOSTS = ["localhost", "127.0.0.1", "test"]
 
 # 32+ bytes so SimpleJWT's HS256 signing stops raising InsecureKeyLengthWarning
@@ -66,3 +68,6 @@ else:
             "NAME": ":memory:",
         }
     }
+
+# SQLite cannot create the Timescale hypertable used by SaloonTelemetry; keep
+# the model available in fast local tests by creating its table from state.

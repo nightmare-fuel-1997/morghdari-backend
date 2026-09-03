@@ -32,10 +32,10 @@ from apps.geography.models import City, Province
 from apps.tenants.models import Organization
 from morghdari.subscriber.pipeline import handle_message
 
-from tests.conftest import INTEGRATION_REDIS_URL as REDIS_URL  # noqa: E402
+from tests.conftest import INTEGRATION_REDIS_URL as REDIS_URL, redis_base_url  # noqa: E402
 
 # Dedicated scratch logical DB for this module: wiped per test.
-SCRATCH_REDIS_URL = "redis://:dev_redis_password@localhost:6379/14"
+SCRATCH_REDIS_URL = redis_base_url() + "/14"
 
 
 @pytest.fixture(autouse=True)

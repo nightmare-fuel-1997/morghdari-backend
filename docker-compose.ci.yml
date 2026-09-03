@@ -1,6 +1,8 @@
 # =============================================================================
-# CI Compose — ephemeral TimescaleDB + Redis + pytest. THE acceptance gate.
-#   docker compose -f docker-compose.ci.yml run --rm test
+# CI Compose — ephemeral TimescaleDB + Redis + pytest + real EMQX. The
+# acceptance gate.
+#   docker compose -f docker-compose.ci.yml run --rm test         (pytest)
+#   docker compose -f docker-compose.ci.yml run --rm live-verify  (real-EMQX M5-07/08)
 #
 # فارسی: سرویس‌های یک‌بارمصرف برای CI؛ گیتِ پذیرش M0/M1 همین‌جاست — سبز یعنی قبول.
 #
@@ -45,6 +47,61 @@ services:
   redis:
     image: redis:7-alpine
 
+  # Real EMQX for the `live-verify` job — M5-07 authn/authz/revoke and M5-08
+  # rotation are broker semantics that mocked tests cannot prove. Same broker
+  # profile as docker-compose.dev.yml / start_demo_stack.sh run_emqx:
+  # built-in-DB authn, deny-by-default authorization, management-API key
+  # bootstrap (EMQX 5.5 /api/v5 requires API keys; emqx_provision.py and the
+  # live verifier need it). NO data volume: each run gets a FRESH broker, so
+  # the verify's revoke-to-empty and rotation assertions start from zero.
+  # C-05: EMQX 5.5 requires mechanism alongside backend.
+  emqx:
+    image: emqx:5.5
+    environment:
+      EMQX_DASHBOARD__DEFAULT_PASSWORD: "dev_password"
+      EMQX_DASHBOARD__LISTENERS__HTTP__AUTH_TYPE: "basic"
+      EMQX_AUTHENTICATION__1__MECHANISM: "password_based"
+      EMQX_AUTHENTICATION__1__BACKEND: "built_in_database"
+      EMQX_AUTHORIZATION__NO_MATCH: "deny"
+      EMQX_API_KEY__BOOTSTRAP_FILE: "/opt/emqx/etc/api_keys"
+    volumes:
+      - ./scripts/emqx-api-keys.txt:/opt/emqx/etc/api_keys:ro
+    healthcheck:
+      test: ["CMD", "emqx", "ctl", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # Real-broker acceptance job: seeds the broker exactly like the demo stack
+  # (emqx_provision.py — bcrypt authn chain, per-farm sim users + subscriber,
+  # built-in-DB authz source, no_match=deny) then runs scripts/live_verify_emqx.py
+  # (10 checks over real MQTT + the management API). Non-zero exit fails CI.
+  # The repo-root scripts/ dir is mounted read-only — the test image packages
+  # only ./backend; the farm manifest is generated on the fly (CI has no DB).
+  live-verify:
+    build:
+      context: ./backend
+      target: test
+    depends_on:
+      emqx:
+        condition: service_healthy
+    environment:
+      EMQX_API_URL: http://emqx:18083
+      EMQX_API_USER: demo-admin
+      EMQX_API_PASS: dev_password
+      EMQX_MQTT_HOST: emqx
+      EMQX_MQTT_PORT: "1883"
+    volumes:
+      - ./scripts:/scripts:ro
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        python -c "import json; json.dump({'farms': [{'id': 1}]}, open('/tmp/farm_manifest.json', 'w'))"
+        python /scripts/emqx_provision.py --manifest /tmp/farm_manifest.json --base-url http://emqx:18083
+        python /scripts/live_verify_emqx.py
+
   test:
     build:
       context: ./backend
@@ -57,7 +114,7 @@ services:
     environment:
       # Single-env convention (Blueprint §2) — same dialect as prod compose.
       DATABASE_URL: postgres://morghdari_test:ci_password_only@postgres:5432/morghdari_test
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://redis:6379
       DJANGO_SETTINGS_MODULE: config.settings.test
       MORGHDARI_INITDB_DIR: /initdb
     # The image packages ONLY ./backend (§8 build context); the bootstrap SQL

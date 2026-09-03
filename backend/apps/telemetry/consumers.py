@@ -37,6 +37,7 @@ from apps.system_config.models import SystemConfiguration
 from apps.telemetry.models import SaloonTelemetry
 from morghdari.subscriber.pipeline import (
     STREAM_HISTORICAL,
+    STREAM_PENDING,
     STREAM_REALTIME,
     trim_streams,
 )
@@ -162,10 +163,16 @@ def touch_sensor_status(client, pairs) -> None:
         client.set(sensor_status_key(saloon_id, slot_id), "ONLINE", ex=ttl)
 
 
-def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None) -> int:
+def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None,
+                 gateway_slot: str | None = None) -> int:
     """One consumer cycle: read NEW entries PLUS this consumer's own pending
     ones (crash recovery between read and ack), insert per-org batches,
-    COMMIT, THEN ack. Returns entries processed."""
+    COMMIT, THEN ack. Returns entries processed.
+
+    M5-05: when `gateway_slot` is given (approval drain on STREAM_PENDING),
+    ONLY that gateway's entries are processed and acked — other gateways'
+    held telemetry stays queued in FIFO order inside the pending stream.
+    """
     client = _redis()
     _ensure_group(client, stream)
     consumer = _consumer_name()
@@ -192,6 +199,8 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None) -> in
         ids: list[str] = []
         raw_entries: list[tuple[str, dict]] = []  # (org_id_str, fields)
         for entry_id, fields in entries:
+            if gateway_slot is not None and fields.get("gateway_slot_id") != gateway_slot:
+                continue  # M5-05: another gateway's held telemetry stays put
             first_sight = entry_id not in seen_ids
             seen_ids.add(entry_id)
             ids.append(entry_id)
@@ -299,6 +308,30 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None) -> in
 
     trim_streams(client)  # M3-07: bounded streams on every touch
     return len(acked)  # unique entries acknowledged; row count may be lower
+
+
+def discard_pending_for_gateway(client, gateway_slot: str, reason: str = "gateway_rejected") -> int:
+    """M5-05 reject path: archive a rejected gateway's held telemetry to the
+    DLQ (with a reason) and remove it from the pending stream — discarded but
+    never silently lost. Returns the number of entries archived."""
+    from morghdari.subscriber.dlq import send_to_dlq
+
+    entries = list(client.xrange(STREAM_PENDING, min="-", max="+"))
+    victims = [
+        (entry_id, fields)
+        for entry_id, fields in entries
+        if fields.get("gateway_slot_id") == gateway_slot
+    ]
+    for entry_id, fields in victims:
+        send_to_dlq(
+            client,
+            fields.get("gateway_slot_id", "unknown-topic"),
+            fields.get("payload", ""),
+            reason,
+        )
+    if victims:
+        client.xdel(STREAM_PENDING, *(entry_id for entry_id, _ in victims))
+    return len(victims)
 
 
 @shared_task(name="telemetry.process_realtime_payload")

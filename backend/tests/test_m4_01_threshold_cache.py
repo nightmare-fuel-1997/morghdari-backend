@@ -19,8 +19,11 @@ import pytest
 import redis as redis_lib
 
 # ISOLATED scratch logical DB for the threshold service (flushed per test).
-# Set BEFORE the service's lazy first Redis call.
-SCRATCH_REDIS_URL = "redis://:dev_redis_password@localhost:6379/10"
+# Set BEFORE the service's lazy first Redis call. Derived from the env URL
+# so host runs use localhost and Docker CI uses the redis service name.
+from tests.conftest import redis_base_url  # noqa: E402
+
+SCRATCH_REDIS_URL = redis_base_url() + "/10"
 os.environ["REDIS_URL"] = SCRATCH_REDIS_URL
 
 from django.contrib.auth import get_user_model  # noqa: E402
