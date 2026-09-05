@@ -1,5 +1,25 @@
 # Progress — v0.5 Provisioning + Zero-Touch
 
+## Full verification — 2026-09-05 (BOTH GATES GREEN)
+
+- **CI gate**: `docker compose -f docker-compose.ci.yml -p morghdari_ci run --rm
+  --build test` → **284 passed, 3 skipped, 89.24% coverage** (fresh build,
+  TimescaleDB 2.29.2-pg16 + redis:7-alpine).
+- **Live broker verification**: `run --rm live-verify` → **10/10 PASS**
+  against real EMQX 5.5 (plaintext authn-user creation, wrong-password
+  CONNECT rejection, allow-rule publish delivered, revoke-to-empty drops
+  delivery, rotation commit: new password connects, old rejected).
+- **Pitfall found & fixed (stale `--reuse-db`)**: the Aug-24 `morghdari_ci`
+  postgres container was only STARTED (not recreated), so its anonymous
+  volume held a v0.4-era `test_morghdari_test`. Under
+  `--nomigrations --reuse-db`, `migrate --run-syncdb` creates MISSING
+  tables but never ALTERs existing ones → v0.5's `accounts.0002`
+  (`staff_role`) was absent → 103 failed / 39 errors on the first run.
+  Fix: `DROP DATABASE test_morghdari_test` and re-run (fresh DB from
+  current models). CI project torn down afterwards so every future gate
+  run starts fresh; same trap will bite again if a CI postgres container
+  survives a schema-adding change — drop the test DB or `down` first.
+
 ## Validation — 2026-09-02 (SUITE GREEN)
 
 Full backend suite against the Docker CI stack
@@ -55,8 +75,14 @@ Full backend suite against the Docker CI stack
   Both are scoped to SQLite/test and never weaken the PostgreSQL/RLS
   production path (CI runs PostgreSQL exclusively).
 
-## Next
+## Next — M5-10 (2026-09-05, CLOSED by owner decision)
 
-- M5-10 owner steps: tag `v0.5`, record the WALKTHROUGH demo, KB/docs
-  repo sync of the v0.5 release notes (backend_docs).
-- v0.5 → v0.6 planning on owner go.
+- ✅ Tag `v0.5` created locally on `8b94218` (annotated, verified via
+  `git cat-file -t v0.5` → `tag`).
+- ✅ Push waived (owner 2026-09-05) — tag stays local.
+- ✅ WALKTHROUGH demo recording waived for now (owner 2026-09-05) —
+  the full 6-step drill remains in `versions/v0.5/WALKTHROUGH.md`
+  and can be run/recorded later on owner request.
+- Docs-side v0.5 release notes already in backend_docs
+  (`docs/releases/v0.5.md`).
+- Next: v0.6 planning on owner go (spiral gate satisfied by owner waiver).
