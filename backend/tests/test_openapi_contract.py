@@ -60,16 +60,6 @@ ERRATUM_PENDING = {
 # over 5 endpoints) and M6-03 (5 routes over 3 endpoints). Shrinks to ∅ by
 # M6-08 — a stale entry fails exactly like a missing one.
 KNOWN_GAPS = {
-    # M6-02 — v1.3 KPI/dashboard
-    ("get", "/saloons/{saloon_id}/flocks/{flock_id}/weight-samples/"),
-    ("post", "/saloons/{saloon_id}/flocks/{flock_id}/weight-samples/"),
-    ("get", "/saloons/{saloon_id}/flocks/{flock_id}/feed-intake/"),
-    ("post", "/saloons/{saloon_id}/flocks/{flock_id}/feed-intake/"),
-    ("get", "/saloons/{saloon_id}/kpis/"),
-    ("get", "/me/dashboard-config/"),
-    ("put", "/me/dashboard-config/"),
-    ("get", "/dashboard-config/{role}/"),
-    ("put", "/dashboard-config/{role}/"),
     # M6-03 — v1.4 water/biosecurity/capabilities
     ("get", "/saloons/{saloon_id}/flocks/{flock_id}/water-intake/"),
     ("post", "/saloons/{saloon_id}/flocks/{flock_id}/water-intake/"),
