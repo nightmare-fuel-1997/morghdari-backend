@@ -1,0 +1,2353 @@
+openapi: "3.0.3"
+info:
+  title: Morghdari Poultry Monitoring API
+  version: "1.5.0"
+  description: |
+    REST API for the Morghdari multi-tenant poultry monitoring platform.
+    WebSocket protocol is documented separately in the Frontend Integration Spec.
+
+    v1.5.0 (2026-09-04 owner-approved plan, Tracker §4n): Daily Reports +
+    Ticketing + Panel Permissions + Alert Subscriptions + Farm Events. New role
+    `reviewer` (READ-ONLY on daily reports org-wide, no approve/reject).
+    Report state machine DRAFT→SUBMITTED→APPROVED/REJECTED plus FLAGGED branch
+    (report WITH medication → FLAGGED + auto medical ticket + WS push to
+    doctor); edit time-lock same calendar day Asia/Tehran, cutoff 00:00 sharp.
+    Panels default OPEN (can_view=true); per-role/user overrides via /panels/.
+    Alert subscriptions mute a category but NEVER Tier-1 velocity (DECISION
+    6=A, owner 2026-09-04 — Decision 10 stands, NH3/temp velocity always page;
+    mute checked before every send, audit digest per suppression). Farm event
+    reminders 24h before scheduled_at via alarm+SMS (notification_deliveries).
+    support_tickets extends the doctor_tickets pattern (no new messaging system).
+
+    v1.4.5 (2026-08-26 erratum, Tracker §4k/§4l): AlertInstance.metric_type
+    enum widened with thi, co, power_mains, power_gen for the alert engine
+    (v0.4). Documentation-only; these rows were already emittable.
+
+    v1.4.4 (2026-08-25 erratum, Tracker §4j): /platform/support/session/ response
+    now explicitly documents access_token — the description always said a scoped
+    token is returned but the schema never listed the field.
+
+    v1.4.3 (2026-08-25 auth & tenancy resolution session, Tracker §4j): adds
+    org-member management — GET/POST /org/members/ and POST
+    /org/members/{member_id}/deactivate/. Writes are owner-exclusive;
+    deactivate sets is_active=false (never deletes); inviting over an INACTIVE
+    membership REACTIVATES it (HTTP 200) — 409 fires only on an already-ACTIVE
+    membership. No schema change: UNIQUE(org_id, user_id) stands.
+
+    v1.4.2 (2026-08-23 third-pass review): POST /saloons/{saloon_id}/flocks/ now
+    REQUIRES placement_count (NOT NULL in database.md — without it every flock
+    creation violated the schema) and accepts optional day_old_weight_g.
+    Found by the versions/ curriculum audit; tracked as Tracker §4i.
+
+    v1.4.1 (2026-08-23 resolution session, Tracker §4i): POST /provisioning/sync/
+    documents its 409 Conflict response (per-gateway concurrent-sync lock).
+    Refresh-token rotation is intentionally NOT part of this contract — the feature
+    is disabled server-side (owner decision 2026-08-23).
+
+    v1.4.0 (GS-fix 2026-08-22, Saas Decision 23 — Capability-Based Modularity):
+    water-intake logging (manual, device-ready), farm biosecurity event log, and
+    GET /saloons/{id}/capabilities/ — the per-saloon capability profile: every
+    optional feature reports available / unavailable + missing inputs + enable
+    path. New sensor keys (water_l, co, power_mains, power_gen) flow through the
+    metric catalog with zero further contract change.
+    
+    v1.3.0 (GS-fix 2026-08-22, Saas Decision 22): flock production KPIs — weight
+    samples + feed intake logging (FCR inputs, manual entry), the KPI query
+    endpoint (mortality %, compliance %, FCR, cycle summary), and per-actor
+    dashboard widget toggles (role defaults + personal overrides).
+    
+    v1.2.0 (GS-fix 2026-08-22): platform support — the org-context session endpoint
+    plus the three whitelisted support-op endpoints (Actor Map "Platform Support
+    Engineer", Security §4.5). v1.1 paths are unchanged.
+    
+    v1.1.0 (R3-fix 2026-08-16): adds the operability endpoints required by the
+    documented flows — FM provisioning approve/reject, alert acknowledgement,
+    saloon operational-state transitions, flock cycles, gateway requests + review,
+    and the extended /health/ payload. v1.0 paths are unchanged.
+    
+    Base URL: https://api.morghdari.com/api/v1/
+    
+    Authentication: Bearer JWT (15-min access token, 7-day refresh token).
+
+servers:
+  - url: https://api.morghdari.com/api/v1
+    description: Production
+  - url: http://localhost:8000/api/v1
+    description: Local development
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    GatewayBasicAuth:
+      type: http
+      scheme: basic
+      description: >
+        Gateway device authentication for the zero-touch config endpoint.
+        Username = gateway_slot_id, password = the current MQTT credential
+        (validated against mqtt_device_credentials). See
+        design-zero-touch-provisioning.md §3.1.
+
+  schemas:
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          example: tom@goldenegg.com
+        password:
+          type: string
+          format: password
+
+    LoginResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+        user:
+          $ref: '#/components/schemas/UserProfile'
+
+    UserProfile:
+      type: object
+      properties:
+        id:
+          type: integer
+        username:
+          type: string
+        roles:
+          type: array
+          items:
+            type: string
+            enum: [owner, manager, engineer, doctor, worker, installer, reviewer]
+          example: ["owner", "doctor"]
+        org_id:
+          type: string
+          format: uuid
+        org_name:
+          type: string
+        is_platform_staff:
+          type: boolean
+
+    RefreshRequest:
+      type: object
+      required: [refresh]
+      properties:
+        refresh:
+          type: string
+
+    RefreshResponse:
+      type: object
+      properties:
+        access:
+          type: string
+
+    TelemetryReading:
+      type: object
+      properties:
+        server_received_ts:
+          type: string
+          format: date-time
+        device_ts:
+          type: string
+          format: date-time
+        is_buffered:
+          type: boolean
+        buffered_delay_mins:
+          type: number
+          nullable: true
+          description: Minutes between device_ts and server_received_ts (GENERATED column, always computed); values near 0 for non-buffered readings
+        slot_id:
+          type: string
+          example: S01-PACK-A
+        metrics:
+          type: object
+          description: |
+            Map of metric_key -> {avg, min, max}. Keys come from sensor_metric_types catalog.
+            Example: {"temp": {"avg": 28.4, "min": 27.1, "max": 29.2},
+                      "co2":  {"avg": 800,  "min": 750,  "max": 850}}
+            Velocity-capable metrics may include max_ts (second offset 0-59).
+
+    MetricRange:
+      type: object
+      properties:
+        avg:
+          type: number
+        min:
+          type: number
+        max:
+          type: number
+
+    MetricRangeMaxTs:
+      allOf:
+        - $ref: '#/components/schemas/MetricRange'
+        - type: object
+          properties:
+            max_ts:
+              type: integer
+              description: Second offset (0-59) when max value was recorded
+
+    AlertInstance:
+      type: object
+      properties:
+        alert_id:
+          type: string
+          format: uuid
+        metric_type:
+          type: string
+          enum: [thi, co, power_mains, power_gen, temp, humidity, nh3, lux]
+        current_status:
+          type: string
+          enum: [ACTIVE_TIER_1, ACTIVE_TIER_2, ACTIVE_TIER_3, RESOLVED]
+        current_value:
+          type: number
+          format: float
+          nullable: true
+          description: Last observed breach value at triggering; null for legacy/replay rows (Audit T3)
+        source:
+          type: string
+          enum: [REALTIME, REPLAY_ANALYSIS]
+        triggered_at:
+          type: string
+          format: date-time
+        resolved_at:
+          type: string
+          format: date-time
+          nullable: true
+        highest_tier_reached:
+          type: integer
+
+    Province:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+
+    City:
+      type: object
+      properties:
+        id:
+          type: integer
+        province_id:
+          type: integer
+        name:
+          type: string
+
+    Village:
+      type: object
+      properties:
+        id:
+          type: integer
+        city_id:
+          type: integer
+        name:
+          type: string
+
+    SaloonPosition:
+      type: object
+      properties:
+        id:
+          type: integer
+        saloon_id:
+          type: integer
+        label:
+          type: string
+          description: e.g. 'North Wall', 'South Wall', 'East Wall', 'West Wall'
+
+    SensorSlot:
+      type: object
+      properties:
+        slot_id:
+          type: string
+        position_id:
+          type: integer
+        position_label:
+          type: string
+        is_active:
+          type: boolean
+
+    FarmLocationRef:
+      type: object
+      properties:
+        province_id:
+          type: integer
+        province_name:
+          type: string
+        city_id:
+          type: integer
+        city_name:
+          type: string
+        village_id:
+          type: integer
+          nullable: true
+        village_name:
+          type: string
+          nullable: true
+
+    SaloonDetail:
+      type: object
+      properties:
+        saloon_id:
+          type: string
+        name:
+          type: string
+        farm_id:
+          type: integer
+        farm_name:
+          type: string
+        locations:
+          $ref: '#/components/schemas/FarmLocationRef'
+        org_id:
+          type: string
+          format: uuid
+        operational_state:
+          type: string
+          enum: [EMPTY_SANITATION, PRE_HEATING, ACTIVE_FLOCK, HARVESTED_VACANT]
+        flock_age_days:
+          type: integer
+          nullable: true
+        gateway_slot_id:
+          type: string
+          nullable: true
+        gateway_status:
+          type: string
+          enum: [ONLINE, OFFLINE, null]
+          nullable: true
+        sensor_slots:
+          type: array
+          items:
+            $ref: '#/components/schemas/SensorSlot'
+
+    FarmOverviewSaloon:
+      type: object
+      properties:
+        saloon_id:
+          type: string
+        name:
+          type: string
+        operational_state:
+          type: string
+        flock_age_days:
+          type: integer
+          nullable: true
+        gateway_status:
+          type: string
+          nullable: true
+          enum: [ONLINE, OFFLINE]
+        active_alert_count:
+          type: integer
+        highest_active_tier:
+          type: integer
+          nullable: true
+
+    # ⚠️ NOTE: FarmDetail and FarmOverview were previously duplicated.
+    # Consolidated: FarmDetail now aliases FarmOverview via $ref.
+    # Both schemas are identical. Use FarmOverview in all endpoint responses.
+    FarmDetail:
+      $ref: '#/components/schemas/FarmOverview'
+
+    FarmOverview:
+      type: object
+      properties:
+        farm_id:
+          type: integer
+        name:
+          type: string
+        locations:
+          $ref: '#/components/schemas/FarmLocationRef'
+        saloons:
+          type: array
+          items:
+            $ref: '#/components/schemas/FarmOverviewSaloon'
+
+    HourlyAnalyticsBucket:
+      type: object
+      properties:
+        bucket_hr:
+          type: string
+          format: date-time
+        avg:
+          type: number
+        high_variance:
+          type: boolean
+
+    HourlyAnalyticsResponse:
+      type: object
+      properties:
+        metric:
+          type: string
+        slot_id:
+          type: string
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/HourlyAnalyticsBucket'
+
+    TelemetryResponse:
+      type: object
+      properties:
+        saloon_id:
+          type: string
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/TelemetryReading'
+
+    ActiveAlertsResponse:
+      type: object
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/AlertInstance'
+
+    HealthCheckResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded]
+        version:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        services:
+          type: object
+          properties:
+            database:
+              type: object
+              properties:
+                status:
+                  type: string
+                connections:
+                  type: integer
+                max_connections:
+                  type: integer
+                latency_ms:
+                  type: number
+            redis:
+              type: object
+              properties:
+                status:
+                  type: string
+                ping_ms:
+                  type: number
+                memory_usage_mb:
+                  type: number
+                queue_depth:
+                  type: object
+                  properties:
+                    realtime:
+                      type: integer
+                    historical:
+                      type: integer
+                    pending_approval:
+                      type: integer
+                      description: Unapproved-gateway telemetry buffer (v1.1)
+                insert_buffer_length:
+                  type: integer
+                  description: Rows awaiting batch flush to TimescaleDB (v1.1)
+            subscriber:
+              type: object
+              description: Subscriber tier (v1.1 — DR T4b observability)
+              properties:
+                group_members:
+                  type: integer
+                  description: Live shared-subscription members; < 2 is a CRITICAL condition
+            celery:
+              type: object
+              properties:
+                status:
+                  type: string
+                active_workers:
+                  type: integer
+                queue_depth:
+                  type: integer
+            emqx:
+              type: object
+              properties:
+                status:
+                  type: string
+                connected_clients:
+                  type: integer
+                messages_rate:
+                  type: number
+
+    ProvisioningSyncRequest:
+      type: object
+      required: [gateway_slot_id, saloon_assignments, sensor_slot_mappings]
+      properties:
+        gateway_slot_id:
+          type: string
+        saloon_assignments:
+          type: array
+          items:
+            type: integer
+        sensor_slot_mappings:
+          type: array
+          items:
+            type: object
+            properties:
+              pack_id:
+                type: string
+              slot_id:
+                type: string
+              position_id:
+                type: integer
+                description: ID of the saloon_position to bind this sensor slot to
+        hardware_replacements:
+          type: array
+          description: Optional — hardware replacements performed on-site, pending FM approval
+          items:
+            type: object
+            properties:
+              slot_id:
+                type: string
+                description: The logical slot being replaced (sensor or gateway)
+              old_hardware_id:
+                type: string
+                description: Hardware serial being removed
+              new_hardware_id:
+                type: string
+                description: New hardware serial being installed
+        installer_notes:
+          type: string
+
+    LocationTreeVillage:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+
+    LocationTreeCity:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        villages:
+          type: array
+          items:
+            $ref: '#/components/schemas/LocationTreeVillage'
+        farms:
+          type: array
+          items:
+            type: object
+            properties:
+              farm_id:
+                type: integer
+              name:
+                type: string
+
+    LocationTreeProvince:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        cities:
+          type: array
+          items:
+            $ref: '#/components/schemas/LocationTreeCity'
+
+    TimeResponse:
+      type: object
+      properties:
+        unix_ts:
+          type: integer
+          description: Current Unix timestamp in seconds (NTP fallback for gateways)
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+
+    GatewayConfigResponse:
+      type: object
+      description: >
+        Full gateway configuration delivered on first connection (zero-touch
+        provisioning). Built by joining farms, saloons, gateway_saloon_zones,
+        saloon_positions and saloon_sensor_slots. AU-fix 2026-08-16 (R2/R6
+        alignment): carries org_id + farm_id (the gateway needs them for its
+        topic prefix) and deliberately OMITS slot_id everywhere — the gateway
+        must not persist slot mappings; it publishes bare pack_ids and the
+        backend resolves them via gateway_sensor_mapping. All numeric IDs are
+        integers. See design-zero-touch-provisioning.md §3.1.
+      required: [gateway_slot_id, org_id, farm_id, farm, saloon_zones, mqtt_broker]
+      properties:
+        gateway_slot_id:
+          type: string
+          example: "GW-001"
+        org_id:
+          type: string
+          format: uuid
+          description: Tenant UUID — first segment of every MQTT topic the gateway publishes to
+        farm_id:
+          type: integer
+          description: Second topic segment
+        farm:
+          type: object
+          properties:
+            id:
+              type: integer
+            name:
+              type: string
+            location:
+              type: object
+              properties:
+                province:
+                  type: string
+                city:
+                  type: string
+                village:
+                  type: string
+                  nullable: true
+        saloon_zones:
+          type: array
+          items:
+            type: object
+            properties:
+              saloon_id:
+                type: integer
+              name:
+                type: string
+              positions:
+                type: array
+                description: Local display/labeling info only — NO slot_id (R2)
+                items:
+                  type: object
+                  properties:
+                    position_id:
+                      type: integer
+                    name:
+                      type: string
+                    pack_id:
+                      type: string
+        mqtt_broker:
+          type: object
+          properties:
+            host:
+              type: string
+              example: "mqtt.morghdari.com"
+            port:
+              type: integer
+              example: 8883
+            tls:
+              type: boolean
+              example: true
+
+    OrgMemberInviteRequest:
+      type: object
+      required: [username, role]
+      properties:
+        username:
+          type: string
+          example: new.worker@goldenegg.com
+        role:
+          type: string
+          enum: [owner, manager, engineer, doctor, worker, installer, reviewer]
+
+    OrgMemberOut:
+      type: object
+      properties:
+        member_id:
+          type: integer
+          description: org_members.id
+        user_id:
+          type: integer
+        username:
+          type: string
+        role:
+          type: string
+          enum: [owner, manager, engineer, doctor, worker, installer, reviewer]
+        is_active:
+          type: boolean
+        joined_at:
+          type: string
+          format: date-time
+
+paths:
+  /auth/login/:
+    post:
+      tags: [Authentication]
+      summary: Login and receive JWT tokens
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Successful login
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          description: Invalid credentials
+
+  /auth/token/refresh/:
+    post:
+      tags: [Authentication]
+      summary: Refresh JWT access token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '200':
+          description: Token refreshed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefreshResponse'
+        '401':
+          description: Invalid or expired refresh token
+
+  /saloons/{saloon_id}/:
+    get:
+      tags: [Saloon]
+      summary: Get saloon detail with sensor slot info
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - name: saloon_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Saloon details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SaloonDetail'
+        '403':
+          description: Forbidden — user not in the target org
+        '404':
+          description: Saloon not found
+
+  /saloons/{saloon_id}/telemetry/:
+    get:
+      tags: [Telemetry]
+      summary: Get telemetry readings (gap-fill or historical)
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - name: saloon_id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: since
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: until
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: slot_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: include_buffered
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Telemetry readings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TelemetryResponse'
+
+  /saloons/{saloon_id}/alerts/:
+    get:
+      tags: [Alerts]
+      summary: Get active or historical alerts for a saloon
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - name: saloon_id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [ACTIVE, ALL]
+            default: ACTIVE
+        - name: source
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [REALTIME, REPLAY_ANALYSIS]
+      responses:
+        '200':
+          description: Alert instances
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActiveAlertsResponse'
+
+  /saloons/{saloon_id}/analytics/hourly/:
+    get:
+      tags: [Analytics]
+      summary: Get hourly aggregated analytics for charts
+      description: |
+        Queries metric_hourly_aggregates (built by Celery scheduled task).
+        metric param accepts any metric_key from sensor_metric_types catalog.
+        New sensor types (CO2, noise, pressure) work automatically.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - name: saloon_id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: from
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - name: metric
+          in: query
+          required: true
+          schema:
+            type: string
+            description: Any metric_key from sensor_metric_types (e.g., temp, humidity, lux, nh3, co2)
+        - name: slot_id
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Hourly analytics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HourlyAnalyticsResponse'
+
+  /farms/{farm_id}/overview/:
+    get:
+      tags: [Farms]
+      summary: Get farm dashboard overview with saloon cards
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - name: farm_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Farm overview
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FarmOverview'
+
+  /provisioning/location-tree/:
+    get:
+      tags: [Provisioning]
+      summary: Get the full location hierarchy for the installer tree panel
+      description: |
+        Returns all provinces. The installer drills down: province → cities → villages → farms.
+        Each level scopes the next. This endpoint is cached server-side for 1 hour.
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Location tree
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LocationTreeProvince'
+
+  /provisioning/provinces/:
+    get:
+      tags: [Provisioning]
+      summary: List all provinces
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Province list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Province'
+
+  /provisioning/cities/:
+    get:
+      tags: [Provisioning]
+      summary: List cities in a province
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - name: province_id
+          in: query
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: City list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/City'
+
+  /provisioning/villages/:
+    get:
+      tags: [Provisioning]
+      summary: List villages in a city
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - name: city_id
+          in: query
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Village list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Village'
+
+  /provisioning/saloons/{saloon_id}/positions/:
+    get:
+      tags: [Provisioning]
+      summary: List sensor positions in a saloon
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - name: saloon_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Position list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SaloonPosition'
+
+  /provisioning/sync/:
+    post:
+      tags: [Provisioning]
+      summary: Sync offline installer data (PWA)
+      description: >
+        AU-fix 2026-08-16: callers MUST hold the `installer` role for the
+        target org (scope-checked via account_role_scopes) — this endpoint
+        atomically rewrites provisioning topology (zones, sensor mappings,
+        hardware replacements) and flips provisioning_status.
+        Server derives gateway_hardware_id from the ACTIVE
+        gateway_hardware_registry row of the gateway slot (the request carries
+        only pack_id/slot_id/position_id) and upserts gateway_sensor_mapping.
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProvisioningSyncRequest'
+      responses:
+        '200':
+          description: Sync accepted, provisioning status → PENDING_APPROVAL (FM review pending)
+        '400':
+          description: Invalid payload — missing required fields
+        '403':
+          description: Caller does not hold the installer role for the target org (AU-fix 2026-08-16)
+        '409':
+          description: |
+            Concurrent sync already in progress for this gateway_slot_id
+            (per-slot Redis lock, Blueprint §6 / AU-RACES closed 2026-08-23).
+            Retry after the Retry-After interval (seconds). No partial topology is written.
+
+  /provisioning/gateways/{gateway_slot_id}/approve/:
+    post:
+      tags: [Provisioning]
+      summary: Farm Manager approves a pending gateway (v1.1)
+      description: >
+        Requires the manager role for the target org (R3-fix 2026-08-16: this gate
+        was the heart of D18/R3 but had no endpoint). Writes provisioning_audit_log,
+        flips status PENDING_APPROVAL → PROVISIONED, deletes the
+        gateway:status:{slot} cache key in the same transaction, and dispatches
+        provisioning.drain_pending_approval to move buffered telemetry into the
+        real-time pipeline.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - name: gateway_slot_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                notes: { type: string }
+      responses:
+        '200':
+          description: Approved — status PROVISIONED, pending telemetry draining
+        '403':
+          description: Caller is not a Farm Manager for the target org
+        '404':
+          description: Gateway slot not found or not in PENDING_APPROVAL
+
+  /provisioning/gateways/{gateway_slot_id}/reject/:
+    post:
+      tags: [Provisioning]
+      summary: Farm Manager rejects a pending gateway (v1.1)
+      description: >
+        Status → REJECTED (terminal). Buffered telemetry:pending_approval entries for
+        this gateway are discarded (optionally archived). Requires the manager role.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - name: gateway_slot_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string }
+      responses:
+        '200':
+          description: Rejected — pending buffer discarded
+        '403':
+          description: Caller is not a Farm Manager for the target org
+        '404':
+          description: Gateway slot not found
+
+  /alerts/{alert_id}/acknowledge/:
+    post:
+      tags: [Alerts]
+      summary: Normal Worker acknowledges a Tier 1 alert — pauses escalation (v1.1)
+      description: >
+        Writes alert_acknowledgements AND the alert:paused:{alert_id} Redis key in
+        one transaction (TTL = pause window, default 10 min from
+        system_configuration.alert_acknowledgement_pause_minutes).
+        The acknowledgement row carries org_id derived server-side from the JWT
+        org claim (C-10, 2026-08-24) — never taken from client input.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - name: alert_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                notes: { type: string }
+      responses:
+        '200':
+          description: Acknowledged — escalation paused for the configured window
+        '403':
+          description: Caller is not an assigned worker/engineer for the saloon
+
+  /saloons/{saloon_id}/operational-state/:
+    post:
+      tags: [Saloon]
+      summary: Transition saloon operational state (v1.1)
+      description: >
+        Requires engineer+ role. Writes saloon_operational_states (history row,
+        closes the previous one). ACTIVE_FLOCK is blocked/warned when temp is
+        outside ±active_flock_temp_tolerance_c of the pre-heat target (Audit A6).
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - name: saloon_id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [state]
+              properties:
+                state:
+                  type: string
+                  enum: [EMPTY_SANITATION, PRE_HEATING, ACTIVE_FLOCK, HARVESTED_VACANT]
+                reason: { type: string }
+      responses:
+        '200':
+          description: State transitioned
+        '400':
+          description: Invalid transition or temperature tolerance violated (ACTIVE_FLOCK guard)
+        '403':
+          description: Caller lacks the engineer role for this saloon
+
+  /saloons/{saloon_id}/flocks/:
+    get:
+      tags: [Saloon]
+      summary: List flock cycles for a saloon (v1.1)
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - name: saloon_id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Flock cycles (newest first)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    flock_id: { type: integer }
+                    breed_type: { type: string }
+                    start_date: { type: string, format: date }
+                    end_date: { type: string, format: date, nullable: true }
+    post:
+      tags: [Saloon]
+      summary: Register a flock cycle (starts dynamic threshold alerting) (v1.1)
+      description: Requires engineer+ role. end_date IS NULL = active flock; triggers cache_saloon_thresholds immediately.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - name: saloon_id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [breed_type, start_date, placement_count]
+              properties:
+                breed_type: { type: string }
+                start_date: { type: string, format: date }
+                placement_count:
+                  type: integer
+                  minimum: 1
+                  description: Chicks placed at flock start — the mortality-% denominator (NOT NULL in database.md; required since contract v1.4.2)
+                day_old_weight_g:
+                  type: number
+                  description: Optional FCR baseline; NULL is treated as 0 (documented ~1.6% approximation)
+      responses:
+        '201':
+          description: Flock cycle created
+        '400':
+          description: An active flock (end_date IS NULL) already exists for this saloon
+
+  /gateway-requests/:
+    get:
+      tags: [Provisioning]
+      summary: List gateway requests for the caller's org (v1.1)
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Gateway requests
+    post:
+      tags: [Provisioning]
+      summary: Submit a gateway request (provisioning Step 0) (v1.1)
+      description: >
+        Requires manager+ role. Capped by system_configuration.max_pending_gateway_requests
+        per org. On platform approval the system creates the gateway_slot + MQTT credentials.
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [farm_id, quantity]
+              properties:
+                farm_id: { type: integer }
+                quantity: { type: integer, minimum: 1 }
+                details: { type: string }
+      responses:
+        '201':
+          description: Request created (status PENDING)
+        '400':
+          description: Pending-request cap exceeded (max_pending_gateway_requests)
+        '403':
+          description: Caller lacks the manager role
+
+  /gateway-requests/{request_id}/review/:
+    post:
+      tags: [Provisioning]
+      summary: Approve or reject a gateway request (v1.1)
+      description: >
+        Platform side ONLY (GS-BOARD decision 2026-08-22): System Admin or Platform
+        Support (support claim) by default; the reviewer set is extensible via a
+        platform-side permission granted to future roles. No org-board role exists.
+        On approval the gateway_slot is created with DEFAULT PENDING_INSTALLATION
+        and MQTT credentials issued.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - name: request_id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: { type: string, enum: [APPROVED, REJECTED] }
+                reason: { type: string }
+      responses:
+        '200':
+          description: Decision recorded; on APPROVED the slot + credentials exist
+        '403':
+          description: Caller cannot review requests
+
+  /metric-types/:
+    get:
+      tags: [System]
+      summary: List all known sensor metric types (catalog for dynamic frontend tiles)
+      description: |
+        Returns all rows from sensor_metric_types table.
+        Frontend uses this to render dynamic metric tiles — no hardcoded metric names.
+        When a new sensor type (CO2, noise) is added, this endpoint auto-returns it.
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Metric type catalog
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    metric_key:
+                      type: string
+                    display_name:
+                      type: string
+                    unit:
+                      type: string
+                    value_type:
+                      type: string
+                    is_tier1:
+                      type: boolean
+                    icon_name:
+                      type: string
+                      nullable: true
+
+  /gateways/{gateway_slot_id}/config/:
+    get:
+      tags: [Hardware]
+      summary: Zero-touch provisioning — gateway fetches its full configuration
+      description: >
+        Authenticated with the gateway's MQTT credentials (Basic auth:
+        username = gateway_slot_id, password = MQTT credential, validated
+        against mqtt_device_credentials). The gateway calls this on first
+        boot (and re-fetches every 24h or on MQTT command). Returns farm
+        location, saloon zones with sensor bindings, and MQTT broker
+        settings. 403 if provisioning_status is REJECTED or otherwise not
+        PENDING_INSTALLATION / PENDING_APPROVAL / PROVISIONED.
+        See design-zero-touch-provisioning.md (Reconciliation R6, 2026-08-16).
+      security:
+        - GatewayBasicAuth: []
+      parameters:
+        - name: gateway_slot_id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "GW-001"
+      responses:
+        '200':
+          description: Gateway configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayConfigResponse'
+        '401':
+          description: Invalid or expired credentials
+        '403':
+          description: Gateway status is REJECTED or SUSPENDED
+        '404':
+          description: Gateway slot does not exist
+        '429':
+          description: Rate limited (nginx gateway_config zone, 1 r/s per IP — brute-force guard, AU-fix 2026-08-16)
+
+  /health/:
+    get:
+      tags: [System]
+      summary: Health check endpoint
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthCheckResponse'
+        '503':
+          description: Service degraded
+
+  /hardware/time/:
+    get:
+      tags: [Hardware]
+      summary: NTP fallback — return current server time
+      responses:
+        '200':
+          description: Current server timestamp
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  unix_ts:
+                    type: integer
+                    example: 1700000000
+
+  /platform/support/session/:
+    post:
+      tags: [Platform Support]
+      summary: Open an audited org-context session (v1.2 — GS-fix 2026-08-22)
+      description: >
+        Requires the `support` platform claim (is_platform_staff AND NOT superuser).
+        Body MUST carry a non-empty incident_id — the audit accountability anchor.
+        On success returns a 15-minute scoped access token whose claims add org_id,
+        support_session: true, and the incident ID. While that token is used, standard
+        tenant middleware + RLS scope every request to exactly that org (Security §4.5);
+        the support engineer never gets BYPASSRLS. Every open writes an
+        account_activity_logs row (action=SUPPORT_ORG_ENTER, details={incident_id, reason}).
+        Role defined at v0.2; activated at v0.7 with mandatory platform-staff MFA.
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [org_id, incident_id]
+              properties:
+                org_id: { type: string, format: uuid }
+                incident_id: { type: string, minLength: 1 }
+                reason: { type: string }
+      responses:
+        '200':
+          description: Session opened — scoped token issued (expires in 15 min)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token: { type: string }
+                  org_id: { type: string, format: uuid }
+                  incident_id: { type: string }
+                  expires_in_sec: { type: integer, example: 900 }
+        '400':
+          description: Missing or empty incident_id
+        '403':
+          description: Caller lacks the support platform claim
+
+  /platform/support/gateways/{gateway_slot_id}/provisioning/:
+    post:
+      tags: [Platform Support]
+      summary: Suspend or resume a gateway (whitelisted op, v1.2)
+      description: >
+        Requires an ACTIVE support session for the gateway's org. action=suspend flips
+        provisioning_status to SUSPENDED (EMQX ACL then rejects the gateway);
+        action=resume restores the prior status. Writes a SUPPORT_OP_* audit row with
+        the session's incident_id. Runbook-gated.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - name: gateway_slot_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: { type: string, enum: [suspend, resume] }
+                reason: { type: string }
+      responses:
+        '200':
+          description: Status flipped; audit row written
+        '403':
+          description: No active support session for this org, or caller lacks support claim
+        '404':
+          description: Gateway slot not found in the session org
+
+  /platform/support/alerts/{alert_id}/force-resolve/:
+    post:
+      tags: [Platform Support]
+      summary: Force-resolve a stuck alert (whitelisted op, v1.2)
+      description: >
+        Requires an ACTIVE support session for the alert's org. Sets resolved_at and
+        writes a SUPPORT_OP_* audit row with the incident_id. Use only for alerts stuck
+        by a known engine defect (runbook); normal resolution is hysteresis-driven.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - name: alert_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string }
+      responses:
+        '200':
+          description: Alert resolved; audit row written
+        '403':
+          description: No active support session for this org
+        '404':
+          description: Alert not found (or already resolved → idempotent 200)
+
+  /platform/support/tasks/drain/:
+    post:
+      tags: [Platform Support]
+      summary: Trigger drain_pending_approval / cache-rebuild task (whitelisted op, v1.2)
+      description: >
+        Requires an ACTIVE support session for the target org. Dispatches the named
+        maintenance task (drain_pending_approval, cache rebuilds) and writes a
+        SUPPORT_OP_* audit row with the incident_id.
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [task, reason]
+              properties:
+                task:
+                  type: string
+                  enum: [drain_pending_approval, rebuild_threshold_cache, rebuild_zone_cache]
+                gateway_slot_id: { type: string, description: Required for drain_pending_approval }
+                reason: { type: string }
+      responses:
+        '202':
+          description: Task dispatched; audit row written
+        '403':
+          description: No active support session for this org
+        '400':
+          description: Task requires gateway_slot_id which is missing
+
+  /saloons/{saloon_id}/flocks/{flock_id}/weight-samples/:
+    post:
+      tags: [Flock Production]
+      summary: Log a bird weight sample (FCR input — v1.3, manual entry)
+      description: >
+        Requires engineer+ role for the saloon. Records one sampling event
+        (Saas Decision 22): sample_size birds weighed, avg/min/max grams,
+        optional uniformity_pct (% within ±10% of mean). Source is 'manual'
+        in v1; 'device' is reserved for future weigh-station integration.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: saloon_id, in: path, required: true, schema: { type: integer } }
+        - { name: flock_id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sample_size, avg_weight_g]
+              properties:
+                sampled_at: { type: string, format: date-time }
+                sample_size: { type: integer, minimum: 1 }
+                avg_weight_g: { type: number }
+                min_weight_g: { type: number }
+                max_weight_g: { type: number }
+                uniformity_pct: { type: number }
+                notes: { type: string }
+      responses:
+        '201': { description: Sample recorded }
+        '403': { description: Caller lacks engineer role for this saloon }
+    get:
+      tags: [Flock Production]
+      summary: List weight samples for a flock (newest first)
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: saloon_id, in: path, required: true, schema: { type: integer } }
+        - { name: flock_id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: Weight samples
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    sampled_at: { type: string, format: date-time }
+                    sample_size: { type: integer }
+                    avg_weight_g: { type: number }
+                    uniformity_pct: { type: number }
+                    source: { type: string }
+
+  /saloons/{saloon_id}/flocks/{flock_id}/feed-intake/:
+    post:
+      tags: [Flock Production]
+      summary: Upsert daily feed intake for a flock (FCR input — v1.3)
+      description: >
+        Requires engineer+ role. ONE row per flock per day (UNIQUE(flock_id,
+        entry_date)) — re-posting the same date UPDATES it (corrections are
+        audited). feed_kg = consumed = delivered − remaining.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: saloon_id, in: path, required: true, schema: { type: integer } }
+        - { name: flock_id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [entry_date, feed_kg]
+              properties:
+                entry_date: { type: string, format: date }
+                feed_kg: { type: number }
+                feed_type: { type: string, enum: [starter, grower, finisher] }
+                notes: { type: string }
+      responses:
+        '200': { description: Upserted (created or corrected) }
+        '403': { description: Caller lacks engineer role for this saloon }
+    get:
+      tags: [Flock Production]
+      summary: List daily feed intake rows for a flock
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: saloon_id, in: path, required: true, schema: { type: integer } }
+        - { name: flock_id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: Feed intake rows
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    entry_date: { type: string, format: date }
+                    feed_kg: { type: number }
+                    feed_type: { type: string }
+                    source: { type: string }
+
+  /saloons/{saloon_id}/kpis/:
+    get:
+      tags: [Flock Production]
+      summary: Computed flock KPIs (mortality %, compliance %, FCR, cycle summary — v1.3)
+      description: >
+        Computed per request (Saas Decision 22 — no materialization in v1).
+        metrics accepts any subset: mortality_pct, compliance_pct, fcr,
+        cycle_summary. FCR is null until BOTH a weight sample and feed data
+        exist — never 0, never an error. Defaults to the saloon's active flock.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: saloon_id, in: path, required: true, schema: { type: integer } }
+        - { name: metrics, in: query, required: false, schema: { type: string, default: "mortality_pct,compliance_pct,fcr,cycle_summary" } }
+        - { name: flock_id, in: query, required: false, schema: { type: integer, description: Defaults to the active flock } }
+        - { name: from, in: query, required: false, schema: { type: string, format: date } }
+        - { name: to, in: query, required: false, schema: { type: string, format: date } }
+      responses:
+        '200':
+          description: KPI bundle
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  flock_id: { type: integer }
+                  mortality_pct: { type: number, nullable: true }
+                  daily_mortality_pct: { type: array, items: { type: object } }
+                  compliance_pct: { type: number, nullable: true }
+                  fcr: { type: number, nullable: true, description: Null until weight + feed data exist }
+                  cycle_summary:
+                    type: object
+                    nullable: true
+                    properties:
+                      days_elapsed: { type: integer }
+                      cumulative_mortality_pct: { type: number }
+                      latest_fcr: { type: number, nullable: true }
+                      alert_count: { type: integer }
+                      compliance_pct: { type: number }
+        '404': { description: No flock found (and no active flock) }
+
+  /me/dashboard-config/:
+    get:
+      tags: [Dashboard]
+      summary: My resolved dashboard widget config (v1.3)
+      description: >
+        Returns the RESOLVED widget set (personal override → role default →
+        system default) for the caller's current role context, plus which
+        layer each value came from.
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Resolved config
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  role: { type: string }
+                  widgets: { type: object, additionalProperties: { type: boolean } }
+                  resolved_from: { type: object, additionalProperties: { type: string, enum: [personal, role_default, system_default] } }
+    put:
+      tags: [Dashboard]
+      summary: Upsert MY personal widget overrides (v1.3)
+      description: >
+        Writes/updates only the caller's own personal row (dashboard_configs
+        where user_id = caller). Partial updates allowed — keys not sent keep
+        their current resolution.
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [widgets]
+              properties:
+                widgets: { type: object, additionalProperties: { type: boolean } }
+      responses:
+        '200': { description: Personal overrides saved }
+        '403': { description: Cannot write another user's row }
+
+  /dashboard-config/{role}/:
+    get:
+      tags: [Dashboard]
+      summary: Read a role's default widget set (v1.3)
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: role, in: path, required: true, schema: { type: string, enum: [owner, manager, engineer, doctor, worker] } }
+      responses:
+        '200':
+          description: Role default row (or the system default when none set)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  role: { type: string }
+                  widgets: { type: object, additionalProperties: { type: boolean } }
+                  is_system_default: { type: boolean }
+    put:
+      tags: [Dashboard]
+      summary: Set a role's default widget set (v1.3)
+      description: Requires owner/admin for the org. Writes the role-default row (user_id IS NULL); every user of that role inherits it unless they have a personal override.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: role, in: path, required: true, schema: { type: string, enum: [owner, manager, engineer, doctor, worker] } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [widgets]
+              properties:
+                widgets: { type: object, additionalProperties: { type: boolean } }
+      responses:
+        '200': { description: Role default saved }
+        '403': { description: Caller is not owner/admin for this org }
+
+  /saloons/{saloon_id}/flocks/{flock_id}/water-intake/:
+    post:
+      tags: [Flock Production]
+      summary: Log daily water intake (v1.4 — manual, device-ready)
+      description: >
+        Requires engineer+ role for the saloon. One row per flock per day
+        (UNIQUE(flock_id, entry_date)); corrections are UPDATEs, audited. The
+        water:feed-ratio KPI computes from this + feed intake (Saas D22/D23).
+        A water meter can later write rows with source=device — same shape.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: saloon_id, in: path, required: true, schema: { type: integer } }
+        - { name: flock_id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [entry_date, water_l]
+              properties:
+                entry_date: { type: string, format: date }
+                water_l: { type: number }
+                notes: { type: string }
+      responses:
+        '201': { description: Water intake logged }
+        '400': { description: A row for this flock/date already exists — use PUT-style correction }
+        '403': { description: Caller lacks the engineer role for this saloon }
+    get:
+      tags: [Flock Production]
+      summary: List water-intake entries for a flock (v1.4)
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: saloon_id, in: path, required: true, schema: { type: integer } }
+        - { name: flock_id, in: path, required: true, schema: { type: integer } }
+        - { name: from, in: query, required: false, schema: { type: string, format: date } }
+        - { name: to, in: query, required: false, schema: { type: string, format: date } }
+      responses:
+        '200':
+          description: Water intake entries (newest first)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    entry_date: { type: string, format: date }
+                    water_l: { type: number }
+                    source: { type: string, enum: [manual, device] }
+
+  /farms/{farm_id}/biosecurity-events/:
+    post:
+      tags: [Biosecurity]
+      summary: Record a biosecurity event (v1.4 — visitor/vehicle/disinfection log)
+      description: >
+        Requires engineer+ for the farm (any staff role may record; owner/admin
+        review). Avian-flu evidence base: who entered, when, what disinfection
+        was done. Feeds GS-EVIDENCE export packs (vet inspections, insurance).
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: farm_id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [event_type]
+              properties:
+                event_type: { type: string, enum: [visitor_entry, vehicle_entry, disinfection, rodent_control, outbreak_prep, other] }
+                occurred_at: { type: string, format: date-time }
+                person_count: { type: integer }
+                details: { type: object, additionalProperties: true, description: "e.g. {origin, purpose, product_used}" }
+      responses:
+        '201': { description: Event recorded }
+        '403': { description: Caller has no role in this org }
+    get:
+      tags: [Biosecurity]
+      summary: List biosecurity events for a farm (v1.4)
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: farm_id, in: path, required: true, schema: { type: integer } }
+        - { name: event_type, in: query, required: false, schema: { type: string } }
+        - { name: from, in: query, required: false, schema: { type: string, format: date-time } }
+        - { name: to, in: query, required: false, schema: { type: string, format: date-time } }
+      responses:
+        '200':
+          description: Events (newest first)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: integer }
+                    event_type: { type: string }
+                    occurred_at: { type: string, format: date-time }
+                    person_count: { type: integer, nullable: true }
+                    recorded_by: { type: integer }
+
+  /saloons/{saloon_id}/capabilities/:
+    get:
+      tags: [System]
+      summary: Saloon capability profile (v1.4 — Saas Decision 23)
+      description: >
+        The capability-modularity contract made real: for every optional feature
+        (water, THI, CO, power, FCR, mortality %, compliance %, biosecurity, ...)
+        returns available=true, or available=false with the missing inputs and an
+        enable path. Computed from active sensor slots' allowed_metric_keys, keys
+        seen in telemetry, and manual-log availability — nothing is configured.
+        Threshold rules only evaluate for metrics with live sources (D23).
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: saloon_id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: Capability profile
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  saloon_id: { type: integer }
+                  live_metrics: { type: array, items: { type: string } }
+                  features:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        feature: { type: string, example: fcr }
+                        available: { type: boolean }
+                        missing_inputs: { type: array, items: { type: string } }
+                        enable_path: { type: string, example: "Log a weight sample or connect a weigh station" }
+
+  /org/members/:
+    get:
+      tags: [Organization]
+      summary: List members of the caller's org (v1.4.3)
+      description: >
+        RLS scopes the result automatically — the middleware GUC restricts every
+        row to the caller's own org (Security §4.1), so no org parameter exists
+        or is needed.
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Org members
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/OrgMemberOut'
+        '401': { description: Invalid or missing token }
+    post:
+      tags: [Organization]
+      summary: Invite a member — create or reactivate (v1.4.3)
+      description: >
+        Owner-exclusive write (403 otherwise). If the username does not exist,
+        the user is created with an UNUSABLE password plus an ACTIVE org_members
+        row (201). If an INACTIVE org_members row already exists for that
+        (org_id, user_id) pair it is REACTIVATED and 200 is returned; if an
+        ACTIVE membership exists, 409 Conflict. UNIQUE(org_id, user_id) stands —
+        no schema change.
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrgMemberInviteRequest'
+      responses:
+        '201':
+          description: Member created (user + active org_members row)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgMemberOut'
+        '200':
+          description: Existing INACTIVE membership reactivated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgMemberOut'
+        '401': { description: Invalid or missing token }
+        '403': { description: Caller is not the org owner }
+        '409':
+          description: |
+            An ACTIVE org_members row for this (org_id, user_id) already exists.
+
+  /org/members/{member_id}/deactivate/:
+    post:
+      tags: [Organization]
+      summary: Deactivate a member — soft-off, never delete (v1.4.3)
+      description: >
+        Owner-exclusive write. Sets org_members.is_active = false; the row is
+        NEVER deleted. A deactivated member's live access tokens die naturally
+        within ≤15 min; their next refresh returns a token WITHOUT an org_id
+        claim ⇒ no GUC ⇒ tenant reads return HTTP 200 with empty payloads
+        (fail-closed — Security §4.1, constraint C-14).
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: member_id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: Membership deactivated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  is_active: { type: boolean, example: false }
+        '401': { description: Invalid or missing token }
+        '403': { description: Caller is not the org owner }
+        '404': { description: No such member in the caller's org }
+
+  /saloons/{saloon_id}/reports/:
+    get:
+      tags: [Daily Reports]
+      summary: List daily reports for a saloon (v1.5 — Tracker §4n)
+      description: >
+        Reviewer role is READ-ONLY org-wide here (no approve/reject).
+        RLS scopes rows to the caller's org (Security §4.1).
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: saloon_id, in: path, required: true, schema: { type: integer } }
+        - { name: from, in: query, required: false, schema: { type: string, format: date } }
+        - { name: to, in: query, required: false, schema: { type: string, format: date } }
+        - { name: status, in: query, required: false, schema: { type: string, enum: [DRAFT, SUBMITTED, FLAGGED, APPROVED, REJECTED] } }
+      responses:
+        '200':
+          description: Daily reports (newest first)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: integer }
+                    report_date: { type: string, format: date }
+                    mortality_count: { type: integer }
+                    feed_kg: { type: number, nullable: true }
+                    water_l: { type: number, nullable: true }
+                    avg_weight_g: { type: number, nullable: true }
+                    status: { type: string }
+        '403': { description: Forbidden — user not in the target org }
+    post:
+      tags: [Daily Reports]
+      summary: Submit a daily report (v1.5 — Tracker §4n)
+      description: >
+        Requires engineer+ role for the saloon. ONE row per (flock, saloon,
+        report_date). Report WITH medication lines → status FLAGGED + auto
+        support_tickets row (category=medical, assigned to first active
+        doctor) + WS push to doctor.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: saloon_id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [flock_id, report_date]
+              properties:
+                flock_id: { type: integer }
+                report_date: { type: string, format: date, description: Calendar day in Asia/Tehran }
+                mortality_count: { type: integer, minimum: 0 }
+                feed_kg: { type: number }
+                water_l: { type: number }
+                avg_weight_g: { type: number }
+                notes: { type: string }
+                medications:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      catalog_item_id: { type: integer, nullable: true }
+                      medication_name: { type: string }
+                      dosage: { type: string }
+                      frequency: { type: string }
+      responses:
+        '201': { description: Report created (DRAFT, or FLAGGED when medications present) }
+        '400': { description: A report for this flock/saloon/date already exists }
+        '403': { description: Caller lacks the engineer role for this saloon }
+
+  /reports/{report_id}/:
+    patch:
+      tags: [Daily Reports]
+      summary: Edit a daily report — same calendar day only (v1.5 — Tracker §4n)
+      description: >
+        Edit time-lock: same calendar day ONLY, Asia/Tehran, cutoff 00:00
+        sharp, no grace. After that only System Admin / Support (whitelisted,
+        audited) may edit. Reviewer cannot edit (read-only).
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: report_id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mortality_count: { type: integer, minimum: 0 }
+                feed_kg: { type: number }
+                water_l: { type: number }
+                avg_weight_g: { type: number }
+                notes: { type: string }
+                status: { type: string, enum: [DRAFT, SUBMITTED] }
+      responses:
+        '200': { description: Report updated }
+        '403': { description: Edit window closed (past 00:00 Asia/Tehran) or caller lacks edit rights }
+        '404': { description: Report not found }
+
+  /reports/{report_id}/vet-review/:
+    post:
+      tags: [Daily Reports]
+      summary: Approve or reject a submitted report (v1.5 — Tracker §4n)
+      description: >
+        Requires manager/doctor/owner role. Reviewer does NOT approve
+        (read-only). SUBMITTED → APPROVED/REJECTED with review_note.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: report_id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: { type: string, enum: [APPROVED, REJECTED] }
+                review_note: { type: string }
+      responses:
+        '200': { description: Decision recorded }
+        '403': { description: Caller cannot review reports (reviewer role is read-only) }
+        '404': { description: Report not found or not in SUBMITTED/FLAGGED state }
+
+  /vet-catalog/:
+    get:
+      tags: [Vet Catalog]
+      summary: List the org's vet medication catalog (v1.5 — Tracker §4n)
+      description: >
+        Engineer reads; vet-only writes. RLS scopes rows to the caller's org.
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Active catalog items
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: integer }
+                    name: { type: string }
+                    dosage_default: { type: string, nullable: true }
+                    unit: { type: string, nullable: true }
+                    is_active: { type: boolean }
+        '403': { description: Forbidden — user not in the target org }
+    post:
+      tags: [Vet Catalog]
+      summary: Add a catalog item — vet-only (v1.5 — Tracker §4n)
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                dosage_default: { type: string }
+                unit: { type: string }
+                notes: { type: string }
+      responses:
+        '201': { description: Catalog item created }
+        '403': { description: Caller lacks the doctor/vet role }
+        '409': { description: An item with this name already exists in the org }
+
+  /me/panels/:
+    get:
+      tags: [Panels]
+      summary: My resolved panel permissions (v1.5 — Tracker §4n)
+      description: >
+        Returns the RESOLVED can_view/can_edit per panel: user override
+        (non-null) → role_panel → system default all-true (panels default
+        OPEN, backward-compat).
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Resolved panel map
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: object
+                  properties:
+                    can_view: { type: boolean }
+                    can_edit: { type: boolean }
+                    resolved_from: { type: string, enum: [user_override, role_default, system_default] }
+
+  /panels/{role}/:
+    get:
+      tags: [Panels]
+      summary: Read a role's panel permissions (v1.5 — Tracker §4n)
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: role, in: path, required: true, schema: { type: string, enum: [owner, manager, engineer, doctor, worker, installer, reviewer] } }
+      responses:
+        '200':
+          description: Role panel rows
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    panel_key: { type: string }
+                    can_view: { type: boolean }
+                    can_edit: { type: boolean }
+        '403': { description: Forbidden — user not in the target org }
+    put:
+      tags: [Panels]
+      summary: Set a role's panel permissions — owner-only admin panel (v1.5 — Tracker §4n)
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: role, in: path, required: true, schema: { type: string, enum: [owner, manager, engineer, doctor, worker, installer, reviewer] } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [panels]
+              properties:
+                panels:
+                  type: array
+                  items:
+                    type: object
+                    required: [panel_key]
+                    properties:
+                      panel_key: { type: string }
+                      can_view: { type: boolean }
+                      can_edit: { type: boolean }
+      responses:
+        '200': { description: Role panel permissions saved }
+        '403': { description: Caller is not owner/admin for this org }
+
+  /panels/users/{user_id}/:
+    put:
+      tags: [Panels]
+      summary: Set a user's panel overrides — owner-only (v1.5 — Tracker §4n)
+      description: >
+        NULL = inherit from the role row (then system default). Non-null wins.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: user_id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [panels]
+              properties:
+                panels:
+                  type: array
+                  items:
+                    type: object
+                    required: [panel_key]
+                    properties:
+                      panel_key: { type: string }
+                      can_view: { type: boolean, nullable: true }
+                      can_edit: { type: boolean, nullable: true }
+      responses:
+        '200': { description: User overrides saved }
+        '403': { description: Caller is not owner/admin for this org }
+
+  /me/alert-subscriptions/:
+    get:
+      tags: [Alerts]
+      summary: My alert category subscriptions (v1.5 — Tracker §4n)
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Subscription rows
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    category: { type: string, enum: [environment, health, hardware, production, system] }
+                    is_muted: { type: boolean }
+    put:
+      tags: [Alerts]
+      summary: Mute/unmute my alert categories (v1.5 — Tracker §4n)
+      description: >
+        DECISION 6=A (owner 2026-09-04, supersedes 6=B): muting suppresses
+        the category but NEVER Tier-1 velocity — NH3/temp velocity always
+        page per Decision 10; every suppression writes an audit digest line.
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subscriptions]
+              properties:
+                subscriptions:
+                  type: array
+                  items:
+                    type: object
+                    required: [category, is_muted]
+                    properties:
+                      category: { type: string, enum: [environment, health, hardware, production, system] }
+                      is_muted: { type: boolean }
+      responses:
+        '200': { description: Subscriptions saved }
+        '403': { description: Forbidden — user not in the target org }
+
+  /farms/{farm_id}/events/:
+    get:
+      tags: [Farm Events]
+      summary: List scheduled farm events (v1.5 — Tracker §4n)
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: farm_id, in: path, required: true, schema: { type: integer } }
+        - { name: from, in: query, required: false, schema: { type: string, format: date-time } }
+        - { name: to, in: query, required: false, schema: { type: string, format: date-time } }
+      responses:
+        '200':
+          description: Events (upcoming first)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: integer }
+                    title: { type: string }
+                    event_type: { type: string }
+                    scheduled_at: { type: string, format: date-time }
+        '403': { description: Forbidden — user not in the target org }
+    post:
+      tags: [Farm Events]
+      summary: Schedule a farm event (v1.5 — Tracker §4n)
+      description: >
+        Requires manager+ role. Reminders fire 24h before scheduled_at via
+        alarm+SMS; deliveries tracked in notification_deliveries.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: farm_id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, event_type, scheduled_at]
+              properties:
+                title: { type: string }
+                event_type: { type: string, enum: [vet_visit, weighing, vaccination, maintenance, other] }
+                scheduled_at: { type: string, format: date-time }
+                saloon_ids: { type: array, items: { type: integer }, description: Empty = whole farm }
+                assignee_ids: { type: array, items: { type: integer } }
+                notes: { type: string }
+      responses:
+        '201': { description: Event scheduled }
+        '403': { description: Caller lacks the manager role }
+
+  /support-tickets/:
+    get:
+      tags: [Support Tickets]
+      summary: List support tickets for the caller's org (v1.5 — Tracker §4n)
+      description: >
+        General ticket table extending the doctor_tickets pattern (no new
+        messaging system). RLS scopes rows to the caller's org.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: status, in: query, required: false, schema: { type: string, enum: [OPEN, IN_PROGRESS, RESOLVED, CLOSED] } }
+        - { name: category, in: query, required: false, schema: { type: string, enum: [medical, support, installer, report] } }
+      responses:
+        '200':
+          description: Support tickets (newest first)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: integer }
+                    category: { type: string }
+                    title: { type: string }
+                    status: { type: string }
+                    priority: { type: string }
+                    linked_report_id: { type: integer, nullable: true }
+                    assigned_to: { type: integer, nullable: true }
+        '403': { description: Forbidden — user not in the target org }
+    post:
+      tags: [Support Tickets]
+      summary: Raise a support ticket (v1.5 — Tracker §4n)
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [category, title]
+              properties:
+                category: { type: string, enum: [medical, support, installer, report] }
+                saloon_id: { type: integer, nullable: true }
+                linked_report_id: { type: integer, nullable: true }
+                title: { type: string }
+                description: { type: string }
+                priority: { type: string, enum: [LOW, NORMAL, HIGH, URGENT], default: NORMAL }
+      responses:
+        '201': { description: Ticket created (medical tickets route to the on-call doctor) }
+        '403': { description: Forbidden — user not in the target org }

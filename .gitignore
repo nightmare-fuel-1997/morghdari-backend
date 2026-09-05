@@ -34,6 +34,12 @@ node_modules/
 Thumbs.db
 .DS_Store
 
+# --- Freebuff agent workspace (local tooling only) ---
+.freebuff/
+
+# --- Built demo bundle (source of truth: demo-ui-src/) ---
+demo-ui/dist/
+
 # --- Test / coverage artifacts ---
 .coverage
 htmlcov/

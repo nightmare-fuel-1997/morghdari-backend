@@ -1,0 +1,12 @@
+# v0.5 baseline recovery
+
+The current checkout has uncommitted showcase/runtime changes, including files that differ from the v0.4 release baseline. Git correctly refused a checkout because doing so would overwrite those local changes.
+
+Required safe recovery, with explicit user approval:
+
+1. Preserve the current dirty checkout by copying or committing the showcase work in a separate user-owned change set.
+2. Create/switch to a branch at tag `v0.4` (`bfb5f5b...`).
+3. Reapply only the intended v0.5 planning files and v0.5 implementation files.
+4. Do not carry demo showcase files into the v0.5 branch unless they are independently required by the v0.5 feature.
+
+No destructive command was run; the attempted checkout was rejected by Git before changing files.

@@ -6,7 +6,11 @@
 ## What this version delivers
 
 - **All 32 tenant endpoints** (v1.1 operability set + 5 v1.3 KPI/dashboard + 3 v1.4
-  water/biosecurity/capabilities) — OpenAPI v1.4.2 diff-tested `implemented == contract`
+  water/biosecurity/capabilities) — OpenAPI **v1.5.0** diff-tested `implemented == contract`
+- **Scope extensions (additive, Tracker §4o/§4p):** Flutter compat adapter
+  (contract v1.6.0-draft — `/api/compat/v1` + legacy aliases, `legacy_slug_map`) and
+  ops read APIs (contract v1.7.0-draft — pagination convention, audit-logs, thresholds,
+  photos, gateway reads, password change + sessions)
 - **Channels consumer**: per-saloon `telemetry.update` pushes, ws:active Set cap
   (config, TTL-refreshed), close codes 4003 (auth/org) / 4000 (cap), reconnect gap-fill
 - **KPI computation service** (D22): mortality %, compliance %, FCR (NULL-until-inputs),

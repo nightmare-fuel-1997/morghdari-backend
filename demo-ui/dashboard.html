@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Morghdari · Live Demo Dashboard</title>
+<link rel="stylesheet" href="css/dashboard.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<!-- ══════════ TOP BAR ══════════ -->
+<header class="topbar">
+  <div class="brand">
+    <svg viewBox="0 0 24 24" class="icon" aria-hidden="true"><path d="M12 2l8 4v6c0 5-3.4 8.6-8 10-4.6-1.4-8-5-8-10V6l8-4z"/></svg>
+    <div>
+      <h1>Morghdari · Live Dashboard</h1>
+      <p id="org-label">—</p>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <span id="live-clock" class="chip chip-muted">—</span>
+    <span id="conn-chip" class="chip chip-muted">checking…</span>
+    <button id="lang-toggle" class="btn btn-secondary btn-sm">فارسی</button>
+    <a id="back-link" href="/demo/" class="btn btn-secondary btn-sm">Console</a>
+  </div>
+</header>
+
+<main id="main">
+
+  <!-- ══════════ SIGN-IN (until a session exists) ══════════ -->
+  <section id="sec-login" class="login-wrap" hidden>
+    <section class="card login-card">
+      <h2 class="card-title">Live Demo Dashboard</h2>
+      <p class="card-desc">Sign in as <code>demo-owner</code> (password <code>demo-pass-123</code>) — the same owner the seed command creates. Every number below travels the REAL pipeline: MQTT → EMQX → subscriber → Redis lanes → Celery → TimescaleDB → RLS-scoped API.</p>
+      <form id="login-form">
+        <label for="dash-user">Username</label>
+        <input id="dash-user" name="username" autocomplete="username" value="demo-owner" required>
+        <label for="dash-pass">Password</label>
+        <input id="dash-pass" name="password" type="password" autocomplete="current-password" required>
+        <button type="submit" class="btn btn-primary">Sign in</button>
+        <p id="login-error" class="empty" hidden></p>
+      </form>
+    </section>
+  </section>
+
+  <!-- ══════════ KPI STRIP ══════════ -->
+  <section id="sec-dashboard" hidden>
+    <section class="kpi-strip" aria-label="Live summary">
+      <div class="kpi"><span class="kpi-value" id="kpi-saloons">—</span><span class="kpi-label" data-i18n="kpi-saloons">Saloons</span></div>
+      <div class="kpi"><span class="kpi-value" id="kpi-slots">—</span><span class="kpi-label" data-i18n="kpi-slots">Slots online</span></div>
+      <div class="kpi"><span class="kpi-value" id="kpi-readings">—</span><span class="kpi-label" data-i18n="kpi-readings">Readings (2 min)</span></div>
+      <div class="kpi"><span class="kpi-value" id="kpi-alerts">—</span><span class="kpi-label" data-i18n="kpi-alerts">Open alerts</span></div>
+    </section>
+
+    <!-- ══════════ ALERT STRIP ══════════ -->
+    <section class="card alert-strip" aria-labelledby="alerts-h">
+      <h2 id="alerts-h" class="card-title card-title-sm">Live Alerts</h2>
+      <div id="alert-list" class="alert-list"><span class="hint">no alerts yet — the feed powers them up</span></div>
+    </section>
+
+    <!-- ══════════ SALOON CHARTS ══════════ -->
+    <section id="saloon-cards" class="saloon-grid"><!-- rendered by dashboard.js --></section>
+
+    <!-- ══════════ PIPELINE ══════════ -->
+    <section class="card pip-line">
+      <h2 class="card-title card-title-sm">Pipeline</h2>
+      <div id="pipeline-grid" class="pipeline-grid"><span class="hint">loading…</span></div>
+    </section>
+  </section>
+
+</main>
+
+<footer class="foot">
+  <span>Live Demo Dashboard — fake gateways, real pipeline</span>
+  <span id="last-update">—</span>
+</footer>
+
+<script src="js/dashboard.js"></script>
+</body>
+</html>
