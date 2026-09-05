@@ -30,5 +30,18 @@ first weight sample: `"fcr": null` + unavailable reason (D22/D23 in action).
 unavailable with missing inputs + enable path. Log one water entry → water:feed ratio
 flips available.
 
-Demo script (record): 1 → 2 → 4 → 5 (3 optional). This is the version you show
-investors.
+## 6. The Flutter app connects (v1.6 compat)
+
+Point the SHIPPED Flutter build at the backend unchanged: its legacy `/api/...`
+calls and `/ws/farms/{farmSlug}/telemetry` all answer through the compat adapter —
+org/farm/device lists, latest + history with the exact flat keys
+(`temperature`/`humidity`/`lux`/`nh3`, `{"farm_history": [...]}`), live flat-record
+push. The dashboard just works, no rewrite.
+
+## 7. Ops reads (v1.7)
+
+As manager: `GET /api/v1/audit-logs/` → `{results, count}`. As engineer: update a
+threshold. Any user: password change, then list + revoke a session.
+
+Demo script (record): 1 → 2 → 4 → 5 → 6 → 7 (3 optional). This is the version you
+show investors.
