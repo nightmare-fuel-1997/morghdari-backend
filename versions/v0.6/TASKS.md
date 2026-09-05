@@ -9,7 +9,7 @@ v0.6 scope extensions: **v1.6.0-draft** Flutter compat (Tracker §4o) and
 
 | # | Task | Depends on | Acceptance | Status |
 |---|---|---|---|---|
-| M6-01 | v1.1 operability endpoint set complete — **15 NEW endpoints** (saloons detail/alerts/analytics-hourly, farms overview, provisioning reads: location-tree/provinces/cities/villages/positions, ack acknowledge, operational-state, flocks incl. `placement_count` body, metric-types, health extended, hardware/time) over the 8 paths already built in v0.2/v0.3/v0.5 (auth ×2, telemetry, sync/approve/reject, gateway-requests+review, config) | v0.5 | OpenAPI diff green for the set | ⬜ |
+| M6-01 | v1.1 operability endpoint set complete — **15 NEW endpoints** (saloons detail/alerts/analytics-hourly, farms overview, provisioning reads: location-tree/provinces/cities/villages/positions, ack acknowledge, operational-state, flocks incl. `placement_count` body, metric-types, health extended, hardware/time) over the 8 paths already built in v0.2/v0.3/v0.5 (auth ×2, telemetry, sync/approve/reject, gateway-requests+review, config) | v0.5 | OpenAPI diff green for the set | ✅ (2026-09-06: 15 endpoints implemented + gate green; full suite on Postgres/Timescale + Redis: 328 passed @ 87.85%) |
 | M6-02 | v1.3 KPI/dashboard endpoints (**5**: weight-samples, feed-intake POST/GET, kpis, me/dashboard-config, dashboard-config/{role}) | M6-01 | diff green; D22 tests green | ⬜ |
 | M6-03 | v1.4 water/biosecurity/capabilities endpoints (**3**: water-intake POST/GET, biosecurity-events POST/GET, capabilities) | M6-01 | diff green; capability gating tests green | ⬜ |
 | M6-04 | KPI computation service (D22 math incl. water:feed ratio) | M6-02 | §2.7 suites green | ⬜ |
