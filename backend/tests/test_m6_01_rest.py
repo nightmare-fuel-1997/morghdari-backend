@@ -482,15 +482,19 @@ def test_saloon_analytics_hourly(timescale_db):
     world = _make_world()
     from apps.telemetry.models import SensorMetricType
 
-    SensorMetricType.objects.create(metric_key="temp", display_name="Temperature", unit="C")
+    # Postgres carries the 0003 seed rows (temp etc.) — reuse instead of re-insert.
+    # فارسی: ردیف‌های seed در Postgres از قبل هست؛ به‌جای درجِ مجدد، به‌روزرسانی می‌کنیم.
+    SensorMetricType.objects.update_or_create(
+        metric_key="temp", defaults={"display_name": "Temperature", "unit": "C"}
+    )
     bucket = datetime(2026, 9, 1, 12, 0, 0)
     with connection.cursor() as cursor:
         cursor.execute(
             "INSERT INTO metric_hourly_aggregates "
-            "(bucket_hr, org_id, saloon_id, slot_id, metric_key, avg_val, min_val, max_val, stddev_val, sample_count, high_variance) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            "(bucket_hr, org_id, saloon_id, slot_id, metric_key, avg_val, min_val, max_val, stddev_val, sample_count) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             [bucket, world["org"].org_id, world["saloon"].pk, world["slot"].slot_id,
-             "temp", 28.5, 27.0, 30.0, 0.5, 12, False],
+             "temp", 28.5, 27.0, 30.0, 0.5, 12],
         )
     client = _login(world["owner"])
     url = reverse("telemetry:saloon-analytics-hourly", args=[world["saloon"].pk])
