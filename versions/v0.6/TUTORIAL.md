@@ -1,9 +1,10 @@
 # v0.6 TUTORIAL — build the full REST + WebSocket surface yourself
 
 > ⚠️ **Pre-spiral draft** — re-validate at spiral start (32 tenant endpoints is the
-> frozen count; OpenAPI v1.4.2 is the contract). **How to use:** 1–4 teach, 5 is
+> frozen count; OpenAPI **v1.5.0** is the contract — the 10 §4n paths and 4 platform
+> paths in the same yaml are NOT v0.6 scope). **How to use:** 1–4 teach, 5 is
 > hands-on, 6 warns, 7 checks. KB lessons: *Reference Hub* (#/reference), *Use Cases*
-> (#/use-cases). Canonical: OpenAPI v1.4.2 (the contract), Saas D22, Security §4.4.
+> (#/use-cases). Canonical: OpenAPI v1.5.0 (the contract), Saas D22, Security §4.4.
 
 ---
 

@@ -64,6 +64,147 @@ def _config_int(key: str, default: int) -> int:
         return default
 
 
+# ---------------------------------------------------------------------------
+# M6-01 geography reads (contract v1.5.0 — installer drill-down surface)
+# ---------------------------------------------------------------------------
+
+
+def _geo_out_province(row):
+    return {"id": row.id, "name": row.name}
+
+
+def _geo_out_city(row):
+    return {"id": row.id, "province_id": row.province_id, "name": row.name}
+
+
+def _geo_out_village(row):
+    return {"id": row.id, "city_id": row.city_id, "name": row.name}
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def province_list(request):
+    """GET /provisioning/provinces/ — all provinces (global reference data)."""
+    from apps.geography.models import Province
+
+    return Response([_geo_out_province(p) for p in Province.objects.all().order_by("name")])
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def city_list(request):
+    """GET /provisioning/cities/?province_id= — cities of one province."""
+    from apps.geography.models import City
+
+    try:
+        province_id = int(request.query_params.get("province_id", ""))
+    except (TypeError, ValueError):
+        return Response({"error": "province_id query parameter is required"}, status=400)
+    rows = City.objects.filter(province_id=province_id).order_by("name")
+    return Response([_geo_out_city(c) for c in rows])
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def village_list(request):
+    """GET /provisioning/villages/?city_id= — villages of one city."""
+    from apps.geography.models import Village
+
+    try:
+        city_id = int(request.query_params.get("city_id", ""))
+    except (TypeError, ValueError):
+        return Response({"error": "city_id query parameter is required"}, status=400)
+    rows = Village.objects.filter(city_id=city_id).order_by("name")
+    return Response([_geo_out_village(v) for v in rows])
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def saloon_positions(request, saloon_id: int):
+    """GET /provisioning/saloons/{saloon_id}/positions/ — sensor positions."""
+    from apps.devices.models import SaloonPosition
+
+    org_id = _org_id(request)
+    if org_id:
+        rows = SaloonPosition.objects.filter(org_id=org_id, saloon_id=saloon_id).order_by("id")
+        return Response([
+            {"id": r.id, "saloon_id": r.saloon_id, "label": r.label} for r in rows
+        ])
+    return Response([], status=200)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def location_tree(request):
+    """GET /provisioning/location-tree/ — installer drill-down: province →
+    cities (+ villages) → the caller org's farms in each city.
+
+    Geography is global reference data; the FARM leaves are the only org
+    data, and they are scoped to the caller's org_id claim. Server-cached 1 h
+    (django cache — redis in prod, locmem in dev/test), keyed per org so a
+    farm rename never leaks across tenants.
+    فارسی: درختِ مکان برای نصاب — جغرافیا سراسری است و فقط برگ‌های مزرعه به
+    سازمانِ تماس‌گیرنده محدود می‌شود؛ پاسخ یک ساعت کش می‌شود.
+    """
+    from django.core.cache import cache
+
+    from apps.farms.models import Farm
+    from apps.geography.models import City, Province, Village
+
+    org_id = _org_id(request)
+    if org_id is None:
+        return Response({"error": "organization context required"}, status=400)
+
+    cache_key = f"location:tree:{org_id}"
+    cached = None
+    try:
+        cached = cache.get(cache_key)
+    except Exception:  # noqa: BLE001 — cache outage degrades to a fresh read
+        cached = None
+    if cached is not None:
+        return Response(cached)
+
+    # Farm leaves per city (caller org only).
+    farms_by_city = {}
+    for farm in (
+        Farm.objects.filter(org_id=org_id)
+        .only("id", "name", "city_id")
+        .order_by("city_id")
+    ):
+        farms_by_city.setdefault(farm.city_id, []).append(
+            {"farm_id": farm.id, "name": farm.name}
+        )
+
+    villages_by_city = {}
+    for village in Village.objects.all().order_by("city_id", "name"):
+        villages_by_city.setdefault(village.city_id, []).append(
+            {"id": village.id, "name": village.name}
+        )
+
+    cities_by_province = {}
+    for city in City.objects.select_related("province").all().order_by("province_id", "name"):
+        cities_by_province.setdefault(city.province_id, []).append({
+            "id": city.id,
+            "name": city.name,
+            "villages": villages_by_city.get(city.id, []),
+            "farms": farms_by_city.get(city.id, []),
+        })
+
+    tree = [
+        {
+            "id": province.id,
+            "name": province.name,
+            "cities": cities_by_province.get(province.id, []),
+        }
+        for province in Province.objects.all().order_by("name")
+    ]
+    try:
+        cache.set(cache_key, tree, timeout=3600)
+    except Exception:  # noqa: BLE001 — never fail a read because caching did
+        pass
+    return Response(tree)
+
+
 def _request_out(row):
     return {
         "id": row.id,
@@ -336,13 +477,13 @@ def _owned_slot(slot_id: str, org_id: str):
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
-def approve_gateway(request, slot_id: str):
+def approve_gateway(request, gateway_slot_id: str):
     """Approve a PENDING_APPROVAL gateway: PROVISIONED + held telemetry drain
     (FIFO), then EMQX allow-rule sync. Farm manager/owner only."""
     org_id = _manager_or_error(request)
     if org_id is None:
         return Response({"error": "manager role required"}, status=403)
-    slot = _owned_slot(slot_id, org_id)
+    slot = _owned_slot(gateway_slot_id, org_id)
     if slot is None:
         return Response({"error": "gateway not found in caller organization"}, status=404)
 
@@ -352,19 +493,19 @@ def approve_gateway(request, slot_id: str):
         _approve(slot.slot_id, request.user)
     except ValueError as exc:  # wrong starting status
         return Response({"error": str(exc)}, status=409)
-    slot = GatewaySlot.objects.get(pk=slot_id)
+    slot = GatewaySlot.objects.get(pk=gateway_slot_id)
     return Response({"gateway_slot_id": slot.slot_id, "status": slot.provisioning_status})
 
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
-def reject_gateway(request, slot_id: str):
+def reject_gateway(request, gateway_slot_id: str):
     """Reject a PENDING_APPROVAL gateway: REJECTED + held telemetry archived
     to the DLQ with a reason + EMQX ACL removal."""
     org_id = _manager_or_error(request)
     if org_id is None:
         return Response({"error": "manager role required"}, status=403)
-    slot = _owned_slot(slot_id, org_id)
+    slot = _owned_slot(gateway_slot_id, org_id)
     if slot is None:
         return Response({"error": "gateway not found in caller organization"}, status=404)
 
@@ -374,19 +515,19 @@ def reject_gateway(request, slot_id: str):
         _reject(slot.slot_id, request.user, reason=str(request.data.get("reason", "")).strip() or None)
     except ValueError as exc:
         return Response({"error": str(exc)}, status=409)
-    slot = GatewaySlot.objects.get(pk=slot_id)
+    slot = GatewaySlot.objects.get(pk=gateway_slot_id)
     return Response({"gateway_slot_id": slot.slot_id, "status": slot.provisioning_status})
 
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
-def suspend_gateway(request, slot_id: str):
+def suspend_gateway(request, gateway_slot_id: str):
     """Suspend a PROVISIONED gateway: SUSPENDED + EMQX ACL revocation
     (no_match=deny drops every publish until resume)."""
     org_id = _manager_or_error(request)
     if org_id is None:
         return Response({"error": "manager role required"}, status=403)
-    slot = _owned_slot(slot_id, org_id)
+    slot = _owned_slot(gateway_slot_id, org_id)
     if slot is None:
         return Response({"error": "gateway not found in caller organization"}, status=404)
 
@@ -396,18 +537,18 @@ def suspend_gateway(request, slot_id: str):
         _suspend(slot.slot_id, request.user, reason=str(request.data.get("reason", "")).strip() or None)
     except ValueError as exc:
         return Response({"error": str(exc)}, status=409)
-    slot = GatewaySlot.objects.get(pk=slot_id)
+    slot = GatewaySlot.objects.get(pk=gateway_slot_id)
     return Response({"gateway_slot_id": slot.slot_id, "status": slot.provisioning_status})
 
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
-def resume_gateway(request, slot_id: str):
+def resume_gateway(request, gateway_slot_id: str):
     """Resume a SUSPENDED gateway back to PROVISIONED and restore EMQX ACLs."""
     org_id = _manager_or_error(request)
     if org_id is None:
         return Response({"error": "manager role required"}, status=403)
-    slot = _owned_slot(slot_id, org_id)
+    slot = _owned_slot(gateway_slot_id, org_id)
     if slot is None:
         return Response({"error": "gateway not found in caller organization"}, status=404)
 
@@ -417,7 +558,7 @@ def resume_gateway(request, slot_id: str):
         _resume(slot.slot_id, request.user)
     except ValueError as exc:
         return Response({"error": str(exc)}, status=409)
-    slot = GatewaySlot.objects.get(pk=slot_id)
+    slot = GatewaySlot.objects.get(pk=gateway_slot_id)
     return Response({"gateway_slot_id": slot.slot_id, "status": slot.provisioning_status})
 
 
@@ -461,12 +602,12 @@ def _basic_device(request):
 
 @api_view(["GET"])
 @permission_classes([AllowAny])
-def gateway_config(request, slot_id: str):
+def gateway_config(request, gateway_slot_id: str):
     """GET /gateways/{id}/config/ — org/farm identity + MQTT endpoint +
     credential shape. Never echoes the one-time plaintext password.
     Authentication is resolved IN the view (device Basic vs manager JWT)
     because the two callers use different auth systems."""
-    slot = GatewaySlot.objects.filter(pk=slot_id).first()
+    slot = GatewaySlot.objects.filter(pk=gateway_slot_id).first()
     if slot is None:
         return Response({"error": "gateway not found"}, status=404)
 
@@ -511,14 +652,14 @@ def gateway_config(request, slot_id: str):
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
-def rotate_credential(request, slot_id: str):
+def rotate_credential(request, gateway_slot_id: str):
     """ROTATE_CREDENTIAL: stage a rotation and return the new plaintext
     password EXACTLY once. The old credential keeps working at the broker
     until the device confirms the new one."""
     org_id = _manager_or_error(request)
     if org_id is None:
         return Response({"error": "manager role required"}, status=403)
-    slot = _owned_slot(slot_id, org_id)
+    slot = _owned_slot(gateway_slot_id, org_id)
     if slot is None:
         return Response({"error": "gateway not found in caller organization"}, status=404)
     if slot.provisioning_status != "PROVISIONED":
@@ -541,13 +682,13 @@ def rotate_credential(request, slot_id: str):
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
-def rotation_ack(request, slot_id: str):
+def rotation_ack(request, gateway_slot_id: str):
     """Commit-on-ACK: promote the staged hash when the presented password
     matches it (proof the device received the rotated credential)."""
     org_id = _manager_or_error(request)
     if org_id is None:
         return Response({"error": "manager role required"}, status=403)
-    slot = _owned_slot(slot_id, org_id)
+    slot = _owned_slot(gateway_slot_id, org_id)
     if slot is None:
         return Response({"error": "gateway not found in caller organization"}, status=404)
 

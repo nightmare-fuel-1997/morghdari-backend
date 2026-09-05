@@ -104,8 +104,8 @@ def _api(view, user, claims, path, data=None, method="post"):
     force_authenticate(request, user=user)
     request.jwt_claims = claims
     parts = path.split("/")
-    slot_id = parts[parts.index("gateways") + 1]
-    return view(request, slot_id=slot_id)
+    gateway_slot_id = parts[parts.index("gateways") + 1]
+    return view(request, gateway_slot_id=gateway_slot_id)
 
 
 # ---------------------------------------------------------------------------
@@ -166,7 +166,7 @@ def _get(view, path, headers=None, claims=None):
     request = APIRequestFactory().get(path, **headers or {})
     request.jwt_claims = claims
     parts = path.split("/")
-    return view(request, slot_id=parts[parts.index("gateways") + 1])
+    return view(request, gateway_slot_id=parts[parts.index("gateways") + 1])
 
 
 @pytest.mark.django_db

@@ -223,8 +223,8 @@ def _api_call(view, user, claims, path, data=None):
     force_authenticate(request, user=user)
     request.jwt_claims = claims
     parts = path.split("/")
-    slot_id = parts[parts.index("gateways") + 1]
-    return view(request, slot_id=slot_id)
+    gateway_slot_id = parts[parts.index("gateways") + 1]
+    return view(request, gateway_slot_id=gateway_slot_id)
 
 
 @pytest.mark.django_db
@@ -238,7 +238,7 @@ def test_manager_approve_drains_and_audits(m5_world, monkeypatch, _fresh_redis):
     monkeypatch.setattr("apps.mqtt_auth.services.sync_gateway_acls",
                         lambda slot: {"synced": 1, "reachable": True})
 
-    response = _api_call(approve_gateway, w["manager"], w["claims"], f"/api/v1/gateways/{w['slot'].slot_id}/approve/")
+    response = _api_call(approve_gateway, w["manager"], w["claims"], f"/api/v1/provisioning/gateways/{w['slot'].slot_id}/approve/")
 
     assert response.status_code == 200
     assert response.data["status"] == "PROVISIONED"
@@ -263,7 +263,7 @@ def test_manager_reject_archives_held_telemetry(m5_world, monkeypatch, _fresh_re
 
     response = _api_call(
         reject_gateway, w["manager"], w["claims"],
-        f"/api/v1/gateways/{w['slot'].slot_id}/reject/",
+        f"/api/v1/provisioning/gateways/{w['slot'].slot_id}/reject/",
         {"reason": "forged hardware"},
     )
 
@@ -309,14 +309,14 @@ def test_suspend_then_resume_cycle(m5_world, monkeypatch):
 @pytest.mark.django_db
 def test_worker_cannot_lifecycle(m5_world, monkeypatch):
     w = m5_world
-    response = _api_call(approve_gateway, w["worker"], w["worker_claims"], f"/api/v1/gateways/{w['slot'].slot_id}/approve/")
+    response = _api_call(approve_gateway, w["worker"], w["worker_claims"], f"/api/v1/provisioning/gateways/{w['slot'].slot_id}/approve/")
     assert response.status_code == 403
 
 
 @pytest.mark.django_db
 def test_other_org_manager_gets_404(m5_world, monkeypatch):
     w = m5_world
-    response = _api_call(approve_gateway, w["other_manager"], w["other_claims"], f"/api/v1/gateways/{w['slot'].slot_id}/approve/")
+    response = _api_call(approve_gateway, w["other_manager"], w["other_claims"], f"/api/v1/provisioning/gateways/{w['slot'].slot_id}/approve/")
     assert response.status_code == 404
 
 
@@ -331,7 +331,7 @@ def test_wrong_state_transitions_conflict(m5_world, monkeypatch):
 
     # Blueprint §11: REJECTED may only come from PENDING_APPROVAL — rejecting a
     # PROVISIONED gateway is not a legal transition.
-    response = _api_call(reject_gateway, w["manager"], w["claims"], f"/api/v1/gateways/{w['slot'].slot_id}/reject/")
+    response = _api_call(reject_gateway, w["manager"], w["claims"], f"/api/v1/provisioning/gateways/{w['slot'].slot_id}/reject/")
     assert response.status_code == 409
     w["slot"].refresh_from_db()
     assert w["slot"].provisioning_status == "PROVISIONED"  # no partial write
