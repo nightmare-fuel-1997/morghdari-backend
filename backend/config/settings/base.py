@@ -55,11 +55,14 @@ def _database_from_url(url: str) -> dict:
 
 
 DATABASE_URL = os.environ.get(
-    "DATABASE_URL",
-    # Local dev default mirrors docker-compose.dev.yml credentials exactly.
-    "postgres://morghdari_dev:dev_password_only@localhost:5432/morghdari_dev",
+    "DATABASE_URL"
+)  # NO default (deployment hardening 2026-09-06): a missing URL must fail at
+# boot, never silently aim prod at a dev database with dev credentials.
+# Laptop default lives in development.py (seeded before this import);
+# production.py raises RuntimeError when unset; test.py maps absent → sqlite.
+DATABASES = (
+    {"default": _database_from_url(DATABASE_URL)} if DATABASE_URL else {}
 )
-DATABASES = {"default": _database_from_url(DATABASE_URL)}
 
 
 def _argon2_installed() -> bool:

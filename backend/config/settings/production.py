@@ -15,6 +15,11 @@ SECRET_KEY = os.environ["DJANGO_SECRET_KEY"]  # noqa: F405 — raises if missing
 ALLOWED_HOSTS = [h.strip() for h in os.environ.get("DJANGO_ALLOWED_HOSTS", "").split(",") if h.strip()]  # noqa: F405
 if not ALLOWED_HOSTS:
     raise RuntimeError("DJANGO_ALLOWED_HOSTS must be set in production")
+if not os.environ.get("DATABASE_URL"):
+    # Deployment hardening 2026-09-06: base.py ships NO database default —
+    # an unset URL must abort the boot here (the old base default silently
+    # aimed prod at dev credentials). Same KeyError-by-design philosophy.
+    raise RuntimeError("DATABASE_URL must be set in production")
 
 # --- TLS / transport hardening (Security Architecture §6) -------------------
 SECURE_SSL_REDIRECT = True

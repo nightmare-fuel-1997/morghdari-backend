@@ -4,6 +4,16 @@
 """
 
 import importlib.util
+import os
+
+# Laptop default BEFORE base import (the razor: comfort belongs to the
+# comfort module) — mirrors docker-compose.dev.yml credentials exactly.
+# Deployment hardening 2026-09-06: base.py ships NO default, production
+# fail-fasts — a bare env must never aim prod at dev credentials.
+os.environ.setdefault(
+    "DATABASE_URL",
+    "postgres://morghdari_dev:dev_password_only@localhost:5432/morghdari_dev",
+)
 
 from .base import *  # noqa: F401,F403 — the shared truth
 

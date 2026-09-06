@@ -2,6 +2,11 @@
 # CI Compose — ephemeral TimescaleDB + Redis + pytest + real EMQX. The
 # acceptance gate.
 #   docker compose -f docker-compose.ci.yml run --rm test         (pytest)
+#   docker compose -f docker-compose.ci.yml run --rm migrate-gate (deployability:
+#       makemigrations --check + real forward migrate + idempotency + rollback
+#       posture, on a throwaway DB — closes the --nomigrations hole: migration
+#       FILES are never imported by pytest, so an undeployable migration only
+#       surfaces here; proven by the 2026-09-06 accounts/0003 find)
 #   docker compose -f docker-compose.ci.yml run --rm live-verify  (real-EMQX M5-07/08)
 #
 # فارسی: سرویس‌های یک‌بارمصرف برای CI؛ گیتِ پذیرش M0/M1 همین‌جاست — سبز یعنی قبول.
@@ -125,3 +130,22 @@ services:
     # Coverage gate lives in the command (mirrors docs template); pytest.ini
     # addopts would double-count --cov args otherwise kept minimal here.
     command: pytest --cov=apps --cov-report=term-missing --cov-fail-under=80
+
+  # Migration deployability gate — the --nomigrations hole closer. Runs BEFORE
+  # pytest conceptually (a migration graph that cannot deploy makes test
+  # results moot); compose order is irrelevant since the throwaway DB is its
+  # own universe. Uses the same test-stage image (psycopg ships in it).
+  migrate-gate:
+    build:
+      context: ./backend
+      target: test
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Admin URL = the bootstrap superuser (CREATE/DROP DATABASE rights);
+      # POSTGRES_DB points the maintenance connection at the existing
+      # bootstrap DB; the script swaps in the throwaway name itself.
+      DATABASE_URL: postgres://morghdari_test:ci_password_only@postgres:5432/morghdari_test
+      POSTGRES_DB: morghdari_test
+    command: python scripts/migrate_gate.py
