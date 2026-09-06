@@ -25,6 +25,11 @@ urlpatterns = [
     path("api/v1/", include("apps.farms.urls")),
     path("api/v1/", include("apps.alerts.urls")),
     path("api/v1/", include("apps.monitoring.urls")),
+    # M6-09 compat layer (v1.6.0-draft): additive prefix + legacy Flutter
+    # aliases, same views. NOT in apps.* urlconfs → the implemented ==
+    # contract gate's _API_ROOTS walk never sees it (spec §1.2).
+    path("api/compat/v1/", include("apps.compat.urls_compat")),
+    path("api/", include("apps.compat.urls_compat")),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
     path("api/redoc/", SpectacularRedocView.as_view(url_name="schema"), name="redoc"),

@@ -30,6 +30,11 @@ from django.db import connection
 @contextmanager
 def tenant_context(org_id: UUID | str):
     """Set app.current_org_id for the remainder of the CURRENT transaction."""
+    if connection.vendor == "sqlite":
+        # Same pragmatism as TenantOrgMiddleware: sqlite (laptop quick loop)
+        # has no set_config and no RLS to feed — the GUC would be dead weight.
+        yield
+        return
     with connection.cursor() as cursor:
         cursor.execute("SELECT set_config('app.current_org_id', %s, true)", [str(org_id)])
     yield

@@ -41,22 +41,57 @@ v1.5.0 yaml — plus the two additive scope extensions: Flutter compat adapter
   unavailable→available demo green on PG (THI + compliance).
 
 ## Phase 4 — WebSocket (M6-06, M6-07)
-**Status:** pending
+**Status:** complete (2026-09-06)
 
-- SaloonTelemetryConsumer: group push, ws:active cap (4000/4003), TTL refresh,
-  reconnect gap-fill merge on `since`.
+- SaloonTelemetryConsumer (apps/telemetry/ws_consumer.py) + ws.py service layer:
+  JWT from `?token=` (executor-safe, never the ORM path), org-membership check,
+  D21 `ws_max_connections_per_user` cap as a Redis SET + 300 s zombie-guard TTL
+  refreshed on EVERY inbound message, auth-BEFORE-cap verdict order
+  (4003 = auth/org, 4000 = full), register→re-check race guard.
+- Tenant rule: saloons AND saloon_telemetry are FORCE-RLS'd, so every consumer
+  query runs inside `transaction.atomic() + tenant_context(org_claim)` (the GUC
+  is transaction-scoped — autocommit would kill it before the query; the WS twin
+  of TenantOrgMiddleware). Explicit org comparison kept as the portable check —
+  RLS is the backstop, never the only gate (test connections bypass RLS).
+- config/asgi.py wrapped in ProtocolTypeRouter (http → Django, websocket →
+  config/routing.py); ws.py `push_telemetry_updates` hooked into drain_stream
+  AFTER the per-org commit — dashboards are only told about DURABLE rows.
+- M6-07 gap-fill: `{"action":"gap_fill","since":...}` → ordered rows from the
+  hypertable, optional slot_id filter, 200-row ceiling, friendly bad-since
+  envelope; stateless merge contract (client walks the stamps).
+- Test suite (17): two-browser group fan-out, group-scoping boundary,
+  close-code matrix via close() spy, cap fill/free cycle, Set/TTL unit paths +
+  Redis-down degradation, drain→push on the REAL pipeline (PG, recording layer),
+  gap-fill matrix. House gotchas encoded in the module docstring: Channels runs
+  the sync consumer in an EXECUTOR THREAD → socket-opening tests must be
+  transaction=True; asgiref CANCELS the app task on a timed-out receive (use
+  receive_nothing for silence probes); send_json_to is a coroutine (await it);
+  PG refuses TRUNCATE on FK-referenced tables even when empty → the conftest
+  cascade-flush patch is needed by plain transactional teardowns too.
 
 ## Phase 5 — Diff gate (M6-08)
-**Status:** pending
+**Status:** complete (2026-09-06)
 
-- CI `implemented == contract` on the 32-path v0.6 core of the v1.5.0 yaml
-  (excludes platform (v0.7), §4n (v0.9), compat prefix, unratified v1.7 paths).
+- tests/test_openapi_contract.py verified green on PG: 3-test gate —
+  (1) no undocumented extras (only the 4 ERRATUM_PENDING v0.5 lifecycle/
+  rotation twins tolerated until their erratum), (2) KNOWN_GAPS monotonic
+  shrink (stale entries fail like missing ones), (3) KNOWN_GAPS=∅ exit →
+  the pair of asserts IS `implemented == contract`.
+- Scope verified on the v1.5.0 yaml: exactly 34 paths (48 total − 4 platform
+  v0.7 − 10 §4n v0.9; /api/compat/* absent from the yaml yet — M6-09 adds it
+  as draft, still excluded). CI-active via docker-compose.ci.yml's pytest
+  command (pytest --cov=apps --cov-fail-under=80).
 
 ## Phase 6 — Compat wave (M6-09, v1.6.0-draft)
-**Status:** pending
+**Status:** done (2026-09-06)
 
-- `legacy_slug_map` + backfill; 15 REST routes + legacy aliases; flat-record
-  translation; farm WS shim; `*_compat.py` modules only; excluded from the gate.
+- ✅ `legacy_slug_map` (additive-only, unmanaged) + idempotent backfill; 15 REST
+  routes under /api/compat/v1 + legacy aliases; flat-record translation;
+  farm WS shim on the core saloon groups (cap + 4003/4000, never pushes
+  buffered rows); `*_compat.py` modules only; excluded from the M6-08 gate.
+- Verified: 18-test C1–C16 matrix green on PG/Timescale + Redis; sqlite quick
+  loop 17+1skip (portable legacy_slug_map/saloon_telemetry DDL replays);
+  full suite 402 passed @ 88.46%.
 
 ## Phase 7 — Ops wave (M6-10, v1.7.0-draft)
 **Status:** pending
@@ -75,10 +110,15 @@ v1.5.0 yaml — plus the two additive scope extensions: Flutter compat adapter
 | Error | Attempt | Resolution |
 |---|---:|---|
 | (carried from v0.5) stale `--reuse-db` test DB hides new migrations | 1 | Drop `test_morghdari_test` or `docker compose -p morghdari_ci down` before gate runs after schema-adding changes |
+| M6-06: async connect denies `bad-token` while the identical sync probe passes | ~6 | Channels runs the sync consumer's connect() in an executor THREAD with its own DB connection — under TestCase's atomic block the uncommitted world rows are invisible there. Socket-opening WS tests must be `django_db(transaction=True)` |
+| M6-06: consumer TS ran before GUC set → 4003 on every PG connect | 1 | `set_config(..., true)` is transaction-scoped; the consumer ran in autocommit. Wrap tenant_context + reads in one `transaction.atomic()` (the middleware's shape) |
+| M6-09: DISTINCT ON crash on sqlite; `saloon_telemetry` absent from the quick loop entirely | 1 | DISTINCT ON → vendor branch (portable last-write-wins fallback); test.py's "create saloon_telemetry from state on sqlite" intent was an unimplemented comment — the compat module fixture now replays portable legacy_slug_map/saloon_telemetry DDLs so the full REST compat surface runs on the laptop loop |
+| M6-09: PG password auth failed mid-session | 1 | The recreated dev postgres (wrong-compose container removed earlier) carries compose's real password `dev_password_only` — always take the URL from run_full.bat, not from memory |
 
 ## Next Step
-Phase 4: WebSocket (M6-06 SaloonTelemetryConsumer — group push
-`saloon_{org_id}_{saloon_id}`, ws:active cap closing 4000/4003, TTL refresh;
-then M6-07 reconnect gap-fill merge on `since`). Phases 2–3 are green:
-full gate 338 passed @ 88.78% on PG/Timescale + Redis, diff gate at
-implemented == contract.
+Phase 7: M6-10 ops wave (v1.7.0-draft, Tracker §4p) — pagination convention,
+O1–O12 ops read/update APIs (additive modules only), `user_sessions` table +
+login/refresh/revoke writers, subscriber `diag:last:{slot}` diagnostics, then
+the yaml ratification commit (v1.7.0 paths enter the contract → M6-08 gate
+re-greened). Phases 2–6 are green: full gate 402 passed @ 88.46% on
+PG/Timescale + Redis; contract gate still implemented == contract at 34 paths.

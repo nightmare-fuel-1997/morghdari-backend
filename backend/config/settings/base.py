@@ -116,6 +116,8 @@ INSTALLED_APPS = [
     "apps.auditing",
     "apps.system_config",
     "apps.monitoring",
+    # M6-09: additive Flutter compat layer (legacy_slug_map + /api/compat/v1).
+    "apps.compat",
 ]
 
 AUTH_USER_MODEL = "accounts.User"  # C-09: doc's extended auth_user (is_platform_staff)

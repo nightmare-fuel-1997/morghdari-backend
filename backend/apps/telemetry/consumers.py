@@ -266,6 +266,30 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None,
 
             processed += len(rows)
 
+            # M6-06: WS fan-out AFTER the commit — dashboards are only ever
+            # told about DURABLE rows ("UI follows DB"). One group_send per
+            # (saloon, slot, device_ts) reading; a redelivered entry after a
+            # crash may re-push the same reading (at-least-once — clients
+            # dedup on the (slot_id, device_ts) pair they also get via REST).
+            from apps.telemetry.ws import push_telemetry_updates
+
+            push_items = [
+                {
+                    "saloon_id": raw["saloon_id"],
+                    "device_ts": raw["fields"].get("device_ts"),
+                    "is_buffered": raw["fields"].get("is_buffered") == "True",
+                    "metrics_by_slot": {
+                        raw["fields"].get("slot_id", ""): json.loads(
+                            raw["fields"].get("metrics", "{}")
+                        )
+                    },
+                }
+                for entry_org, raw in raw_entries
+                if entry_org == org  # only push entries belonging to THIS org
+            ]
+            if push_items:
+                push_telemetry_updates(org, push_items)
+
             # M4-07: LIVE readings of THIS org refresh the LOS watchdog keys
             # ( AFTER the telemetry commit, matching the doc's pipeline order).
             live = [
