@@ -56,17 +56,10 @@ ERRATUM_PENDING = {
     ("post", "/gateways/{gateway_slot_id}/rotation-ack/"),
 }
 
-# The remaining v0.6 build plan (14 routes over 8 endpoints): M6-02 (9 routes
-# over 5 endpoints) and M6-03 (5 routes over 3 endpoints). Shrinks to ∅ by
-# M6-08 — a stale entry fails exactly like a missing one.
-KNOWN_GAPS = {
-    # M6-03 — v1.4 water/biosecurity/capabilities
-    ("get", "/saloons/{saloon_id}/flocks/{flock_id}/water-intake/"),
-    ("post", "/saloons/{saloon_id}/flocks/{flock_id}/water-intake/"),
-    ("get", "/farms/{farm_id}/biosecurity-events/"),
-    ("post", "/farms/{farm_id}/biosecurity-events/"),
-    ("get", "/saloons/{saloon_id}/capabilities/"),
-}
+# The remaining v0.6 build plan. Shrinks to ∅ by M6-08 — a stale entry fails
+# exactly like a missing one. M6-01 + M6-02 emptied their entries; M6-03
+# empties the last 5 (water/biosecurity/capabilities).
+KNOWN_GAPS: set = set()
 
 _API_ROOTS = (
     "apps.accounts.urls",

@@ -19,17 +19,26 @@ v1.5.0 yaml — plus the two additive scope extensions: Flutter compat adapter
   canonical yaml in backend_docs.
 
 ## Phase 2 — Core REST surface (M6-01..M6-03)
-**Status:** pending
+**Status:** complete (2026-09-06)
 
 - v1.1 operability set, v1.3 KPI/dashboard set, v1.4 water/biosecurity/capabilities.
 - Reuse v0.5 conventions: `require_role` choke point, RLS-scoped reads,
   `{"error": ...}` envelopes, config-driven caps.
+- M6-03 delivered: water-intake (feed twin, audited upsert), biosecurity-events,
+  capabilities (FEATURE_MATRIX service); 15-test suite; contract diff gate fully
+  green (`KNOWN_GAPS` = ∅ → implemented == contract on the v1.5.0 v0.6 core).
+  Full CI gate: 325 passed @ 88.71% on PG/Timescale + Redis.
 
 ## Phase 3 — Services (M6-04, M6-05)
-**Status:** pending
+**Status:** complete (2026-09-06)
 
-- KPI computation service (D22 math, NULL-until-inputs).
-- Capability profile service (D23 FEATURE_MATRIX).
+- KPI computation service (D22 math, NULL-until-inputs) — services/kpi.py,
+  (value, reason) tuples, water_feed_ratio, compliance band helpers; the
+  /kpis/ view delegates to it. water:feed /kpis/ exposure → M6-10 ratification.
+- Capability profile service (D23 FEATURE_MATRIX) — v1 set complete
+  (fcr, water_ratio, thi, co, power, biosecurity_log, mortality_pct,
+  compliance_pct); Requires.computed carries computed availability facts;
+  unavailable→available demo green on PG (THI + compliance).
 
 ## Phase 4 — WebSocket (M6-06, M6-07)
 **Status:** pending
@@ -68,5 +77,8 @@ v1.5.0 yaml — plus the two additive scope extensions: Flutter compat adapter
 | (carried from v0.5) stale `--reuse-db` test DB hides new migrations | 1 | Drop `test_morghdari_test` or `docker compose -p morghdari_ci down` before gate runs after schema-adding changes |
 
 ## Next Step
-Phase 2: implement the v1.1 operability endpoint set (M6-01) against the
-v1.5.0 yaml paths, test-first where the Blueprint names tests.
+Phase 4: WebSocket (M6-06 SaloonTelemetryConsumer — group push
+`saloon_{org_id}_{saloon_id}`, ws:active cap closing 4000/4003, TTL refresh;
+then M6-07 reconnect gap-fill merge on `since`). Phases 2–3 are green:
+full gate 338 passed @ 88.78% on PG/Timescale + Redis, diff gate at
+implemented == contract.

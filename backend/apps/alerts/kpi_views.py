@@ -6,26 +6,22 @@
 - GET/PUT  /me/dashboard-config/
 - GET/PUT  /dashboard-config/{role}/
 
-D22 canonical math (Saas.md Decision 22 / v0.6 protocols §3):
-- Mortality %  = Σ mortality_records.count ÷ placement_count × 100
-- Compliance % = compliant hours ÷ hours-with-data (an hour is compliant when
-  every banded metric's hourly average stayed inside the flock-age band from
-  lifecycle_threshold_rules); hours with no data are excluded from the
-  denominator, not counted non-compliant
-- FCR = cumulative feed_kg ÷ ((latest avg_weight_g − day_old_weight_g) × live
-  count ÷ 1000); NULL until BOTH a weight sample and feed rows exist — never
-  0, never an error. NULL day_old_weight_g is treated as 0 (documented ~1.6 %
-  approximation at broiler scale).
-- Cycle summary = {days_elapsed, cumulative mortality %, latest FCR,
-  alert count, compliance %}.
+M6-03 adds the v1.4 water-intake sibling (same per-day upsert + audited
+corrections); biosecurity-events and capabilities live in production_views.
+
+D22 math lives in services/kpi.py (M6-04) — this module assembles the HTTP
+surface: resolve flock/window, gather inputs, delegate to kpi_service, shape
+responses. The threshold-band helpers live in that ONE module so alerting
+(alerts.services.thresholds) and the compliance KPI can never disagree about
+what "in band" means. water:feed ratio (M6-04) ships as service math; its
+/kpis/ exposure awaits the M6-10 contract ratification (yaml is frozen until
+then — service is the canonical home meanwhile).
 
 KPIs are computed per request (no materialization in v1). The `from`/`to`
 params window the *daily* series (mortality days, compliance hours); the
 cumulative metrics stay cumulative by definition. Same conventions as farms:
 org_id comes from the JWT claims and every queryset carries it (RLS is the
-Postgres backstop); writes need engineer+ for that saloon; the threshold-band
-resolution mirrors alerts.services.thresholds so the alerting engine and the
-compliance KPI can never disagree about what "in band" means.
+Postgres backstop); writes need engineer+ for that saloon.
 
 metric_hourly_aggregates shape (Timescale): ONE row per (bucket_hr, slot_id,
 metric_key) with avg_val/min/max columns — hour "has data" when any row in
@@ -35,8 +31,7 @@ the bucket carries a non-null avg_val.
 پیکربندی داشبورد؛ همه‌چیز با فیلتر org از ادعاهای توکن و نقش مهندس برای نوشتن.
 """
 
-from datetime import date, datetime, timedelta
-from zoneinfo import ZoneInfo
+from datetime import date, timedelta
 
 from django.db import transaction
 from django.db.models import Sum
@@ -52,13 +47,13 @@ from apps.alerts.models import (
     AlertInstance,
     DashboardConfig,
     FlockFeedIntake,
+    FlockWaterIntake,
     FlockWeightSample,
-    LifecycleThresholdRule,
 )
+from apps.alerts.services import kpi as kpi_service
+from apps.alerts.services.kpi import TEHRAN
 from apps.farms.models import Saloon
-from apps.telemetry.models import FlockCycle, MetricHourlyAggregate
-
-TEHRAN = ZoneInfo("Asia/Tehran")
+from apps.telemetry.models import FlockCycle
 
 # Engineer-and-above for the production-entry surfaces; any org member reads.
 WRITE_ROLES = {"engineer", "manager", "owner"}
@@ -124,121 +119,9 @@ def _resolve_flock(request, saloon: Saloon):
 
 
 # ---------------------------------------------------------------------------
-# D22 math — pure helpers (unit-tested directly, no DB)
+# D22 math lives in services/kpi.py (M6-04) — pure functions + compliance,
+# unit-tested without a DB; the view below only assembles inputs.
 # ---------------------------------------------------------------------------
-
-def mortality_pct(total_deaths: int, placement_count) -> float | None:
-    if not placement_count:
-        return None
-    return round(total_deaths / placement_count * 100.0, 2)
-
-
-def fcr_value(total_feed_kg, latest_avg_weight_g, live_count: int, day_old_weight_g):
-    """D22 FCR. NULL until both a weight sample and feed data exist — never 0,
-    never an error. NULL day_old_weight_g → treated as 0 (documented ~1.6 %
-    approximation at broiler scale)."""
-    if total_feed_kg is None or latest_avg_weight_g is None:
-        return None
-    if live_count is None or live_count <= 0:
-        return None
-    gain_kg = (float(latest_avg_weight_g) - float(day_old_weight_g or 0)) * live_count / 1000.0
-    if gain_kg <= 0:
-        return None
-    return round(float(total_feed_kg) / gain_kg, 3)
-
-
-def hour_compliant(bucket_rows: list, bands: dict) -> bool:
-    """One hour is compliant when every banded metric's hourly average stayed
-    inside its flock-age band. Metrics without a band are never judged (D23:
-    only metrics with live rules are evaluated). `bucket_rows` is the
-    (metric_key, avg_val) pairs of one bucket_hr."""
-    for metric_key, avg_val in bucket_rows:
-        band = bands.get(metric_key)
-        if band is None or avg_val is None:
-            continue
-        value = float(avg_val)
-        lo, hi = band
-        if lo is not None and value < float(lo):
-            return False
-        if hi is not None and value > float(hi):
-            return False
-    return True
-
-
-def bands_for_age_days(age_days: int, template_id: int | None) -> dict:
-    """{metric_key: (min, max)} for one flock-age day — mirrors
-    alerts.services.thresholds._hash_for_flock so compliance and alerting can
-    never disagree about what 'in band' means."""
-    if template_id is None:
-        return {}
-    rules = LifecycleThresholdRule.objects.filter(
-        template_id=template_id, day_from__lte=age_days, day_to__gte=age_days
-    )
-    return {rule.metric: (rule.min_value, rule.max_value) for rule in rules}
-
-
-def compliance_pct(flock: FlockCycle, days: list) -> float | None:
-    """Compliant hours ÷ hours-with-data over the given Tehran calendar days.
-
-    NULL when no band rules apply anywhere in the window (nothing to be
-    compliant WITH — D23 degradation: unavailable, never 0, never an error)
-    or when no hourly data exists at all (hours with no data are excluded,
-    not counted non-compliant — the denominator would be empty).
-    """
-    # Lockstep with the alerting engine: import its resolver rather than
-    # duplicating the chain — compliance and alerting can never disagree.
-    from apps.alerts.services.thresholds import _resolve_template as _alerting_resolve
-
-    template = _alerting_resolve(flock)
-    template_id = template.template_id if template else None
-    if template_id is None:
-        return None
-    start_local = flock.start_date.astimezone(TEHRAN).date()
-
-    # Band windows per day are cheap; bucket the query per day so the
-    # flock-age bands stay exact (they change day to day).
-    with_data = 0
-    compliant = 0
-    saw_bands = False
-    for day in days:
-        age = (day - start_local).days
-        if age < 0:
-            continue
-        bands = bands_for_age_days(age, template_id)
-        if not bands:
-            continue
-        saw_bands = True
-        day_start = datetime.combine(day, datetime.min.time()).replace(tzinfo=TEHRAN)
-        day_end = day_start + timedelta(days=1)
-        rows = (
-            MetricHourlyAggregate.objects.filter(
-                org_id=flock.org_id,
-                saloon_id=flock.saloon_id,
-                bucket_hr__gte=day_start,
-                bucket_hr__lt=day_end,
-            )
-            .order_by("bucket_hr")
-            .values_list("bucket_hr", "metric_id", "avg_val")
-        )
-        # Group the (bucket, metric, avg) rows into per-bucket pairs.
-        current_bucket = None
-        bucket_pairs: list = []
-        for bucket_hr, metric_key, avg_val in rows:
-            if bucket_hr != current_bucket:
-                if current_bucket is not None and bucket_pairs:
-                    with_data += 1
-                    if hour_compliant(bucket_pairs, bands):
-                        compliant += 1
-                current_bucket = bucket_hr
-                bucket_pairs = []
-            bucket_pairs.append((metric_key, avg_val))
-        if current_bucket is not None and bucket_pairs:
-            with_data += 1
-            if hour_compliant(bucket_pairs, bands):
-                compliant += 1
-    if not saw_bands or with_data == 0:
-        return None
-    return round(compliant / with_data * 100.0, 2)
 
 
 def _parse_date_param(request, name: str):
@@ -249,6 +132,14 @@ def _parse_date_param(request, name: str):
         return date.fromisoformat(raw)
     except ValueError:
         return None
+
+
+def _log_intake_row_out(row) -> dict:
+    """Shared GET shape for the feed/water daily-intake listings (v1.3/v1.4)."""
+    return {
+        "entry_date": row.entry_date.isoformat(),
+        "source": row.source,
+    }
 
 
 def _parse_iso_dt(raw):
@@ -440,6 +331,102 @@ def feed_intake(request, saloon_id: int, flock_id: int):
 
 
 # ---------------------------------------------------------------------------
+# GET/POST /saloons/{saloon_id}/flocks/{flock_id}/water-intake/   (M6-03, v1.4)
+# ---------------------------------------------------------------------------
+@api_view(["GET", "POST"])
+@permission_classes([IsAuthenticated])
+def water_intake(request, saloon_id: int, flock_id: int):
+    """The feed-intake twin: ONE row per flock per day, corrections are
+    UPDATEs audited exactly like feed corrections (yaml: "corrections are
+    UPDATEs, audited"; the device lane later writes source=device rows)."""
+    org_id = _org_id(request)
+    saloon = _saloon_in_org(saloon_id, org_id) if org_id else None
+    if saloon is None:
+        return Response({"error": "saloon not found"}, status=404)
+    flock = _flock_for_saloon(flock_id, saloon, org_id)
+    if flock is None:
+        return Response({"error": "flock not found"}, status=404)
+
+    if request.method == "GET":
+        rows = FlockWaterIntake.objects.filter(flock=flock, org_id=org_id).order_by(
+            "entry_date"
+        )
+        date_from = _parse_date_param(request, "from")
+        if date_from:
+            rows = rows.filter(entry_date__gte=date_from)
+        date_to = _parse_date_param(request, "to")
+        if date_to:
+            rows = rows.filter(entry_date__lte=date_to)
+        out = []
+        for row in rows:
+            item = _log_intake_row_out(row)
+            item["water_l"] = float(row.water_l)
+            out.append(item)
+        return Response(out)
+
+    if not (_roles(request) & WRITE_ROLES):
+        return Response({"error": "engineer role required"}, status=403)
+
+    try:
+        entry_date = date.fromisoformat(str(request.data.get("entry_date", "")))
+    except ValueError:
+        return Response({"error": "entry_date required (YYYY-MM-DD)"}, status=400)
+
+    try:
+        water_l = float(request.data.get("water_l"))
+    except (TypeError, ValueError):
+        return Response(
+            {"error": "water_l required and must be numeric"}, status=400
+        )
+
+    # ONE row per flock per day — re-posting the same date UPDATES it and the
+    # correction is audited (same D22 rule as feed_intake above).
+    with transaction.atomic():
+        existing = (
+            FlockWaterIntake.objects.select_for_update()
+            .filter(flock=flock, entry_date=entry_date)
+            .first()
+        )
+        corrected = existing is not None
+        row = FlockWaterIntake.objects.update_or_create(
+            flock=flock,
+            entry_date=entry_date,
+            defaults={
+                "org_id": org_id,
+                "saloon": saloon,
+                "water_l": water_l,
+                "source": "manual",
+                "recorded_by": request.user,
+                "notes": str(request.data.get("notes") or "").strip() or None,
+            },
+        )[0]
+        if corrected:
+            from apps.auditing.models import AccountActivityLog
+
+            AccountActivityLog.objects.create(
+                actor=request.user,
+                action="water_intake_correction",
+                org_id=org_id,
+                saloon=saloon,
+                details={
+                    "flock_id": flock.pk,
+                    "entry_date": entry_date.isoformat(),
+                    "old_value": float(existing.water_l),
+                    "new_value": float(water_l),
+                },
+            )
+    return Response(
+        {
+            "entry_date": row.entry_date.isoformat(),
+            "water_l": float(row.water_l),
+            "source": row.source,
+            "corrected": corrected,
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+# ---------------------------------------------------------------------------
 # GET /saloons/{saloon_id}/kpis/
 # ---------------------------------------------------------------------------
 @api_view(["GET"])
@@ -487,7 +474,7 @@ def saloon_kpis(request, saloon_id: int):
         day_totals[day] = day_totals.get(day, 0) + record.count
         total_deaths += record.count
 
-    cum_mortality = mortality_pct(total_deaths, flock.placement_count)
+    cum_mortality, _ = kpi_service.mortality_pct(total_deaths, flock.placement_count)
 
     # ---- daily mortality over the window ------------------------------------
     first_day = date_from or start_local
@@ -512,7 +499,7 @@ def saloon_kpis(request, saloon_id: int):
     while cursor <= last_day and len(window_days) < 400:  # a cycle is ~45 days
         window_days.append(cursor)
         cursor += timedelta(days=1)
-    compliance = compliance_pct(flock, window_days)
+    compliance, _ = kpi_service.compliance_pct(flock, window_days)
 
     # ---- FCR ------------------------------------------------------------------
     latest_sample = (
@@ -525,7 +512,7 @@ def saloon_kpis(request, saloon_id: int):
         .aggregate(total=Sum("feed_kg"))["total"]
     )
     live_count = flock.placement_count - total_deaths
-    fcr = fcr_value(
+    fcr, _ = kpi_service.fcr_value(
         float(total_feed) if total_feed is not None else None,
         latest_sample.avg_weight_g if latest_sample else None,
         live_count,
