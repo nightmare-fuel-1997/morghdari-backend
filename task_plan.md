@@ -128,6 +128,7 @@ v1.5.0 yaml — plus the two additive scope extensions: Flutter compat adapter
 | M6-10: O10 429s spuriously in back-to-back full-gate runs | 1 | auth_strict counters live in the SHARED Redis cache (db1) — a rerun within 60 s inherits the previous run's history. O10 class wipes the cache in an autouse fixture |
 | M6-10: UUID-vs-int scalar traps (twice) | 2 | Farm/Saloon PKs are INT AutoFields, not UUIDs — `uuid.UUID(...)` validation 400'd every legal farm_id; string-normalize org comparisons (JWT claim str vs UUID column), the M6-06 lesson mirrored |
 | M6-10: one URL pattern, two views → POST 405 | 1 | Django serves the FIRST match, so a duplicate photos pattern shadowed the upload view; merged into one api_view(["GET", "POST"]) dispatcher |
+| DB audit (2026-09-06): hand-written accounts/0003 used `models.deletion.ForeignKey` (nonexistent) — would have crashed the FIRST real deployment; survived all gates because the test matrix runs `--nomigrations` (migration files never imported by tests) | 1 | Fixed to `models.ForeignKey` + explicit `id` AutoField matching the model; compat/0001 gained the state CreateModel for the unmanaged model (kills the stray autodetect 0002); LESSON: run `makemigrations --check` + a throwaway-DB real `migrate` as a deployment gate — `--nomigrations` proves nothing about migration files |
 
 ## Next Step
 v0.7 planning on owner go (platform/support surface — the excluded

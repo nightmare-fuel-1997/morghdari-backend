@@ -7,7 +7,8 @@ runs the compat suite on PG; the sqlite quick loop skips it with the same
 pragmatism as the hypertable DDL).
 """
 
-from django.db import migrations
+import django.db.models
+from django.db import migrations, models
 
 SQL = """
 CREATE TABLE IF NOT EXISTS legacy_slug_map (
@@ -29,5 +30,24 @@ class Migration(migrations.Migration):
     dependencies = []
 
     operations = [
+        # State registration for the unmanaged model: records LegacySlugMap in
+        # the migration graph so makemigrations --check stays clean (the DDL
+        # itself comes from the RunSQL below — Django emits no SQL for an
+        # unmanaged CreateModel).
+        migrations.CreateModel(
+            name="LegacySlugMap",
+            fields=[
+                ("slug", models.CharField(max_length=64, primary_key=True, serialize=False)),
+                ("kind", models.CharField(max_length=10)),
+                ("org_id", models.UUIDField()),
+                ("farm_id", models.IntegerField(blank=True, null=True)),
+                ("saloon_id", models.IntegerField(blank=True, null=True)),
+                ("created_at", models.DateTimeField(db_default=models.functions.Now(), null=True)),
+            ],
+            options={
+                "db_table": "legacy_slug_map",
+                "managed": False,
+            },
+        ),
         migrations.RunSQL(SQL, REVERSE_SQL),
     ]

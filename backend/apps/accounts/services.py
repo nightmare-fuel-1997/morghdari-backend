@@ -11,6 +11,18 @@ revocation v0.x does not implement). user_sessions IS that register:
 - refresh_is_revoked() is the one hot-path check: O12-revoked jti ⇒ the next
   refresh dies (contract: "that refresh line dies; access token inside its
   15-min expiry").
+- prune_expired_sessions() bounds growth: rows whose refresh token can no
+  longer possibly authenticate (created_at older than
+  REFRESH_TOKEN_LIFETIME) are DELETEd opportunistically at register time —
+  the login path already pays a write here, so it also sweeps the caller's
+  own stale rows (no new beat task: the Blueprint §5 beat topology is
+  canonical and this table is per-user small). A 7-day-lifetime token makes
+  the register a SLIDING 7-day window per user, not an ever-growing log.
+  SECURITY NOTE: REVOKED rows are NEVER pruned by age-of-revocation — they
+  ARE the revocation register (refresh_is_revoked reads them); absence would
+  un-revoke a still-circulating token. A revoked row disappears only when
+  its underlying token expires anyway (created_at rule), after which its
+  absence changes nothing: an expired JWT fails validation regardless.
 
 فارسی: جدولِ user_sessions همان ثبتِ نشست‌هاست؛ نویسنده‌ها بهترین‌تلاش‌اند و
 هیچ‌وقت لاگین را نمی‌شکنند، و jtiِ ابطال‌شده در نوسازی بعدی رد می‌شود.
@@ -19,6 +31,7 @@ revocation v0.x does not implement). user_sessions IS that register:
 import logging
 
 from django.utils import timezone
+from rest_framework_simplejwt.settings import api_settings as jwt_api_settings
 
 from apps.accounts.models import UserSession
 
@@ -35,6 +48,7 @@ def register_session(user, refresh_token, request) -> None:
         jti = refresh_token.payload.get("jti")
         if not jti:
             return
+        prune_expired_sessions(user)
         UserSession.objects.update_or_create(
             refresh_jti=jti,
             defaults={
@@ -46,6 +60,25 @@ def register_session(user, refresh_token, request) -> None:
         )
     except Exception:  # noqa: BLE001 — a broken register never breaks login
         logger.warning("user_sessions register failed", exc_info=True)
+
+
+def prune_expired_sessions(user) -> None:
+    """Delete the caller's rows whose refresh token can never authenticate.
+
+    Expiry anchor is created_at (+ REFRESH_TOKEN_LIFETIME): the jti is minted
+    once, so re-login never resurrects a row's clock. DELIBERATELY does not
+    delete on revoked_at alone — revoked rows ARE the revocation register
+    (refresh_is_revoked reads them); pruning them would let a still-held
+    revoked token refresh again once the row vanished. Best-effort like
+    every writer here.
+    """
+    try:
+        lifetime = jwt_api_settings.REFRESH_TOKEN_LIFETIME
+        UserSession.objects.filter(
+            user=user, created_at__lt=timezone.now() - lifetime
+        ).delete()
+    except Exception:  # noqa: BLE001
+        logger.warning("user_sessions prune failed", exc_info=True)
 
 
 def touch_session(refresh_token) -> None:

@@ -16,7 +16,7 @@ class Migration(migrations.Migration):
         migrations.CreateModel(
             name="UserSession",
             fields=[
-                ("id", models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
+                ("id", models.AutoField(primary_key=True, serialize=False)),
                 ("refresh_jti", models.CharField(max_length=64, unique=True)),
                 ("created_at", models.DateTimeField(db_default=models.functions.Now(), null=True)),
                 ("last_seen_at", models.DateTimeField(db_default=models.functions.Now(), null=True)),
@@ -25,7 +25,7 @@ class Migration(migrations.Migration):
                 ("revoked_at", models.DateTimeField(blank=True, null=True)),
                 (
                     "user",
-                    django.db.models.deletion.ForeignKey(
+                    django.db.models.ForeignKey(
                         on_delete=django.db.models.deletion.RESTRICT,
                         related_name="+",
                         to="accounts.user",

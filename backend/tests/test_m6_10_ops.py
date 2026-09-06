@@ -535,6 +535,37 @@ class TestO11O12Sessions:
         _login("ops-worker")
         assert UserSession.objects.count() == before + 1
 
+    def test_register_prunes_dead_rows(self):
+        """Retention bound (DB quality gate): the register stays a SLIDING
+        token-lifetime window — register_session deletes the caller's rows
+        whose token expired (created_at older than REFRESH_TOKEN_LIFETIME).
+        SECURITY: a fresh REVOKED row must SURVIVE — revoked rows are the
+        revocation register (refresh_is_revoked reads them); pruning them
+        would un-revoke a still-circulating token. Other users' rows are
+        untouched; live rows survive."""
+        from datetime import timedelta
+
+        from django.utils import timezone
+        from rest_framework_simplejwt.settings import api_settings as jwt_api_settings
+
+        w = _make_world()
+        user = w["users"]["owner"].user
+        expired = UserSession.objects.create(
+            user=user,
+            refresh_jti="expired-jti",
+            created_at=timezone.now() - jwt_api_settings.REFRESH_TOKEN_LIFETIME - timedelta(minutes=1),
+        )
+        revoked = UserSession.objects.create(
+            user=user, refresh_jti="revoked-jti", revoked_at=timezone.now()
+        )
+        others_live = UserSession.objects.create(
+            user=w["users"]["worker"].user, refresh_jti="other-live-jti"
+        )
+        _login("ops-owner")  # register_session → prune_expired_sessions(owner)
+        assert not UserSession.objects.filter(pk=expired.pk).exists()
+        assert UserSession.objects.filter(pk=revoked.pk).exists()  # register
+        assert UserSession.objects.filter(pk=others_live.pk).exists()
+
     def test_list_keys_and_current_flag(self):
         w = _make_world()
         token = _login("ops-owner")
