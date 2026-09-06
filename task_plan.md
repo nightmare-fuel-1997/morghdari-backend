@@ -108,10 +108,13 @@ v1.5.0 yaml — plus the two additive scope extensions: Flutter compat adapter
   re-greened. 34-test suite green on PG + sqlite; full gate 436 passed @ 88.11%.
 
 ## Phase 8 — Integration and exit gate (M6-11)
-**Status:** pending
+**Status:** ✅ done (2026-09-06)
 
-- Full suite green (≥ 80% coverage gate), CHANGELOG entries, tag `v0.6`,
-  WALKTHROUGH demo (steps 1–7), docs/KB sweep.
+- Full suite green (436 passed @ 88.11% ≥ the 80% gate), CHANGELOG entries
+  ([v0.6] + the two stubs), annotated tag `v0.6` on `1e387a4`, release note
+  `docs/releases/v0.6.md`, WALKTHROUGH steps 1–7 script in place (recording
+  waived by owner, v0.5 precedent), docs/KB sweep = the ops-spec erratum +
+  shipped-state release drafts. **v0.6 is closed.**
 
 ## Errors Encountered
 
@@ -127,8 +130,7 @@ v1.5.0 yaml — plus the two additive scope extensions: Flutter compat adapter
 | M6-10: one URL pattern, two views → POST 405 | 1 | Django serves the FIRST match, so a duplicate photos pattern shadowed the upload view; merged into one api_view(["GET", "POST"]) dispatcher |
 
 ## Next Step
-Phase 8: M6-11 DoD sweep — CHANGELOG ([v0.6], [Unreleased → 1.6.0],
-[Planned → 1.7.0]), tag `v0.6`, WALKTHROUGH demo steps 1–7, docs/KB sweep,
-full gate re-run. Phases 2–7 are green: full gate 436 passed @ 88.11% on
-PG/Timescale + Redis; contract gate implemented == contract at the ratified
-v1.7.0 yaml (34 + 11 paths).
+v0.7 planning on owner go (platform/support surface — the excluded
+`/platform/support/*` paths). v0.6 is CLOSED: all M6-01..M6-11 ✅, full gate
+436 passed @ 88.11% on PG/Timescale + Redis, contract gate implemented ==
+contract at the ratified v1.7.0 yaml (34 + 11 paths), tag `v0.6` in place.

@@ -1,4 +1,32 @@
-# Progress — v0.5 Provisioning + Zero-Touch
+# Progress — v0.6 Full REST + WebSocket
+
+## M6-11 DoD sweep — 2026-09-06 (v0.6 CLOSED)
+
+- **CHANGELOG**: `[v0.6]` section written (risk killed / Added M6-01..08 /
+  compat + ops / verification / deployment notes) with
+  `[Unreleased → 1.6.0]` + `[Planned → 1.7.0]` stubs noting both waves
+  shipped inside v0.6.
+- **Release note**: `docs/releases/v0.6.md` (house v0.5 format — scope,
+  condensed changelog, acceptance table, verification, next steps).
+- **Tag `v0.6`**: annotated on the final M6-10 commit (`1e387a4`),
+  following the v0.5 tag style.
+- **WALKTHROUGH**: `versions/v0.6/WALKTHROUGH.md` carries the full 1–7
+  demo script (diff-gate, two-window live, gap-fill, KPIs, capabilities,
+  Flutter compat, ops reads); **recording waived by owner** (v0.5
+  precedent) — the script stays runnable on request.
+- **Docs/KB sweep**: ops spec erratum already written
+  (`docs/api-ops-v1.md` — O2/O3 bent to the real day-ranged min/max
+  schema + §7 storage shapes); release drafts (`v1.6-compat-draft.md`,
+  `v1.7-ops-draft.md`) already carry the shipped-state status.
+
+## Verification — v0.6 (final, 2026-09-06)
+
+- **Full CI gate**: 436 passed @ 88.11% coverage (Postgres/Timescale +
+  Redis), exit 0; contract gate green on the ratified v1.7.0 yaml
+  (`implemented == contract`).
+- Milestones M6-01..M6-11 all ✅ in `versions/v0.6/TASKS.md`.
+
+## v0.5 archive
 
 ## Full verification — 2026-09-05 (BOTH GATES GREEN)
 

@@ -3,6 +3,138 @@
 All notable changes per version. Format follows the spiral-roadmap discipline:
 one section per version tag, each listing what risk the version killed.
 
+## [v0.6] — 2026-09-06 — full REST + the living dashboard (M6)
+
+The dashboard is live (WebSocket push + reconnect gap-fill), the whole v1.1–v1.4
+REST surface exists, and the shipped Flutter build runs against the backend
+unchanged through the compat adapter. Contract gate: `implemented == contract`.
+
+### Risk killed
+**The live UX contract.** Before v0.6 the dashboard polled; now every committed
+reading is pushed to every member's tab within the flush window ("UI follows
+DB"), a dropped connection back-fills exactly what it missed, KPIs are computed
+per request with honest NULLs, capabilities report what a saloon can and cannot
+do (and how to enable it), and an old mobile build still works — unmodified —
+through an additive compat layer. The OpenAPI diff gate holds the whole surface
+to the contract: implementation drift breaks CI.
+
+### Added — M6-01 operability (v1.1 endpoint set complete)
+- 15 new endpoints over the 8 paths v0.2/v0.3/v0.5 already built: saloons
+  detail/alerts/analytics-hourly, farms overview, provisioning reads
+  (location-tree/provinces/cities/villages/positions), ack acknowledge,
+  operational-state, flocks (incl. `placement_count` body), metric-types,
+  health extended, hardware/time — completing the 32-path v1.1 surface
+
+### Added — M6-02..M6-05 KPIs + capabilities (v1.3 + v1.4 + services)
+- **M6-02** v1.3 endpoints: weight-samples GET/POST, feed-intake GET/POST
+  (per-day upsert + audited corrections), saloons kpis, personal
+  dashboard-config GET/PUT, role dashboard-config (owner-gated)
+- **M6-03** v1.4 endpoints: water-intake GET/POST (feed twin),
+  biosecurity-events GET/POST, saloon capabilities GET
+- **M6-04** `apps/alerts/services/kpi.py` — the ONE home of the D22 math:
+  every function returns `(value, reason)` tuples (D22+D23 as types),
+  water:feed ratio (industry band 1.8–2:1, NULL until BOTH logs exist),
+  compliance band helpers moved in so alerting and compliance share one
+  source of truth (the view delegates)
+- **M6-05** `apps/alerts/services/capability_profile.py` — FEATURE_MATRIX
+  (declared requirements; `Requires.computed` carries computed availability
+  facts like threshold bands + hourly data); the unavailable→available demo
+  is proven in-suite (THI flips on a seen humidity key; compliance flips on
+  bands + one hourly rollup row — the rollup table, not raw telemetry)
+
+### Added — M6-06/M6-07 the living dashboard (WebSocket)
+- **M6-06** `SaloonTelemetryConsumer` (Channels): one socket per dashboard tab
+  on `WS /ws/saloons/{saloon_id}/telemetry?token=<JWT>` — verdicts in normative
+  order (auth BEFORE cap, so a bad token never consumes a slot): no/invalid
+  token or wrong org → close **4003**, org member at the D21
+  `ws_max_connections_per_user` cap (Redis Set + 300 s zombie-guard TTL,
+  refreshed on every inbound message) → close **4000**; register→re-check race
+  guarded; drain fans `telemetry.update` out after each per-org commit
+  (groups `saloon_{org_id}_{saloon_id}`; `is_buffered` rides the event)
+- **M6-07** reconnect gap-fill: `{"action": "gap_fill", "since": ...}` →
+  ordered `telemetry.gap_fill` from the hypertable inside the claim's tenant
+  context; optional `slot_id` filter; `GAP_FILL_MAX_ROWS=200` ceiling with a
+  friendly bad-`since` envelope; the server holds no session state
+- ASGI wiring: `config/asgi.py` ProtocolTypeRouter + `config/routing.py`
+
+### Added — M6-09 Flutter compat adapter (contract v1.6.0-draft, Tracker §4o)
+Additive-only — new `apps/compat/*_compat.py` modules, one new table, zero
+ALTER on core tables, zero change to the `/api/v1` paths:
+- `legacy_slug_map` (unmanaged) + idempotent `backfill_legacy_slugs` (stable
+  suggested slugs; second run creates zero rows)
+- 15 REST routes under `/api/compat/v1` + legacy `/api/...` aliases with the
+  `{"error": ...}` contract (foreign/bad slug → 404, inverted window → 400)
+- flat telemetry translation with the exact Flutter keys
+  (`temperature`/`humidity`/`lux`/`nh3`, `{"farm_history": [...]}` default 24)
+- `FarmTelemetryConsumer` shim on `WS /ws/farms/{farmSlug}/telemetry` —
+  subscribes to the core saloon groups, translates `telemetry.update`, never
+  pushes buffered rows, same cap + 4003/4000 closes
+- spec: `docs/api-compat-flutter-v1.md` · draft: `docs/releases/v1.6-compat-draft.md`
+
+### Added — M6-10 ops read APIs (contract v1.7.0, Tracker §4p)
+Additive modules in `apps/monitoring` (no new app — M0-05); pagination
+convention `limit`/`offset` → `{results, count}` (shared-ready for v1.8.0):
+- **O1** audit-log query (owner/manager; filterable; bad scalars → 400)
+- **O2/O3** thresholds read (engineer+) / update (manager+, own-org templates
+  ONLY — the global catalog is readable by all, writable by no one;
+  THRESHOLD_UPDATED audit row); **O4** template catalog. Where the spec's
+  sketch diverged from the frozen schema (day-ranged min/max, no
+  `enabled`/`updated_at` columns), the API follows the real table and the
+  spec carries the erratum
+- **O5/O6** saloon photos GET (any member) / POST (engineer+, jpg/png ≤ 10 MB)
+- **O7/O8** gateway + slot reads; **O9** `diag:last:{slot}` diagnostics reader
+  (404 "no diagnostics yet" = honest D22 degradation) backed by the new
+  subscriber hook: diagnostics-only payloads (empty readings, Firmware §3.8)
+  are retained instead of dying silently at Gate 5 — telemetry path untouched
+- **O10** password change with the `auth_strict` throttle (3/min per user — the
+  ONE throttle lane; no default throttle added)
+- **O11/O12** sessions: new `user_sessions` table (accounts 0003, jti-keyed,
+  one row per refresh token) written best-effort at login/refresh; revoke
+  kills that refresh line on its next use; `sid` claim rides the access token
+  so the list marks the current line; blacklist app stays uninstalled
+- ratification: `openapi.yaml` bumped 1.5.0 → 1.7.0 (+11 paths) — the yaml is
+  now the ratified contract for the whole v0.6 surface
+
+### Added — M6-08 the contract gate
+- OpenAPI diff test: `implemented == contract` — `KNOWN_GAPS` emptied to ∅ at
+  M6-03 and kept green; scoped to the non-platform/non-§4n paths (34 = the
+  canonical 32 + 2 org-member paths), excluding `/platform/support/*` (v0.7),
+  the §4n paths (v0.9) and `/api/compat/*` (M6-09) by design; extended and
+  re-greened at the M6-10 ratification
+
+### Verification
+- Full CI gate (Postgres/Timescale + Redis): **436 passed @ 88.11% coverage**,
+  exit 0; contract gate green on the ratified v1.7.0 yaml
+- sqlite quick loop runs the full compat REST surface via portable
+  `legacy_slug_map`/`saloon_telemetry` DDL replays (test.py's
+  "create from state" intent implemented); `DISTINCT ON` given a portable
+  vendor branch
+- Compat: 18/18 (WS) + C1–C16 matrix; ops: 34-test suite; WS: 17/17 —
+  all green on both backends
+- WALKTHROUGH demo script extended to steps 1–7 (`versions/v0.6/WALKTHROUGH.md`);
+  recording waived by owner
+
+### Deployment notes
+- Channels requires the ASGI entrypoint (`config/asgi.py`) behind Daphne/
+  Uvicorn; Redis must be reachable for the WS cap + group layer
+- `DATA_UPLOAD_MAX_MEMORY_SIZE` raised to 12 MB for O6 photo uploads (10 MB
+  contract ceiling + headroom); `MEDIA_ROOT` must be a writable volume
+- New settings: `REST_FRAMEWORK.DEFAULT_THROTTLE_RATES['auth_strict']`;
+  throttle counters live in shared Redis — a wiped cache resets them (by
+  design, documented in the O10 tests)
+
+## [Unreleased → 1.6.0] — Flutter compat adapter (draft, Tracker §4o)
+
+Shipped inside v0.6 (M6-09) ahead of the 1.6.0 tag: additive compat layer so
+the CURRENT Flutter build works against this backend unchanged. Nothing in the
+v1.5.0 REST surface changed. Promoted to `[v0.6]` above.
+
+## [Planned → 1.7.0] — ops read APIs (draft, Tracker §4p)
+
+Shipped inside v0.6 (M6-10) ahead of the 1.7.0 tag: pagination convention,
+O1–O12, `user_sessions`, `diag:last:{slot}`, yaml ratification. Promoted to
+`[v0.6]` above.
+
 ## [v0.5] — 2026-09-02 — provisioning + zero-touch trust boundary (M5)
 
 Unapproved hardware can never inject data: gateway identity, telemetry routing
