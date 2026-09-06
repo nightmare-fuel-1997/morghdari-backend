@@ -42,6 +42,13 @@ PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]  # noqa: F4
 CELERY_TASK_ALWAYS_EAGER = True
 CELERY_EAGER_PROPAGATES = True  # a failing task must FAIL the test, not vanish
 
+# M6-10 (O6 photo uploads): never write upload residue into the repo tree —
+# test MEDIA lands in a temp dir (wiped by the OS, not by git).
+import tempfile
+from pathlib import Path
+
+MEDIA_ROOT = Path(tempfile.gettempdir()) / "morghdari-test-media"
+
 
 class DisableMigrations:
     """MIGRATION_MODULES replacement: app-label → None means 'no migrations'.

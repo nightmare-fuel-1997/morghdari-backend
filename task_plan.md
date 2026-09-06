@@ -94,10 +94,18 @@ v1.5.0 yaml — plus the two additive scope extensions: Flutter compat adapter
   full suite 402 passed @ 88.46%.
 
 ## Phase 7 — Ops wave (M6-10, v1.7.0-draft)
-**Status:** pending
+**Status:** ✅ done (2026-09-06)
 
 - Pagination convention; O1–O12; `user_sessions` + auth writers; subscriber
-  `diag:last:{slot}`; ends with the yaml ratification commit → gate re-greened.
+  `diag:last:{slot}`; yaml ratification commit → gate re-greened.
+- Shipped: accounts 0003 user_sessions + register writers (login/refresh,
+  jti-keyed; sid claim on the access; blacklist app still never installed);
+  subscriber diagnostics.py (diag-only payloads retained instead of dying at
+  Gate 5); ops modules in apps.monitoring (no new app, M0-05); O2/O3 bent to
+  the real schema (day-ranged min/max, no enabled/updated_at — spec erratum
+  noted in docs/api-ops-v1.md; O3 write scope = own-org templates only);
+  yaml 1.5.0→1.7.0 (+11 paths) with the M6-08 gate root list extended and
+  re-greened. 34-test suite green on PG + sqlite; full gate 436 passed @ 88.11%.
 
 ## Phase 8 — Integration and exit gate (M6-11)
 **Status:** pending
@@ -114,11 +122,13 @@ v1.5.0 yaml — plus the two additive scope extensions: Flutter compat adapter
 | M6-06: consumer TS ran before GUC set → 4003 on every PG connect | 1 | `set_config(..., true)` is transaction-scoped; the consumer ran in autocommit. Wrap tenant_context + reads in one `transaction.atomic()` (the middleware's shape) |
 | M6-09: DISTINCT ON crash on sqlite; `saloon_telemetry` absent from the quick loop entirely | 1 | DISTINCT ON → vendor branch (portable last-write-wins fallback); test.py's "create saloon_telemetry from state on sqlite" intent was an unimplemented comment — the compat module fixture now replays portable legacy_slug_map/saloon_telemetry DDLs so the full REST compat surface runs on the laptop loop |
 | M6-09: PG password auth failed mid-session | 1 | The recreated dev postgres (wrong-compose container removed earlier) carries compose's real password `dev_password_only` — always take the URL from run_full.bat, not from memory |
+| M6-10: O10 429s spuriously in back-to-back full-gate runs | 1 | auth_strict counters live in the SHARED Redis cache (db1) — a rerun within 60 s inherits the previous run's history. O10 class wipes the cache in an autouse fixture |
+| M6-10: UUID-vs-int scalar traps (twice) | 2 | Farm/Saloon PKs are INT AutoFields, not UUIDs — `uuid.UUID(...)` validation 400'd every legal farm_id; string-normalize org comparisons (JWT claim str vs UUID column), the M6-06 lesson mirrored |
+| M6-10: one URL pattern, two views → POST 405 | 1 | Django serves the FIRST match, so a duplicate photos pattern shadowed the upload view; merged into one api_view(["GET", "POST"]) dispatcher |
 
 ## Next Step
-Phase 7: M6-10 ops wave (v1.7.0-draft, Tracker §4p) — pagination convention,
-O1–O12 ops read/update APIs (additive modules only), `user_sessions` table +
-login/refresh/revoke writers, subscriber `diag:last:{slot}` diagnostics, then
-the yaml ratification commit (v1.7.0 paths enter the contract → M6-08 gate
-re-greened). Phases 2–6 are green: full gate 402 passed @ 88.46% on
-PG/Timescale + Redis; contract gate still implemented == contract at 34 paths.
+Phase 8: M6-11 DoD sweep — CHANGELOG ([v0.6], [Unreleased → 1.6.0],
+[Planned → 1.7.0]), tag `v0.6`, WALKTHROUGH demo steps 1–7, docs/KB sweep,
+full gate re-run. Phases 2–7 are green: full gate 436 passed @ 88.11% on
+PG/Timescale + Redis; contract gate implemented == contract at the ratified
+v1.7.0 yaml (34 + 11 paths).

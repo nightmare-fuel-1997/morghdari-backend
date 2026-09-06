@@ -15,6 +15,7 @@ import time
 import uuid
 
 from .dlq import send_to_dlq
+from .diagnostics import capture_diag, is_diag_only
 from .resolver import UNKNOWN_SLOT, resolve_pack_slot
 from .topics import TopicParseError, identity_fault, parse_topic
 
@@ -117,6 +118,14 @@ def handle_message(redis_client, topic: str, payload: bytes, db_fetch=None,
     device_ts = data.get("device_ts")
     if not device_ts:
         return send_to_dlq(redis_client, topic, payload, "missing_device_ts")
+
+    # Gate 4.5 — M6-10 (O9): a diagnostics-only self-report (empty readings,
+    # firmware §3.8) used to die silently at Gate 5. Retain it under
+    # diag:last:{slot} and treat it as SUCCESS — the operator reads it via
+    # GET /api/v1/gateways/{slot}/diagnostics/. Telemetry path untouched.
+    if is_diag_only(data):
+        capture_diag(redis_client, gateway_slot, data)
+        return None
 
     # Gate 5 — resolve EVERY pack first (cache-first, so this is cheap on the
     # hot path): dedup keys are PER RESOLVED SLOT (Blueprint §4:131), which

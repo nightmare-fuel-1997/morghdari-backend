@@ -19,6 +19,7 @@ venv/
 # --- Django ---
 *.sqlite3
 backend/staticfiles/
+backend/media/  # dev-server upload root (O6 photos; tests use a tempdir)
 
 # --- Env & secrets (NEVER commit — Deployment Guide §3) ---
 .env

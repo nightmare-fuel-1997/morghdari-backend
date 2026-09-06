@@ -14,6 +14,7 @@ never disagree about who logged in (one rule, two consumers).
 """
 
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.exceptions import AuthenticationFailed
 from rest_framework.permissions import IsAuthenticated
@@ -23,6 +24,11 @@ from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from apps.accounts.models import OrgMember
+from apps.accounts.services import (
+    register_session,
+    refresh_is_revoked,
+    touch_session,
+)
 from apps.accounts.permissions import _claims
 from apps.accounts.serializers import LoginSerializer, resolve_active_membership
 from apps.auditing.models import AccountActivityLog
@@ -41,6 +47,11 @@ class LoginView(TokenObtainPairView):
     def post(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        # M6-10 (O11/O12): one user_sessions row per refresh token. SimpleJWT
+        # hands validated_data["refresh"] over as a STRING — parse it to read
+        # the jti the register keys on. Best-effort: a register failure must
+        # never block a valid login (services.py wraps its own errors too).
+        register_session(serializer.user, RefreshToken(serializer.validated_data["refresh"]), request)
         member, roles = resolve_active_membership(serializer.user)
         # Platform staff log in ORG-LESS (D15): no membership, no org envelope.
         return Response(
@@ -83,6 +94,16 @@ class RefreshView(TokenRefreshView):
         user = User.objects.filter(id=old.payload.get("user_id")).first()
         if user is None:
             return response
+        # M6-10 (O12): a revoked session's refresh line dies HERE — the
+        # register (not the never-installed blacklist app) is the authority.
+        # Pre-M6-10 tokens carry no sid/row: they age out within REFRESH
+        # TOKEN_LIFETIME (7 d) and are simply outside the register.
+        if refresh_is_revoked(old):
+            return Response({"detail": "session revoked"}, status=401)
+        # sid = the refresh token's jti: the refreshed access carries it so
+        # O11 marks exactly this line `current` and O12 revokes exactly it.
+        old["sid"] = old.payload.get("jti")
+        touch_session(old)  # last_seen_at bump (never un-revokes: filtered)
         try:
             member, roles = resolve_active_membership(user)
         except AuthenticationFailed:
@@ -96,6 +117,8 @@ class RefreshView(TokenRefreshView):
             access["org_id"] = str(member.org_id)
         if user.is_platform_staff:
             access["is_platform_staff"] = True
+        if old.payload.get("jti"):
+            access["sid"] = old.payload.get("jti")
         response.data["access"] = str(access)
         return response
 

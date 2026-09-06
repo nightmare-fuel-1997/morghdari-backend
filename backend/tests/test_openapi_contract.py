@@ -1,11 +1,10 @@
 """OpenAPI contract diff test — `implemented == contract` (M6-08 gate).
 
 Scope (M6-08, versions/v0.6/TASKS.md): the non-platform, non-§4n paths of the
-canonical v1.5.0 yaml — 34 paths (the canonical "32 tenant endpoints" of
-VERSIONS.md §v0.6 + the 2 org-member paths v1.4.3 added, built at v0.2).
+v1.5.0 yaml (34 paths) PLUS the v1.7.0 ops paths ratified at M6-10 (the
+ratification commit enters the yaml; spec docs/api-ops-v1.md).
 Excluded on purpose: the 4 ``/platform/support/*`` paths (v0.7), the 10 §4n
-paths (v0.9), the ``/api/compat/*`` prefix (M6-09, v1.6.0) and the v1.7 ops
-paths (until their ratification commit enters the yaml).
+paths (v0.9), and the ``/api/compat/*`` prefix (M6-09, v1.6.0).
 
 Mechanics:
 - ``implemented - documented`` must ALWAYS be empty (no undocumented extras —
@@ -68,6 +67,7 @@ _API_ROOTS = (
     "apps.farms.urls",
     "apps.alerts.urls",
     "apps.monitoring.urls",
+    "apps.monitoring.urls_ops",  # M6-10 ops wave (contract v1.7.0)
 )
 
 

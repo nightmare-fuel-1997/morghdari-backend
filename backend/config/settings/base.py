@@ -167,6 +167,14 @@ AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
 
+# M6-10 (O6, contract v1.7.0): photo uploads allow ≤10 MB (spec §2), so the
+# request-body ceiling must sit above that — Django's default 2.5 MB would
+# reject legal O6 uploads before the view's own size check runs. Additive:
+# only raised for uploads; nothing else posts large bodies.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 12 * 1024 * 1024
+MEDIA_ROOT = BASE_DIR.parent / "media"  # backend/media (local storage backend)
+MEDIA_URL = "/media/"
+
 # bcrypt MUST be present for mqtt_device_credentials (see module docstring #4).
 # Argon2/PBKDF2 stay first so HUMAN passwords keep Django's default strength;
 # EMQX only ever reads the MQTT table, which our code hashes with bcrypt directly.
@@ -203,6 +211,11 @@ REST_FRAMEWORK = {
     # from v0.2 onward (owner-requested docs page at v0.1 close).
      "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
 }
+
+# M6-10 (O10): the ONE strict throttle lane — deliberately NO default
+# throttle (v1.5.0 paths stay untouched; nginx owns coarse limits).
+# auth_strict = 3/min per user, wired ONLY to the password-change view.
+REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"] = {"auth_strict": "3/min"}
 
 # ---------------------------------------------------------------------------
 # JWT (SimpleJWT) — Security Architecture §3.2; owner decision Tracker §4i.

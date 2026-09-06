@@ -25,6 +25,11 @@ urlpatterns = [
     path("api/v1/", include("apps.farms.urls")),
     path("api/v1/", include("apps.alerts.urls")),
     path("api/v1/", include("apps.monitoring.urls")),
+    # M6-10 ops wave (contract v1.7.0-draft): audit/thresholds/photos/
+    # gateways/sessions. Mounted from the SAME app's second urlconf —
+    # deliberately NOT in apps.monitoring.urls so the implemented ==
+    # contract gate (M6-08) keeps its pre-ratification scope.
+    path("api/v1/", include("apps.monitoring.urls_ops")),
     # M6-09 compat layer (v1.6.0-draft): additive prefix + legacy Flutter
     # aliases, same views. NOT in apps.* urlconfs → the implemented ==
     # contract gate's _API_ROOTS walk never sees it (spec §1.2).

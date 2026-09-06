@@ -84,3 +84,40 @@ class AccountRoleScope(models.Model):
                 name="uq_account_role_scopes_scope",
             ),
         ]
+
+
+class UserSession(models.Model):
+    """M6-10 (contract v1.7.0 §7 design): one row per live refresh token.
+
+    WHY: the O11/O12 session list/revoke contract needs a per-login register,
+    and the token_blacklist app is DELIBERATELY never installed (base.py: the
+    blacklist would promise revocation v0.x does not implement). This table is
+    the register instead:
+
+    - refresh_jti (unique) keys the row; O12 revocation flips revoked_at and
+      the RefreshView override then refuses any refresh whose jti is revoked —
+      the "refresh line dies" of the contract, sized at one cheap indexed
+      lookup per refresh (15-min access expiry still applies, as contracted).
+    - ip / user_agent come from the login/refresh request (best-effort strings
+      — a proxy chain is not parsed here, REMOTE_ADDR is honest).
+    - last_seen_at updates on every successful refresh; `current` in O11 is
+      derived per-request (never stored).
+
+    فارسی: یک ردیف به‌ازای هر توکنِ نوسازی زنده؛ ابطال یعنی ست‌شدنِ revoked_at و
+    ردِ نوسازی بعدی بر اساس jti — بدونِ نصبِ اپِ blacklist که همیشه ممنوع بود.
+    """
+
+    id = models.AutoField(primary_key=True)
+    user = models.ForeignKey("User", on_delete=models.RESTRICT, related_name="+")
+    refresh_jti = models.CharField(max_length=64, unique=True)
+    created_at = models.DateTimeField(null=True, db_default=Now())
+    last_seen_at = models.DateTimeField(null=True, db_default=Now())
+    ip = models.GenericIPAddressField(null=True, blank=True)  # INET on postgres
+    user_agent = models.CharField(max_length=400, null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "user_sessions"
+        indexes = [
+            models.Index(fields=["user", "revoked_at"], name="idx_user_sessions_user"),
+        ]

@@ -35,6 +35,11 @@ class LoginSerializer(TokenObtainPairSerializer):
             token["org_id"] = str(member.org_id)
         if user.is_platform_staff:
             token["is_platform_staff"] = True
+        # M6-10 (O11): sid = this refresh token's jti, stamped BEFORE the
+        # access is derived — SimpleJWT copies non-standard claims onto the
+        # paired access, so the O11 `current` line matches on first login
+        # (no extra round-trip; the register row keys on the same jti).
+        token["sid"] = token.payload.get("jti")
         return token
 
 

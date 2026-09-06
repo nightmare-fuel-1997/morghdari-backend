@@ -1,7 +1,7 @@
 openapi: "3.0.3"
 info:
   title: Morghdari Poultry Monitoring API
-  version: "1.5.0"
+  version: "1.7.0"
   description: |
     REST API for the Morghdari multi-tenant poultry monitoring platform.
     WebSocket protocol is documented separately in the Frontend Integration Spec.
@@ -2351,3 +2351,330 @@ paths:
       responses:
         '201': { description: Ticket created (medical tickets route to the on-call doctor) }
         '403': { description: Forbidden — user not in the target org }
+
+  # ------------------------------------------------------------------
+  # v1.7.0 — Ops wave (M6-10; spec docs/api-ops-v1.md, Tracker §4p).
+  # Additive-only; rows follow the REAL frozen schema (spec O2/O3 sketch
+  # erratum: lifecycle_threshold_rules has no enabled/updated_at columns).
+  # Every list endpoint uses the v1.7.0 pagination convention
+  # (limit/offset → {results, count}; spec §1).
+  # ------------------------------------------------------------------
+  /audit-logs/:
+    get:
+      tags: [Ops]
+      summary: Filterable audit-log query (owner/manager)
+      description: >
+        Reads account_activity_logs (write-only elsewhere). Filters:
+        actor_id, action, farm_id, saloon_id, from/to (ISO Z). Bad scalars →
+        400 {"error":"invalid pagination"}. Never cross-org data.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 0, maximum: 500, default: 50 } }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+        - { name: actor_id, in: query, schema: { type: integer } }
+        - { name: action, in: query, schema: { type: string } }
+        - { name: farm_id, in: query, schema: { type: integer } }
+        - { name: saloon_id, in: query, schema: { type: integer } }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+      responses:
+        '200':
+          description: Paginated audit rows
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        actor_id: { type: integer }
+                        username: { type: string }
+                        action: { type: string }
+                        details: {}
+                        created_at: { type: string }
+        '400': { description: Bad pagination or scalar }
+        '403': { description: Forbidden — worker/engineer/doctor }
+  /thresholds/:
+    get:
+      tags: [Ops]
+      summary: Threshold rules (engineer+)
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 0, maximum: 500, default: 50 } }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+        - { name: saloon_id, in: query, schema: { type: integer } }
+        - { name: metric_key, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: Rules of own-org templates + the global catalog
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: integer }
+                        metric_key: { type: string }
+                        template: { type: integer, nullable: true }
+                        day_from: { type: integer }
+                        day_to: { type: integer }
+                        min: { type: number, nullable: true }
+                        max: { type: number, nullable: true }
+        '403': { description: Forbidden }
+
+  /thresholds/{rule_id}/:
+    put:
+      tags: [Ops]
+      summary: Update a threshold rule (manager+)
+      description: >
+        Write scope = OWN-org templates ONLY (global catalog rows are
+        readable via O2, writable by no one — cross-tenant write hazard).
+        Values validated against metric sanity bounds; 400 on absurd values.
+        Writes an account_activity_logs row (THRESHOLD_UPDATED).
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: rule_id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                min: { type: number }
+                max: { type: number }
+      responses:
+        '200': { description: Updated rule }
+        '400': { description: Threshold out of range }
+        '403': { description: Forbidden — engineer/worker }
+        '404': { description: Unknown or foreign rule (identical) }
+
+  /threshold-templates/:
+    get:
+      tags: [Ops]
+      summary: Threshold template catalog (engineer+, read-only)
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 0, maximum: 500, default: 50 } }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+        - { name: breed_type, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: Catalog rows
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        template_id: { type: integer }
+                        org_id: { type: integer, nullable: true }
+                        breed_type: { type: string, nullable: true }
+                        name: { type: string, nullable: true }
+                        is_default: { type: boolean, nullable: true }
+        '403': { description: Forbidden }
+
+  /saloons/{saloon_id}/photos/:
+    get:
+      tags: [Ops]
+      summary: List saloon photos (any member of the owning org)
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: saloon_id, in: path, required: true, schema: { type: integer } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 0, maximum: 500, default: 50 } }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+      responses:
+        '200':
+          description: Photo rows
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: integer }
+                        url: { type: string }
+                        caption: { type: string, nullable: true }
+                        taken_at: { type: string, nullable: true }
+                        uploaded_by: { type: integer }
+        '403': { description: Not a tenant member }
+        '404': { description: Unknown or foreign saloon (identical) }
+    post:
+      tags: [Ops]
+      summary: Upload a saloon photo (engineer+)
+      description: >
+        Multipart file (jpg/png ≤10 MB), optional caption/taken_at. Storage
+        backend is a deploy setting (spec §2 O6). Foreign/unknown saloon →
+        404 (identical).
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: saloon_id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+                caption: { type: string }
+                taken_at: { type: string }
+      responses:
+        '201': { description: Created photo }
+        '400': { description: Type/size violation or missing file }
+        '403': { description: Forbidden — worker/doctor }
+        '404': { description: Unknown or foreign saloon (identical) }
+
+  /gateways/:
+    get:
+      tags: [Ops]
+      summary: Gateway slots (manager+, read-only)
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 0, maximum: 500, default: 50 } }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+        - { name: farm_id, in: query, schema: { type: integer } }
+        - { name: status, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: Gateway rows (last_seen_at from the diag register)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        slot_id: { type: string }
+                        farm_id: { type: integer, nullable: true }
+                        provisioning_status: { type: string }
+                        last_seen_at: { type: string, nullable: true }
+                        saloon_count: { type: integer }
+        '403': { description: Forbidden — engineer/worker/doctor }
+
+  /gateways/{slot}/:
+    get:
+      tags: [Ops]
+      summary: One gateway + saloon zones + active hardware (manager+)
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: slot, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Gateway detail }
+        '404': { description: Unknown or foreign gateway (identical) }
+
+  /gateways/{slot}/diagnostics/:
+    get:
+      tags: [Ops]
+      summary: Last retained gateway diagnostics (engineer+)
+      description: >
+        Serves the diag:last:{slot} Redis hash written by the subscriber for
+        diagnostics-only self-reports (Firmware §3.8). 404 {"error":"no
+        diagnostics yet"} when the gateway never reported (or Redis down —
+        honest degradation).
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: slot, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Last diagnostics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  slot_id: { type: string }
+                  reported_at: { type: string, nullable: true }
+                  battery_v: { type: number, nullable: true }
+                  rssi: { type: number, nullable: true }
+                  free_heap: { type: number, nullable: true }
+                  sd_ok: { type: boolean, nullable: true }
+                  errors:
+                    type: array
+                    items: { type: string }
+        '404': { description: No diagnostics yet, or unknown/foreign slot (404 either way) }
+
+  /auth/password/change/:
+    post:
+      tags: [Authentication]
+      summary: Change own password (any authenticated user; 3/min auth_strict)
+      description: >
+        {current_password, new_password} — new ≥10 chars, denylist + Django
+        validators. 401 wrong current; 400 weak/new-equals-old; 429 past
+        3/min per user. All the caller's refresh lines die (user_sessions
+        rows revoked; jti-checked at refresh).
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_password, new_password]
+              properties:
+                current_password: { type: string }
+                new_password: { type: string }
+      responses:
+        '200': { description: Password changed }
+        '400': { description: Weak or identical new password }
+        '401': { description: Wrong current password }
+        '429': { description: Past the 3/min auth_strict lane }
+
+  /auth/sessions/:
+    get:
+      tags: [Authentication]
+      summary: List OWN live sessions (any authenticated user)
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: The caller's session register
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: integer }
+                    created_at: { type: string, nullable: true }
+                    last_seen_at: { type: string, nullable: true }
+                    ip: { type: string, nullable: true }
+                    user_agent: { type: string, nullable: true }
+                    current: { type: boolean }
+
+  /auth/sessions/{session_id}/:
+    delete:
+      tags: [Authentication]
+      summary: Revoke one of OWN sessions
+      description: >
+        404 identical for foreign/unknown ids (never an existence oracle);
+        revocation kills the refresh line (jti-checked at refresh; access
+        token expires within 15 min).
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: session_id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200': { description: Revoked }
+        '404': { description: Unknown or foreign session (identical) }
