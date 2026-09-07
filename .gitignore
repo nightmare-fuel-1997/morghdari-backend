@@ -43,6 +43,8 @@ demo-ui/dist/
 
 # --- Test / coverage artifacts ---
 .coverage
+coverage.json
+coverage.xml
 htmlcov/
 .pytest_cache/
 .zcode/
