@@ -51,6 +51,10 @@ docker compose -f docker-compose.ci.yml -p morghdari_ci run --rm --build live-ve
 3. Roll workers (Daphne/ASGI behind nginx) instance by instance; health check
    between instances (image HEALTHCHECK probes `/api/v1/health/`: DB + Redis).
 4. Restart the MQTT subscriber; watch it reconnect (2 s retry loop, FNV-soft).
+5. Mount the photo volume on every backend instance:
+   `media_prod:/app/media` (the image creates the dir appuser-owned; without
+   the mount O6 uploads die with the container and `default_storage.url()`
+   rows point at files that no longer exist after a re-deploy).
 
 ## 4. Rollback procedure
 
@@ -84,3 +88,21 @@ docker ps   # subscriber + backend up, EMQX reachable
    (provisioning state, not ingestion bugs).
 5. Never hand-edit the database; every schema change goes through a migration
    (the migrate-gate exists precisely because of what escapes review).
+
+## 6. Edge limits live in nginx, not Django (02:00 card, part 2)
+
+Django deliberately carries only the ONE `auth_strict` throttle (O10, 3/min).
+Coarse limits belong to nginx so junk never reaches Python. Minimum zones for
+the v0.7 VPS bring-up (the full file lands with the prod compose):
+
+```nginx
+limit_req_zone $binary_remote_addr zone=auth:10m rate=5r/s;
+limit_req_zone $binary_remote_addr zone=gwcfg:10m rate=1r/s;
+limit_req_zone $binary_remote_addr zone=compat:10m rate=5r/s;
+
+location /api/v1/auth/               { limit_req zone=auth   burst=10 nodelay; proxy_pass http://backend; }
+location = /api/v1/gateways/config/ { limit_req zone=gwcfg  burst=2  nodelay; proxy_pass http://backend; }
+location /api/compat/                { limit_req zone=compat burst=10 nodelay; proxy_pass http://backend; }
+# WebSocket: Django closes 4003 (auth/org) BEFORE 4000 (cap) — a 4003 spike
+# means a bad client build, not an outage; never log ?token= ($uri only).
+```

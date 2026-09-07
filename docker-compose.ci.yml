@@ -142,9 +142,20 @@ services:
     # mounted read-only instead of duplicated into the image.
     volumes:
       - ./initdb:/initdb:ro
-    # Coverage gate lives in the command (mirrors docs template); pytest.ini
+    # Coverage gates live in the command (mirrors docs template); pytest.ini
     # addopts would double-count --cov args otherwise kept minimal here.
-    command: pytest --cov=apps --cov-report=term-missing --cov-fail-under=80
+    # The module gate runs in the SAME container right after pytest so it reads
+    # the full PG-suite coverage.json: views/api <80 FAILS the build, service
+    # files <90 only WARN (backfill queue — scripts/check_module_coverage.py).
+    # Explicit sh -c form like live-verify: a plain string command gets NO
+    # shell from compose, so `&&` would arrive at pytest as literal argv.
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        pytest --cov=apps --cov-report=term-missing --cov-report=json:coverage.json --cov-fail-under=80
+        python scripts/check_module_coverage.py
 
   # Migration deployability gate — the --nomigrations hole closer. Runs BEFORE
   # pytest conceptually (a migration graph that cannot deploy makes test

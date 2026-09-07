@@ -50,6 +50,12 @@ COPY --from=builder /wheels-base /wheels-base
 COPY --from=builder /build/requirements requirements
 RUN pip install --no-cache-dir /wheels-base/* && rm -rf /wheels-base
 COPY . .
+# O6 photo uploads (contract v1.7.0) land in MEDIA_ROOT (/app/media): the dir
+# must exist AND belong to appuser, otherwise the first prod upload 500s on
+# PermissionDenied while every gate stays green (tests use a tempdir MEDIA_ROOT
+# and never touch this path). Prod must additionally mount a named volume on
+# /app/media (see DEPLOYMENT.md) or uploads die with the container.
+RUN mkdir -p /app/media && chown appuser:appuser /app/media
 # Blueprint §8: healthcheck targets the platform health endpoint. NOTE until
 # v0.6 implements /api/v1/health/ this check reports unhealthy by design —
 # logged as CONSTRAINTS C-06 so nobody "fixes" it by weakening the spec

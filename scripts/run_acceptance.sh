@@ -6,7 +6,9 @@
 #   1. migrate-gate   — migration deployability (makemigrations --check +
 #                       real forward migrate + idempotency + reversibility
 #                       posture, on a throwaway DB it creates and drops).
-#   2. test           — the full pytest suite with the 80% coverage gate.
+#   2. test           — the full pytest suite with the 80% coverage gate, plus
+#                       the per-module gate (views/api <80 fails, services <90
+#                       warns) inside the same container.
 #   3. image-scan     — trivy CRITICAL/HIGH (fixable) CVEs on the built image.
 #
 # WHY the flags are NON-NEGOTIABLE here (and hardcoded, not arguments):
