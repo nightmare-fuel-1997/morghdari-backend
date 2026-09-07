@@ -1,5 +1,17 @@
 # v0.7 TASKS — ordered breakdown
 
+_Status (2026-09-07): SPIRAL START on branch `v0.7-m7` (cut from `docs/sync-4s` @ `0271574`).
+Baseline: v0.6 green (436 passed @ 88.11% PG/Timescale + Redis; contract gate
+implemented == contract on the ratified v1.7.0 yaml, 59 paths).
+Owner decisions (2026-09-07, Tracker §4s sync): **(1)** the contract union stays
+**v1.7.0** — compat routes + reports-merge W-aliases absorb into 1.7.0 at the v0.7
+ratification (1.8.0 stays reserved for growth); **(2)** the **reports-merge
+implementation moves to v0.7 scope** (OPEN-4s deadline: end of v0.7) — the §4n
+reports base it rides on comes forward with it → tasks **M7-15..M7-17** below.
+The VPS-resident tasks (M7-01..M7-06, M7-08, M7-09, M7-13) are owner-gated on VPS
+access; the code-side waves (M7-07, M7-11..M7-12, M7-15..M7-17) proceed in parallel
+per the no-reorder convention.
+
 | # | Task | Depends on | Acceptance |
 |---|---|---|---|
 | M7-01 | VPS provisioned per Deployment Guide §10 (4c/16 GB/100 GB SSD); ufw + docker-port discipline (§3.1) | v0.6 | only 22/80/443/8883 reachable |
@@ -15,4 +27,7 @@
 | M7-12 | v1.6 farm telemetry + paging: GET /api/v1/farms/{farm_id}/telemetry/ aggregation (TelemetryReading shape) + ?limit=/?offset= on saloon telemetry (latest = ?limit=1) in apps/telemetry (views.py + urls.py); openapi.yaml +1 path, gate root list +1 | M7-11 | farm aggregate equals saloon rows; ?limit=24 chart call green; gate green |
 | M7-13 | Frontend migration proof on staging VPS: Flutter build uses native IDs only — zero /api/compat/* and legacy /api/... hits in nginx access log for a full app session (device cards from saloons[], chart via ?limit=24) | M7-03, M7-11, M7-12 | access-log grep for compat + legacy aliases returns nothing; gate green |
 | M7-14 | Compat removal: unmount urls_compat, delete apps/compat + its tests, migration dropping legacy_slug_map; gate stays green (compat was prefix-excluded, removal is gate-neutral — verify) | M7-13 | /api/compat/* → 404; full suite green; no compat refs in openapi.yaml |
+| M7-15 | **NEW (§4s reports base — v0.9 scope pulled forward):** `daily_reports` + `report_medication_usages` tables (database.md verbatim, additive migrations, FORCE-RLS policy template) + the v1.5 report endpoints: GET/POST /saloons/{saloon_id}/reports/ (one row per flock/saloon/date; medications → FLAGGED + auto medical ticket + WS push to doctor), PATCH /reports/{report_id}/ (Tehran-day time-lock, D24-3; System Admin/Support exempt + audited) | v0.6 | RLS no-leak tests green; state machine tests green; FLAGGED auto-ticket + WS green; time-lock tests green |
+| M7-16 | **NEW (§4s merge — docs/api-reports-merge-v1.md):** `daily_report_extras` 1:1 side table (zero ALTER); alias normalization on POST/PATCH (casualties_today→mortality_count, is_draft→status, Persian literals); new fields (bird_count, avg_temperature_c, avg_humidity_pct, ventilation_status, health_status, checklist); responses gain new keys + is_completed + reported_by/reported_at aliases; checklist-incomplete SUBMITTED → 400; new GET /saloons/{saloon_id}/reports/{report_date}/ (yaml +1 path); old v1.5.0 payloads byte-compat | M7-15 | alias-normalization test green (pure-Flutter body == canonical body); conflict → 400; checklist → 400; old-payload replay identical; gate green |
+| M7-17 | **NEW (§4s compat aliases):** W1–W5 report write/read aliases under /api/compat/v1 (C-09 superseded for reports only) + v0.7 ratification commit: openapi.yaml absorbs compat routes + reports-merge W-aliases into v1.7.0 (union — 1.8.0 stays reserved); gate root list re-scoped, re-green | M7-16 | W1–W5 matrix green (slugs resolve via legacy_slug_map, reporter = JWT user); ratification diff green |
 | M7-10 | DoD sweep: CHANGELOG, tag `v0.7`, demo recorded, docs swept | all | tag pushed |

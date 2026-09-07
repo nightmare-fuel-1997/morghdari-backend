@@ -1,138 +1,102 @@
-# v0.6 Implementation Plan — Full REST + WebSocket (+ compat & ops extensions)
+# v0.7 Implementation Plan — Real VPS + Observability (+ native v1.6, reports-merge, support)
 
-**Branch:** `v0.6-m6`
-**Baseline:** v0.5 (commit `8b94218`, tag `v0.5`) — verified green 2026-09-05:
-284 passed @ 89.24% + live-verify 10/10 on EMQX 5.5.
-**Goal:** the complete live UX contract — all 32 core tenant endpoints, Channels
-consumer, KPI + capability services, the `implemented == contract` gate on the
-v1.5.0 yaml — plus the two additive scope extensions: Flutter compat adapter
-(v1.6.0-draft, Tracker §4o) and ops read APIs (v1.7.0-draft, Tracker §4p).
+**Branch:** `v0.7-m7` (cut from `docs/sync-4s` @ `0271574`)
+**Baseline:** v0.6 close (commit `2efd17f`, tag `v0.6` on `1e387a4`) — 436 passed @
+88.11% (Postgres/Timescale + Redis); contract gate implemented == contract on the
+ratified v1.7.0 yaml (59 paths).
+**Goal:** the system runs on real hardware and screams when it's sick — plus the
+owner's 2026-09-07 scope decisions (Tracker §4s): the contract union stays **v1.7.0**
+(compat routes + reports-merge W-aliases absorb at the v0.7 ratification; 1.8.0 stays
+reserved for growth), and the **reports-merge implementation moves into v0.7**
+(OPEN-4s deadline: end of v0.7) — the §4n reports base it rides on comes forward with it.
 
-## Phase 1 — Re-orient and scope
-**Status:** complete
+## Phase 1 — Re-orient and scope (M7 planning refresh)
+**Status:** complete (2026-09-07)
 
-- Branch `v0.6-m6` created from main after the v0.5 close-out commit (`79a0838`).
-- Task plan re-based: `versions/v0.6/TASKS.md` refreshed to contract v1.5.0
-  (48 paths = 32 core + 12 §4n v0.9 + 4 platform) with M6-09 (compat) and
-  M6-10 (ops) added; WALKTHROUGH extended with steps 6–7.
-- Specs on hand: `docs/api-compat-flutter-v1.md`, `docs/api-ops-v1.md`,
-  canonical yaml in backend_docs.
+- Branch `v0.7-m7` created from `docs/sync-4s` (which already carried the S4s docs
+  sync + the M7-11..14 task additions on top of the v0.6 close).
+- `versions/v0.7/TASKS.md` re-based: baseline header, owner decisions recorded,
+  reports-merge added as **M7-15..M7-17** (base reports surface → merge surface +
+  `daily_report_extras` → compat W1–W5 aliases + ratification).
+- Split established: **code-side waves** (M7-07, M7-11..M7-12, M7-15..M7-17) run on
+  the laptop; **VPS-resident waves** (M7-01..M7-06, M7-08, M7-09, M7-13) are
+  owner-gated on VPS access; **M7-14** (compat removal) is hard-sequenced behind the
+  M7-13 staging proof.
 
-## Phase 2 — Core REST surface (M6-01..M6-03)
-**Status:** complete (2026-09-06)
+## Phase 2 — M7-11 native v1.6 lists (GET /api/v1/farms/, GET /api/v1/saloons/)
+**Status:** in progress
 
-- v1.1 operability set, v1.3 KPI/dashboard set, v1.4 water/biosecurity/capabilities.
-- Reuse v0.5 conventions: `require_role` choke point, RLS-scoped reads,
-  `{"error": ...}` envelopes, config-driven caps.
-- M6-03 delivered: water-intake (feed twin, audited upsert), biosecurity-events,
-  capabilities (FEATURE_MATRIX service); 15-test suite; contract diff gate fully
-  green (`KNOWN_GAPS` = ∅ → implemented == contract on the v1.5.0 v0.6 core).
-  Full CI gate: 325 passed @ 88.71% on PG/Timescale + Redis.
+- `apps/farms/api.py`: `farm_overview` body extracted into a payload helper reused
+  by the list (identical response shapes — M6-01 tests must stay byte-green);
+  `farm_list` returns `FarmOverview[]` (`?org_id=` optional, foreign org → 403);
+  `saloon_list` returns `SaloonDetail[]` (`?farm_id=` filter, foreign farm → 403).
+- Role-scope narrowing via `scoped_farms`/`scoped_saloons` (M2-06 choke point) on
+  top of the explicit org filter — RLS stays the Postgres backstop.
+- `openapi.yaml` +2 paths (`/farms/`, `/saloons/`); contract-gate root list already
+  includes `apps.farms.urls` → gate re-greens once paths + routes land together.
 
-## Phase 3 — Services (M6-04, M6-05)
-**Status:** complete (2026-09-06)
+## Phase 3 — M7-12 farm telemetry + paging
+**Status:** pending
 
-- KPI computation service (D22 math, NULL-until-inputs) — services/kpi.py,
-  (value, reason) tuples, water_feed_ratio, compliance band helpers; the
-  /kpis/ view delegates to it. water:feed /kpis/ exposure → M6-10 ratification.
-- Capability profile service (D23 FEATURE_MATRIX) — v1 set complete
-  (fcr, water_ratio, thi, co, power, biosecurity_log, mortality_pct,
-  compliance_pct); Requires.computed carries computed availability facts;
-  unavailable→available demo green on PG (THI + compliance).
+- `GET /api/v1/farms/{farm_id}/telemetry/` — TelemetryReading shape merged across
+  the farm's saloons (compat `telemetry_farm_history` is the aggregation precedent:
+  `filter(org_id, saloon__farm_id=...)`), rows gain `saloon_id`; acceptance: farm
+  aggregate == union of saloon rows for the same window.
+- `?limit=`/`?offset=` on `GET /saloons/{saloon_id}/telemetry/` — paging mode is
+  newest-first so `?limit=1` IS the latest reading (the Flutter chart calls
+  `?limit=24`); no-param behavior stays byte-identical (chronological ascending).
+- `openapi.yaml` +1 path; gate green.
 
-## Phase 4 — WebSocket (M6-06, M6-07)
-**Status:** complete (2026-09-06)
+## Phase 4 — Reports-merge wave (M7-15 → M7-16 → M7-17)
+**Status:** pending
 
-- SaloonTelemetryConsumer (apps/telemetry/ws_consumer.py) + ws.py service layer:
-  JWT from `?token=` (executor-safe, never the ORM path), org-membership check,
-  D21 `ws_max_connections_per_user` cap as a Redis SET + 300 s zombie-guard TTL
-  refreshed on EVERY inbound message, auth-BEFORE-cap verdict order
-  (4003 = auth/org, 4000 = full), register→re-check race guard.
-- Tenant rule: saloons AND saloon_telemetry are FORCE-RLS'd, so every consumer
-  query runs inside `transaction.atomic() + tenant_context(org_claim)` (the GUC
-  is transaction-scoped — autocommit would kill it before the query; the WS twin
-  of TenantOrgMiddleware). Explicit org comparison kept as the portable check —
-  RLS is the backstop, never the only gate (test connections bypass RLS).
-- config/asgi.py wrapped in ProtocolTypeRouter (http → Django, websocket →
-  config/routing.py); ws.py `push_telemetry_updates` hooked into drain_stream
-  AFTER the per-org commit — dashboards are only told about DURABLE rows.
-- M6-07 gap-fill: `{"action":"gap_fill","since":...}` → ordered rows from the
-  hypertable, optional slot_id filter, 200-row ceiling, friendly bad-since
-  envelope; stateless merge contract (client walks the stamps).
-- Test suite (17): two-browser group fan-out, group-scoping boundary,
-  close-code matrix via close() spy, cap fill/free cycle, Set/TTL unit paths +
-  Redis-down degradation, drain→push on the REAL pipeline (PG, recording layer),
-  gap-fill matrix. House gotchas encoded in the module docstring: Channels runs
-  the sync consumer in an EXECUTOR THREAD → socket-opening tests must be
-  transaction=True; asgiref CANCELS the app task on a timed-out receive (use
-  receive_nothing for silence probes); send_json_to is a coroutine (await it);
-  PG refuses TRUNCATE on FK-referenced tables even when empty → the conftest
-  cascade-flush patch is needed by plain transactional teardowns too.
+- M7-15 §4n base: `daily_reports` + `report_medication_usages` (database.md
+  verbatim, additive migrations, FORCE-RLS template, org_id denormalized), the v1.5
+  endpoints (list/POST/PATCH), state machine DRAFT→SUBMITTED→APPROVED/REJECTED +
+  FLAGGED branch (medications → auto medical ticket + WS push to doctor), Tehran-day
+  edit time-lock (D24-3) with System Admin/Support exemption audited.
+- M7-16 merge: `daily_report_extras` 1:1 side table (zero ALTER), alias
+  normalization (casualties_today→mortality_count, is_draft→status, Persian
+  literals), new fields + checklist enforcement (SUBMITTED with incomplete checklist
+  → 400), single-report GET `/{report_date}/`, `is_completed` +
+  `reported_by`/`reported_at` response aliases, old-payload byte-compat.
+- M7-17 compat aliases W1–W5 (C-09 superseded for reports only) + the v0.7
+  ratification commit (openapi.yaml absorbs compat routes + W-aliases into v1.7.0;
+  gate re-scoped and re-green).
 
-## Phase 5 — Diff gate (M6-08)
-**Status:** complete (2026-09-06)
+## Phase 5 — M7-07 support activation (code side)
+**Status:** pending
 
-- tests/test_openapi_contract.py verified green on PG: 3-test gate —
-  (1) no undocumented extras (only the 4 ERRATUM_PENDING v0.5 lifecycle/
-  rotation twins tolerated until their erratum), (2) KNOWN_GAPS monotonic
-  shrink (stale entries fail like missing ones), (3) KNOWN_GAPS=∅ exit →
-  the pair of asserts IS `implemented == contract`.
-- Scope verified on the v1.5.0 yaml: exactly 34 paths (48 total − 4 platform
-  v0.7 − 10 §4n v0.9; /api/compat/* absent from the yaml yet — M6-09 adds it
-  as draft, still excluded). CI-active via docker-compose.ci.yml's pytest
-  command (pytest --cov=apps --cov-fail-under=80).
+- Staff MFA enforced (django-otp TOTP) on platform-staff accounts; the 4 v1.2
+  support-op endpoints (`/platform/support/*` — session, gateway suspend via
+  provisioning, alert force-resolve, task drain) live behind the audited
+  org-context session; superuser path untouched.
 
-## Phase 6 — Compat wave (M6-09, v1.6.0-draft)
-**Status:** done (2026-09-06)
+## Phase 6 — VPS-resident waves (owner-gated)
+**Status:** blocked on VPS access
 
-- ✅ `legacy_slug_map` (additive-only, unmanaged) + idempotent backfill; 15 REST
-  routes under /api/compat/v1 + legacy aliases; flat-record translation;
-  farm WS shim on the core saloon groups (cap + 4003/4000, never pushes
-  buffered rows); `*_compat.py` modules only; excluded from the M6-08 gate.
-- Verified: 18-test C1–C16 matrix green on PG/Timescale + Redis; sqlite quick
-  loop 17+1skip (portable legacy_slug_map/saloon_telemetry DDL replays);
-  full suite 402 passed @ 88.46%.
+- M7-01..M7-06 (provision, TLS, prod compose, monitoring, backups, subscriber
+  rebalance), M7-08 (prober + cost metering), M7-09 (chaos drill), M7-13 (frontend
+  migration proof on staging). Each needs the real VPS; runbooks/compose artifacts
+  land with their tasks once access exists.
 
-## Phase 7 — Ops wave (M6-10, v1.7.0-draft)
-**Status:** ✅ done (2026-09-06)
+## Phase 7 — M7-14 compat removal (hard-sequenced)
+**Status:** pending (after the M7-13 staging proof)
 
-- Pagination convention; O1–O12; `user_sessions` + auth writers; subscriber
-  `diag:last:{slot}`; yaml ratification commit → gate re-greened.
-- Shipped: accounts 0003 user_sessions + register writers (login/refresh,
-  jti-keyed; sid claim on the access; blacklist app still never installed);
-  subscriber diagnostics.py (diag-only payloads retained instead of dying at
-  Gate 5); ops modules in apps.monitoring (no new app, M0-05); O2/O3 bent to
-  the real schema (day-ranged min/max, no enabled/updated_at — spec erratum
-  noted in docs/api-ops-v1.md; O3 write scope = own-org templates only);
-  yaml 1.5.0→1.7.0 (+11 paths) with the M6-08 gate root list extended and
-  re-greened. 34-test suite green on PG + sqlite; full gate 436 passed @ 88.11%.
+- Unmount urls_compat → delete apps/compat + tests → migration dropping
+  legacy_slug_map. Gate is prefix-neutral (compat was never in the root list) —
+  verify anyway.
 
-## Phase 8 — Integration and exit gate (M6-11)
-**Status:** ✅ done (2026-09-06)
+## Phase 8 — M7-10 DoD sweep
+**Status:** pending
 
-- Full suite green (436 passed @ 88.11% ≥ the 80% gate), CHANGELOG entries
-  ([v0.6] + the two stubs), annotated tag `v0.6` on `1e387a4`, release note
-  `docs/releases/v0.6.md`, WALKTHROUGH steps 1–7 script in place (recording
-  waived by owner, v0.5 precedent), docs/KB sweep = the ops-spec erratum +
-  shipped-state release drafts. **v0.6 is closed.**
+- CHANGELOG `[v0.7]`, release note `docs/releases/v0.7.md`, tag `v0.7`, docs/KB
+  sweep, demo script per WALKTHROUGH.
 
 ## Errors Encountered
 
 | Error | Attempt | Resolution |
 |---|---:|---|
-| (carried from v0.5) stale `--reuse-db` test DB hides new migrations | 1 | Drop `test_morghdari_test` or `docker compose -p morghdari_ci down` before gate runs after schema-adding changes |
-| M6-06: async connect denies `bad-token` while the identical sync probe passes | ~6 | Channels runs the sync consumer's connect() in an executor THREAD with its own DB connection — under TestCase's atomic block the uncommitted world rows are invisible there. Socket-opening WS tests must be `django_db(transaction=True)` |
-| M6-06: consumer TS ran before GUC set → 4003 on every PG connect | 1 | `set_config(..., true)` is transaction-scoped; the consumer ran in autocommit. Wrap tenant_context + reads in one `transaction.atomic()` (the middleware's shape) |
-| M6-09: DISTINCT ON crash on sqlite; `saloon_telemetry` absent from the quick loop entirely | 1 | DISTINCT ON → vendor branch (portable last-write-wins fallback); test.py's "create saloon_telemetry from state on sqlite" intent was an unimplemented comment — the compat module fixture now replays portable legacy_slug_map/saloon_telemetry DDLs so the full REST compat surface runs on the laptop loop |
-| M6-09: PG password auth failed mid-session | 1 | The recreated dev postgres (wrong-compose container removed earlier) carries compose's real password `dev_password_only` — always take the URL from run_full.bat, not from memory |
-| M6-10: O10 429s spuriously in back-to-back full-gate runs | 1 | auth_strict counters live in the SHARED Redis cache (db1) — a rerun within 60 s inherits the previous run's history. O10 class wipes the cache in an autouse fixture |
-| M6-10: UUID-vs-int scalar traps (twice) | 2 | Farm/Saloon PKs are INT AutoFields, not UUIDs — `uuid.UUID(...)` validation 400'd every legal farm_id; string-normalize org comparisons (JWT claim str vs UUID column), the M6-06 lesson mirrored |
-| M6-10: one URL pattern, two views → POST 405 | 1 | Django serves the FIRST match, so a duplicate photos pattern shadowed the upload view; merged into one api_view(["GET", "POST"]) dispatcher |
-| DB audit (2026-09-06): hand-written accounts/0003 used `models.deletion.ForeignKey` (nonexistent) — would have crashed the FIRST real deployment; survived all gates because the test matrix runs `--nomigrations` (migration files never imported by tests) | 1 | Fixed to `models.ForeignKey` + explicit `id` AutoField matching the model; compat/0001 gained the state CreateModel for the unmanaged model (kills the stray autodetect 0002); LESSON: run `makemigrations --check` + a throwaway-DB real `migrate` as a deployment gate — `--nomigrations` proves nothing about migration files |
-| django-tdd audit (2026-09-07): per-module coverage review caught two real bugs — firing.py `json.dumps` a raw UUID AFTER the DB commit (alert row saved, redis open-alert pointer never set) and ops_services building the redis client OUTSIDE its try (bad REDIS_URL would 500 O9 despite the "degrade to None" docstring) | 2 | `str()` UUIDs before dumps; construct the client inside the try — a documented degradation contract must hold at every layer. LESSON: audit coverage PER MODULE against component targets (views 80, services 90), not just the enforced 80% total — the aggregate hid four sub-target files (46–79%) behind an 88% gate |
 
 ## Next Step
-v0.7 planning on owner go (platform/support surface — the excluded
-`/platform/support/*` paths). v0.6 is CLOSED: all M6-01..M6-11 ✅, full gate
-436 passed @ 88.11% on PG/Timescale + Redis, contract gate implemented ==
-contract at the ratified v1.7.0 yaml (34 + 11 paths), tag `v0.6` in place.
+M7-11 implementation (Phase 2), then M7-12, then the reports-merge wave.
