@@ -24,7 +24,7 @@ reserved for growth), and the **reports-merge implementation moves into v0.7**
   M7-13 staging proof.
 
 ## Phase 2 — M7-11 native v1.6 lists (GET /api/v1/farms/, GET /api/v1/saloons/)
-**Status:** in progress
+**Status:** ✅ complete (2026-09-07)
 
 - `apps/farms/api.py`: `farm_overview` body extracted into a payload helper reused
   by the list (identical response shapes — M6-01 tests must stay byte-green);
@@ -36,7 +36,7 @@ reserved for growth), and the **reports-merge implementation moves into v0.7**
   includes `apps.farms.urls` → gate re-greens once paths + routes land together.
 
 ## Phase 3 — M7-12 farm telemetry + paging
-**Status:** pending
+**Status:** ✅ complete (2026-09-07)
 
 - `GET /api/v1/farms/{farm_id}/telemetry/` — TelemetryReading shape merged across
   the farm's saloons (compat `telemetry_farm_history` is the aggregation precedent:
@@ -99,4 +99,7 @@ reserved for growth), and the **reports-merge implementation moves into v0.7**
 |---|---:|---|
 
 ## Next Step
-M7-11 implementation (Phase 2), then M7-12, then the reports-merge wave.
+Phase 4 — the reports-merge wave (M7-15 §4n base first, then M7-16 merge, then
+M7-17 compat aliases + ratification). M7-11 + M7-12 verified green: full gate
+434 passed @ 89.83% (PG/Timescale + Redis), contract gate re-greened at 62
+documented paths.

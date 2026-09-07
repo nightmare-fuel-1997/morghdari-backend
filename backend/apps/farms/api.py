@@ -192,13 +192,17 @@ def saloon_detail(request, saloon_id: int):
     saloon = _saloon_in_org(saloon_id, org_id) if org_id else None
     if saloon is None:
         return Response({"error": "saloon not found"}, status=status.HTTP_404_NOT_FOUND)
+    return Response(_saloon_detail_payload(saloon))
 
+
+def _saloon_detail_payload(saloon: Saloon) -> dict:
+    """The SaloonDetail body — shared by GET /saloons/{id}/ and the M7-11 list."""
     flock = _open_flock(saloon.pk)
     zone_rows = list(GatewaySaloonZone.objects.filter(saloon_id=saloon.pk))
     statuses = _gateway_statuses(zone_rows)
     gateway_slot_id, gateway_status = _gateway_out(saloon, zone_rows, statuses)
 
-    return Response({
+    return {
         "saloon_id": str(saloon.pk),
         "name": saloon.name,
         "farm_id": saloon.farm_id,
@@ -212,7 +216,47 @@ def saloon_detail(request, saloon_id: int):
         "gateway_slot_id": gateway_slot_id,
         "gateway_status": gateway_status,
         "sensor_slots": _sensor_slots(saloon.pk),
-    })
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /saloons/  (M7-11 — v1.6 native lists)
+# ---------------------------------------------------------------------------
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def saloon_list(request):
+    """GET /saloons/ — SaloonDetail[] for the caller's org (v1.6 native lists).
+
+    ?farm_id= narrows to one farm; a foreign OR unknown farm gets the SAME
+    403 (no existence oracle). Cross-org exposure stays impossible: the
+    queryset always carries the claim org — RLS is the Postgres backstop,
+    never the only gate.
+    فارسی: فهرست سالن‌های سازمان از ادعای توکن؛ فیلترِ مزرعهٔ بیگانه ۴۰۳ است.
+    """
+    org_id = _org_id(request)
+    if org_id is None:
+        return Response({"error": "organization context required"}, status=400)
+
+    queryset = (
+        Saloon.objects.select_related(
+            "farm", "farm__province", "farm__city", "farm__village"
+        )
+        .filter(org_id=org_id)
+        .order_by("farm_id", "id")
+    )
+
+    raw_farm_id = str(request.query_params.get("farm_id", "")).strip()
+    if raw_farm_id:
+        try:
+            farm_id = int(raw_farm_id)
+        except ValueError:
+            return Response({"error": "farm_id must be an integer"}, status=400)
+        # Foreign AND unknown share one verdict — the caller cannot tell them apart.
+        if not Farm.objects.filter(org_id=org_id, pk=farm_id).exists():
+            return Response({"error": "forbidden"}, status=403)
+        queryset = queryset.filter(farm_id=farm_id)
+
+    return Response([_saloon_detail_payload(row) for row in queryset])
 
 
 # ---------------------------------------------------------------------------
@@ -229,8 +273,12 @@ def farm_overview(request, farm_id: int):
     ) if org_id else None
     if farm is None:
         return Response({"error": "farm not found"}, status=status.HTTP_404_NOT_FOUND)
+    return Response(_farm_overview_payload(farm))
 
-    saloons = list(Saloon.objects.filter(org_id=org_id, farm_id=farm.pk).order_by("id"))
+
+def _farm_overview_payload(farm: Farm) -> dict:
+    """The FarmOverview body — shared by GET /farms/{id}/overview/ and the M7-11 list."""
+    saloons = list(Saloon.objects.filter(org_id=farm.org_id, farm_id=farm.pk).order_by("id"))
     saloon_ids = [s.pk for s in saloons]
 
     # Open flock per saloon + active-alert aggregates in bulk (never N+1).
@@ -266,12 +314,42 @@ def farm_overview(request, farm_id: int):
             "highest_active_tier": stats["top"],
         })
 
-    return Response({
+    return {
         "farm_id": farm.pk,
         "name": farm.name,
         "locations": _locations(farm),
         "saloons": cards,
-    })
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /farms/  (M7-11 — v1.6 native lists)
+# ---------------------------------------------------------------------------
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def farm_list(request):
+    """GET /farms/ — FarmOverview[] for the caller's org (v1.6 native lists).
+
+    ?org_id= is honored only when it EQUALS the validated claim org — a
+    mismatch is a 403 (you asked for another org's data), never an empty
+    list. Cross-org exposure stays impossible: every queryset carries the
+    claim org; RLS is the Postgres backstop.
+    فارسی: فهرست مزرعه‌های سازمان؛ درخواستِ سازمانِ دیگر ۴۰۳ است نه فهرستِ خالی.
+    """
+    org_id = _org_id(request)
+    if org_id is None:
+        return Response({"error": "organization context required"}, status=400)
+
+    requested = str(request.query_params.get("org_id", "")).strip()
+    if requested and requested != str(org_id):
+        return Response({"error": "forbidden"}, status=403)
+
+    farms = (
+        Farm.objects.select_related("province", "city", "village")
+        .filter(org_id=org_id)
+        .order_by("id")
+    )
+    return Response([_farm_overview_payload(farm) for farm in farms])
 
 
 # ---------------------------------------------------------------------------
