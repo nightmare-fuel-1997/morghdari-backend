@@ -204,8 +204,8 @@ def _redis_client():
 def read_last_diagnostics(gateway_slot: str) -> dict | None:
     """O9's store read: the retained diag:last hash, or None when the
     gateway never reported (or Redis is down — D22 honest degradation)."""
-    client = _redis_client()
     try:
+        client = _redis_client()  # inside the try: a bad REDIS_URL degrades too
         raw = client.hgetall(f"{DIAG_PREFIX}{gateway_slot}")
     except Exception:  # noqa: BLE001
         logger.warning("diag read failed for %s", gateway_slot, exc_info=True)

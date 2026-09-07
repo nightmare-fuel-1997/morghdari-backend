@@ -521,3 +521,73 @@ def test_saloon_analytics_hourly(timescale_db):
     assert response.status_code == 400
     # missing required params → 400
     assert client.get(url).status_code == 400
+
+
+@pytest.mark.django_db
+def test_health_db_probe_real_and_degraded(monkeypatch):
+    """The REAL db probe — the aggregation test above stubs it away. Live
+    SELECT 1 → ok envelope; a dead cursor → error envelope with honest null
+    latency and the failure detail, never a fabricated zero (D22)."""
+    from types import SimpleNamespace
+
+    from apps.monitoring.views import _db_probe
+
+    ok = _db_probe()
+    assert ok["status"] == "ok"
+    assert ok["latency_ms"] is not None and ok["latency_ms"] >= 0
+
+    class Broken:
+        def __enter__(self):
+            raise RuntimeError("db gone")
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(
+        "apps.monitoring.views.connection",
+        SimpleNamespace(cursor=lambda: Broken()),
+    )
+    bad = _db_probe()
+    assert bad["status"] == "error"
+    assert bad["latency_ms"] is None
+    assert "db gone" in bad["detail"]
+
+
+def test_health_redis_probe_degraded_and_live(monkeypatch):
+    """Redis probe: ping failure → error envelope (drives health 503);
+    a stream-gauge failure degrades ONLY the gauge (status stays ok, honest
+    Nones); a live ping/xlen answers ok against the suite's standing Redis."""
+    from apps.monitoring import views
+
+    class DeadRedis:
+        def ping(self):
+            raise ConnectionError("redis down")
+
+    monkeypatch.setattr(views, "_redis", lambda: DeadRedis())
+    out = views._redis_probe()
+    assert out["status"] == "error"
+    assert out["ping_ms"] is None
+    assert "redis down" in out["detail"]
+
+    class NoStreams:
+        def ping(self):
+            return True
+
+        def xlen(self, _key):
+            raise RuntimeError("no such stream")
+
+    monkeypatch.setattr(views, "_redis", lambda: NoStreams())
+    out = views._redis_probe()
+    assert out["status"] == "ok"
+    assert out["queue_depth"] == {
+        "realtime": None,
+        "historical": None,
+        "pending_approval": None,
+    }
+
+    live = views._redis_probe()
+    assert live["status"] == "ok"
+    # The gauge is int-or-None BY CONTRACT (absent/foreign-typed stream →
+    # honest None); only the probe status is a health commitment.
+    gauge = live["queue_depth"]["realtime"]
+    assert gauge is None or isinstance(gauge, int)

@@ -80,7 +80,7 @@ def fire_or_coalesce(
     # Stash the open-alert pointer AFTER the DB commit succeeds (D3 pattern).
     blob = json.dumps({
         "alert_id": str(alert.id),
-        "org_id": org_id,
+        "org_id": str(org_id),  # callers may hold the UUID PK — keep dumps total
         "farm_id": farm_fk_id,
         "saloon_id": saloon_id,
         "metric": metric,

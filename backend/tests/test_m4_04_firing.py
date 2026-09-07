@@ -127,3 +127,39 @@ def test_single_observation_below_duration_fires_nothing(timescale_db):
     drain_stream("telemetry:realtime", count=10)
 
     assert not AlertInstance.objects.filter(org_id=world["org"].org_id).exists()
+
+
+@pytest.mark.django_db
+def test_coalesce_refreshes_open_alert_instead_of_new_row():
+    """Re-fire while an alert is open COALESCES — same row, refreshed value,
+    never a second AlertInstance (owner Q2). Direct service calls: the
+    pipeline tests above prove FIRING; this proves the coalesce branch that
+    first-spike pipeline paths never reach."""
+    from apps.alerts.services.firing import fire_or_coalesce
+    from apps.alerts.services.redis_keys import active_alert_key
+
+    world = _make_world()
+    rc = world["redis"]
+    org_id, saloon = world["org"].org_id, world["saloon"]
+
+    first = fire_or_coalesce(rc, org_id, saloon.farm_id, saloon.id, "temp", 35.0)
+    assert first["action"] == "fired"
+    alert = AlertInstance.objects.get(pk=first["alert_id"])
+    assert float(alert.current_value) == 35.0
+
+    second = fire_or_coalesce(rc, org_id, saloon.farm_id, saloon.id, "temp", 41.5)
+    assert second["action"] == "coalesced"
+    assert second["alert_id"] == first["alert_id"]
+    assert AlertInstance.objects.filter(saloon=saloon).count() == 1
+    alert.refresh_from_db()
+    assert float(alert.current_value) == 41.5
+
+    # Tier re-promotion: the open pointer claims tier 3 while the row has
+    # never been higher than 1 — coalesce must raise the watermark.
+    blob = json.loads(rc.get(active_alert_key(saloon.id, "temp")))
+    blob["current_tier"] = 3
+    rc.set(active_alert_key(saloon.id, "temp"), json.dumps(blob))
+    third = fire_or_coalesce(rc, org_id, saloon.farm_id, saloon.id, "temp", 44.0)
+    assert third["action"] == "coalesced"
+    alert.refresh_from_db()
+    assert alert.highest_tier_reached == 3

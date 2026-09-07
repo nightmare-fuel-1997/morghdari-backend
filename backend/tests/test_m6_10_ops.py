@@ -23,7 +23,7 @@ import redis as redis_lib
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
-from rest_framework.test import APIClient
+from rest_framework.test import APIRequestFactory, APIClient
 
 try:  # real Redis for the diag register when available (PG + laptop loop)
     from tests.conftest import INTEGRATION_REDIS_URL
@@ -41,6 +41,7 @@ from apps.devices.models import (
 )
 from apps.farms.models import Farm, Saloon
 from apps.geography.models import City, Province
+from apps.monitoring import ops_services
 from apps.telemetry.models import FlockCycle
 from apps.tenants.models import Organization
 
@@ -630,3 +631,186 @@ class TestO11O12Sessions:
         staff.save(update_fields=["is_platform_staff"])
         res = _client(_login("ops-staffer")).get(reverse("ops:sessions"))
         assert res.status_code == 200
+
+
+class TestOpsServicesUnits:
+    """Pure-function edges of ops_services that the API tests above reach
+    only partially (django-tdd audit: services target ≥90%): pagination
+    caps, bad-scalar 400s, guard branches, D22 diag degradation/coercion."""
+
+    @staticmethod
+    def _rf(params):
+        # Ops views run on DRF Request (query_params); wrap the WSGI request
+        # exactly as @api_view does in production.
+        from rest_framework.request import Request
+
+        return Request(APIRequestFactory().get("/probe", params))
+
+    def test_pagination_edges_and_cap(self):
+        for params in ({"limit": "-1"}, {"offset": "-3"}, {"limit": "abc"}):
+            with pytest.raises(ops_services.InvalidPagination):
+                ops_services.parse_pagination(self._rf(params))
+        assert ops_services.parse_pagination(self._rf({"limit": "9999", "offset": "5"})) == (500, 5)
+
+    def test_page_and_paginated_envelope(self):
+        items = list(range(10))
+        assert ops_services.page(self._rf({"limit": "3", "offset": "2"}), items) == [2, 3, 4]
+        env = ops_services.paginated(self._rf({"limit": "2", "offset": "8"}), items)
+        assert env == {"results": [8, 9], "count": 10}
+
+    def test_audit_filter_bad_scalars_are_400_never_500(self):
+        for params in (
+            {"actor_id": "x"}, {"farm_id": "nope"}, {"saloon_id": "zz"},
+            {"from": "garbage"}, {"to": "2026-13-99"},
+        ):
+            with pytest.raises(ops_services.InvalidPagination):
+                ops_services.build_audit_filters(Saloon.objects.none(), self._rf(params), None)
+
+    def test_threshold_guard_branches(self):
+        bad = ops_services.threshold_range_error
+        assert bad("temp", {"min_value": "abc"}) is not None  # non-numeric
+        assert bad("temp", {"min_value": 50, "max_value": 10}) is not None  # min >= max
+        assert bad("temp", {"enabled": "yes"}) is not None  # non-bool enabled
+        assert bad("temp", {"min_value": -999}) is not None  # below metric bound
+        assert bad("temp", {"min_value": 20, "max_value": 30}) is None
+
+    def test_photo_guard_branches(self):
+        from types import SimpleNamespace
+
+        assert ops_services.photo_error(None) == "file required"
+        big = SimpleNamespace(size=11 * 1024 * 1024, content_type="image/jpeg")
+        assert ops_services.photo_error(big) == "file too large (max 10 MB)"
+        gif = SimpleNamespace(size=10, content_type="image/gif")
+        assert ops_services.photo_error(gif) == "unsupported file type (jpg/png only)"
+        png = SimpleNamespace(size=10, content_type="image/png")
+        assert ops_services.photo_error(png) is None
+
+    def test_diag_reader_degrades_to_none_and_coerces(self, monkeypatch):
+        def boom():
+            raise ConnectionError("redis down")
+
+        monkeypatch.setattr(ops_services, "_redis_client", boom)
+        assert ops_services.read_last_diagnostics("gw-x") is None  # D22: honest None
+
+        class FakeClient:
+            def __init__(self, mapping):
+                self.mapping = mapping
+
+            def hgetall(self, _key):
+                return self.mapping
+
+        monkeypatch.setattr(
+            ops_services, "_redis_client",
+            lambda: FakeClient({
+                "reported_at": "2026-09-06T10:00:00Z", "battery_v": "12.4",
+                "rssi": "", "free_heap": "oops", "sd_ok": "1", "errors": "[1, 2]",
+            }),
+        )
+        assert ops_services.read_last_diagnostics("gw-y") == {
+            "slot_id": "gw-y", "reported_at": "2026-09-06T10:00:00Z",
+            "battery_v": 12.4, "rssi": None, "free_heap": None,
+            "sd_ok": True, "errors": [1, 2],
+        }
+
+        monkeypatch.setattr(
+            ops_services, "_redis_client",
+            lambda: FakeClient({"sd_ok": "0", "errors": "{broken"}),
+        )
+        out = ops_services.read_last_diagnostics("gw-z")
+        assert out["sd_ok"] is False
+        assert out["errors"] == []
+
+        monkeypatch.setattr(ops_services, "_redis_client", lambda: FakeClient({}))
+        assert ops_services.read_last_diagnostics("gw-0") is None  # never reported
+
+
+class TestSessionRegisterEdges:
+    """The register is best-effort BY CONTRACT: a broken register/prune/touch
+    must never break login or refresh, and claim-less tokens sit outside the
+    register (django-tdd audit: these were the uncovered half of
+    accounts/services.py)."""
+
+    @staticmethod
+    def _token(payload):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(payload=payload)
+
+    @staticmethod
+    def _req(**meta):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(META=dict(meta))
+
+    def _user(self, username):
+        return User.objects.create_user(username=username, password=PASSWORD)
+
+    def test_register_without_jti_is_a_noop(self):
+        from apps.accounts.services import register_session
+
+        register_session(self._user("ops-edge-1"), self._token({}), self._req())
+        assert UserSession.objects.count() == 0
+
+    def test_register_stores_provenance_but_never_token_material(self):
+        from apps.accounts.services import register_session
+
+        user = self._user("ops-edge-2")
+        register_session(
+            user, self._token({"jti": "j-edge-2"}),
+            self._req(REMOTE_ADDR="10.1.2.3", HTTP_USER_AGENT="flutter/1.0"),
+        )
+        row = UserSession.objects.get(refresh_jti="j-edge-2")
+        assert row.user == user
+        assert row.ip == "10.1.2.3"
+        assert row.user_agent == "flutter/1.0"
+
+    def test_register_failure_never_breaks_login(self, monkeypatch, caplog):
+        import logging
+
+        from apps.accounts.services import register_session
+
+        def db_gone(*args, **kwargs):
+            raise RuntimeError("db gone")
+
+        monkeypatch.setattr(UserSession.objects, "update_or_create", db_gone)
+        with caplog.at_level(logging.WARNING, logger="apps.accounts.services"):
+            register_session(
+                self._user("ops-edge-3"), self._token({"jti": "j-edge-3"}), self._req(),
+            )
+        assert "user_sessions register failed" in caplog.text
+
+    def test_prune_failure_never_breaks_login(self, monkeypatch, caplog):
+        import logging
+
+        from apps.accounts.services import prune_expired_sessions
+        from rest_framework_simplejwt.settings import api_settings as jwt_settings
+
+        monkeypatch.setattr(jwt_settings, "REFRESH_TOKEN_LIFETIME", None)
+        with caplog.at_level(logging.WARNING, logger="apps.accounts.services"):
+            prune_expired_sessions(self._user("ops-edge-4"))
+        assert "user_sessions prune failed" in caplog.text
+
+    def test_touch_without_jti_or_unknown_jti_is_silent(self):
+        from apps.accounts.services import touch_session
+
+        touch_session(self._token({}))
+        touch_session(self._token({"jti": "no-such-jti"}))
+        assert UserSession.objects.count() == 0
+
+    def test_touch_failure_never_breaks_refresh(self, monkeypatch, caplog):
+        import logging
+
+        from apps.accounts.services import touch_session
+
+        def db_gone(*args, **kwargs):
+            raise RuntimeError("db gone")
+
+        monkeypatch.setattr(UserSession.objects, "filter", db_gone)
+        with caplog.at_level(logging.WARNING, logger="apps.accounts.services"):
+            touch_session(self._token({"jti": "j-edge-5"}))
+        assert "user_sessions touch failed" in caplog.text
+
+    def test_refresh_is_revoked_without_claims_is_false(self):
+        from apps.accounts.services import refresh_is_revoked
+
+        assert refresh_is_revoked(self._token({"foo": "bar"})) is False
