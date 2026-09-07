@@ -1,7 +1,7 @@
 # Base runtime pins — Implementation Blueprint §2.
 # فارسی: وابستگی‌های اصلی اجرا؛ دقیقاً مطابق «Implementation Blueprint §2».
 # Rule: every pin here is deliberate — do not add "just in case" packages.
-Django>=5.0,<5.1
+Django>=5.1.14,<5.2  # 5.0 is EOL; 5.1.14 carries the CRITICAL CVE-2025-64459 fix (trivy image-scan 2026-09-07)
 djangorestframework>=3.15
 djangorestframework-simplejwt  # resolved 5.5.1 at M2-01; lifetimes/flags per Security §3.2, Tracker §4i
 channels[daphne]>=4.0

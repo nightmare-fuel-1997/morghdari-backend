@@ -1,13 +1,13 @@
 # =============================================================================
 # CI Compose — ephemeral TimescaleDB + Redis + pytest + real EMQX. The
 # acceptance gate.
-#   docker compose -f docker-compose.ci.yml run --rm test         (pytest)
-#   docker compose -f docker-compose.ci.yml run --rm migrate-gate (deployability:
-#       makemigrations --check + real forward migrate + idempotency + rollback
-#       posture, on a throwaway DB — closes the --nomigrations hole: migration
-#       FILES are never imported by pytest, so an undeployable migration only
-#       surfaces here; proven by the 2026-09-06 accounts/0003 find)
-#   docker compose -f docker-compose.ci.yml run --rm live-verify  (real-EMQX M5-07/08)
+# ONE-COMMAND RITUAL (preferred): bash scripts/run_acceptance.sh
+#   → migrate-gate + test + image-scan with C-13-safe -p and --build enforced.
+# Manual single gates (always with -p morghdari_ci AND --build):
+#   docker compose -f docker-compose.ci.yml -p morghdari_ci run --rm --build test
+#   docker compose -f docker-compose.ci.yml -p morghdari_ci run --rm --build migrate-gate
+#   docker compose -f docker-compose.ci.yml -p morghdari_ci run --rm image-scan
+#   docker compose -f docker-compose.ci.yml -p morghdari_ci run --rm --build live-verify
 #
 # فارسی: سرویس‌های یک‌بارمصرف برای CI؛ گیتِ پذیرش M0/M1 همین‌جاست — سبز یعنی قبول.
 #
@@ -31,6 +31,9 @@
 
 version: "3.8"
 
+volumes:
+  morghdari_trivy_cache:
+
 services:
   postgres:
     image: timescale/timescaledb:2.29.2-pg16
@@ -51,6 +54,14 @@ services:
 
   redis:
     image: redis:7-alpine
+    # Skill MUST-DO (health checks everywhere a service can be): the pytest
+    # and migrate-gate jobs genuinely use Redis (cache, ws:active), so a
+    # not-ready broker must hold them back like postgres does.
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   # Real EMQX for the `live-verify` job — M5-07 authn/authz/revoke and M5-08
   # rotation are broker semantics that mocked tests cannot prove. Same broker
@@ -115,13 +126,17 @@ services:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
     environment:
       # Single-env convention (Blueprint §2) — same dialect as prod compose.
       DATABASE_URL: postgres://morghdari_test:ci_password_only@postgres:5432/morghdari_test
       REDIS_URL: redis://redis:6379
       DJANGO_SETTINGS_MODULE: config.settings.test
       MORGHDARI_INITDB_DIR: /initdb
+    # Explicit image name (not the project-derived default) so the scanner
+    # service can reference exactly what the test stage built, regardless of
+    # the compose -p project name.
+    image: morghdari-test:ci
     # The image packages ONLY ./backend (§8 build context); the bootstrap SQL
     # is repo-root machinery shared with the postgres entrypoint, so it is
     # mounted read-only instead of duplicated into the image.
@@ -149,3 +164,25 @@ services:
       DATABASE_URL: postgres://morghdari_test:ci_password_only@postgres:5432/morghdari_test
       POSTGRES_DB: morghdari_test
     command: python scripts/migrate_gate.py
+
+  # Container scanning (skill MUST-DO): CRITICAL/HIGH CVEs fail the ritual.
+  # --ignore-unfixed keeps the gate about FIXABLE vulnerabilities — a base
+  # image with no vendor fix yet is a tracked fact, not a merge blocker.
+  # Scans the exact image the test service builds (morghdari-test:ci); the
+  # docker socket is how trivy reaches the daemon's local images.
+  image-scan:
+    image: aquasec/trivy:0.55.2
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Persistent vuln-DB cache: without it every --rm run re-downloads the
+      # 111 MB DB (and one flaky EOF aborts the whole gate). One download,
+      # reused by every later run.
+      - morghdari_trivy_cache:/root/.cache/trivy
+    command:
+      - image
+      - --exit-code
+      - "1"
+      - --severity
+      - CRITICAL,HIGH
+      - --ignore-unfixed
+      - morghdari-test:ci
