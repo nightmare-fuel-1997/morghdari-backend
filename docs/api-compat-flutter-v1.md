@@ -22,8 +22,9 @@
 
 1. **Zero Core Schema Mutation.** Core tables (`organizations`, `farms`, `saloons`,
    `gateway_slots`, `saloon_sensor_slots`, `saloon_telemetry`, …) are frozen per `database.md`.
-   The only schema addition is ONE new table, `legacy_slug_map` (§2). No new columns on
-   existing tables, no CHECK/PK/FK changes, no RLS policy edits.
+   Schema additions: ONE new table, `legacy_slug_map` (§2) — ⚠ plus `daily_report_extras`
+   from the daily-report payload merge (Tracker §4s, `docs/api-reports-merge-v1.md` §6).
+   No new columns on existing tables, no CHECK/PK/FK changes, no RLS policy edits.
 2. **Zero change to the v1.5.0 surface.** All 48 existing `/api/v1` paths keep their verbatim
    paths, verbs, auth and envelopes. Compat routes live under a SEPARATE prefix so the
    `implemented == contract` CI gate (Blueprint M6) never sees them as drift.
@@ -188,8 +189,11 @@ epoch-ms); `limit` default 100 (farm-history default 24 to match the shipped cha
 
 ## 9. What this spec deliberately does NOT include
 
-- No `POST`/`PUT`/`PATCH` compat writes (Flutter currently sends `GET` only).
-- No login compat (Flutter attaches a token out-of-band; `POST /api/v1/auth/login/` stays canonical).
+- No general `POST`/`PUT`/`PATCH` compat writes (Flutter currently sends `GET` only).
+  ⚠ **Superseded for daily reports (2026-09-07, Tracker §4s):** report write/read aliases
+  W1–W5 now exist — see `docs/api-reports-merge-v1.md` §5.
+- No login compat (Flutter attaches a token out-of-band; `POST /api/v1/auth/login/` stays
+  canonical — re-confirmed by owner, Tracker §4s R-01).
 - No change to telemetry retention (180 d), RLS policies, MQTT topics, or alerting.
 - No `farm/saloon` CRUD (Tracker §6 `farm-saloon-crud-endpoints` stays parked for Phase-2
   self-service scope).

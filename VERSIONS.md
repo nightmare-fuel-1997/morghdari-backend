@@ -164,6 +164,11 @@ Tracker swept · `CHANGELOG.md` entry written · git tag pushed.
   under `/api/compat/v1` (legacy `/api/...` aliases), `legacy_slug_map` as the single
   schema addition, metrics-map → flat-record translation. Spec: `docs/api-compat-flutter-v1.md` ·
   release draft: `docs/releases/v1.6-compat-draft.md` · history: `CHANGELOG.md [Unreleased → 1.6.0]`.
+- **Scope addition (2026-09-07, Tracker §4s — same v1.6.0 train):** daily-report payload
+  merge (owner session on the shipped Flutter app): Flutter form fields accepted as input
+  aliases, new fields via side table `daily_report_extras` (zero ALTER), single-report GET,
+  report write/read compat aliases W1–W5. Spec: `docs/api-reports-merge-v1.md` ·
+  history: `CHANGELOG.md [Unreleased → 1.6.0]`.
 - **Scope addition (2026-09-05, Tracker §4p — no reorder, no new spiral):** ops read APIs
   (contract **v1.7.0-draft**, additive-only): pagination convention, audit-log query,
   threshold read/update, saloon photos, gateway reads + diagnostics, password change +
