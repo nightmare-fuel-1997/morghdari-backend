@@ -191,6 +191,17 @@ services:
       MQTT_TLS_CA: "/app/certs/ca.crt"
       MQTT_TLS_INSECURE: "1"
       REDIS_URL: "redis://:${REDIS_PASSWORD}@redis:6379"
+      # M7-06 rehearsal fix: slot/status resolution reads Django ORM under
+      # FORCE-RLS — without DATABASE_URL the subscriber ran pure-MQTT and EVERY
+      # real telemetry message dead-lettered UNKNOWN_SLOT (gateways' docstring
+      # promised db_fetch wiring "at integration time"; it never happened).
+      DJANGO_SETTINGS_MODULE: "config.settings.production"
+      DATABASE_URL: "postgres://${DATABASE_USER}:${DATABASE_PASSWORD}@postgres:5432/${DATABASE_NAME}"
+      # production.py requires the secret + ALLOWED_HOSTS at import — without
+      # them django.setup() fails and slot resolution silently degrades to
+      # legacy no-record mode (the message still dead-letters UNKNOWN_SLOT).
+      DJANGO_SECRET_KEY: "${DJANGO_SECRET_KEY}"
+      DJANGO_ALLOWED_HOSTS: "${DJANGO_ALLOWED_HOSTS}"
     volumes:
       - ./certs:/app/certs:ro
     healthcheck:
@@ -224,6 +235,10 @@ services:
       MQTT_TLS_CA: "/app/certs/ca.crt"
       MQTT_TLS_INSECURE: "1"     # STAGING-ONLY — see subscriber-01
       REDIS_URL: "redis://:${REDIS_PASSWORD}@redis:6379"
+      DJANGO_SETTINGS_MODULE: "config.settings.production"   # M7-06 fix — see subscriber-01
+      DATABASE_URL: "postgres://${DATABASE_USER}:${DATABASE_PASSWORD}@postgres:5432/${DATABASE_NAME}"
+      DJANGO_SECRET_KEY: "${DJANGO_SECRET_KEY}"                # M7-06 fix — see subscriber-01
+      DJANGO_ALLOWED_HOSTS: "${DJANGO_ALLOWED_HOSTS}"
     volumes:
       - ./certs:/app/certs:ro
     healthcheck:
@@ -242,7 +257,11 @@ services:
     container_name: morghdari-celery-worker
     mem_limit: 2g
     stop_grace_period: 60s                                 # worker drain window
-    command: celery -A config worker -l info --concurrency=4
+    # M7-06 rehearsal fix: the worker must consume the routed queues — the
+    # settings' task_routes send telemetry/alerts work to telemetry_realtime,
+    # telemetry_historical and alerts; a default-queue-only worker leaves all
+    # of it stranded (telemetry drained nothing, silently).
+    command: celery -A config worker -l info --concurrency=4 -Q celery,telemetry_realtime,telemetry_historical,alerts
     environment:
       DJANGO_SETTINGS_MODULE: "config.settings.production"
       DJANGO_ALLOWED_HOSTS: "${DJANGO_ALLOWED_HOSTS}"

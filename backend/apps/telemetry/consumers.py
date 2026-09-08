@@ -30,7 +30,7 @@ from functools import lru_cache
 
 import redis
 from celery import shared_task
-from django.db import transaction
+from django.db import connection, transaction
 from django.utils.dateparse import parse_datetime
 
 from apps.system_config.models import SystemConfiguration
@@ -137,15 +137,31 @@ def resolve_saloon(fields: dict):
     their slot rows (demo resets, provisioning deletions) — those are poison
     and belong in the DLQ with a reason, exactly like the subscriber treats
     UNKNOWN_SLOT (Q1 family).
-    فارسی: اسلاتِ ناشناخته در زمانِ درین = پیامِ سالم به صندوق مرده، نه کرش.
+
+    v0.7 M7-06 rehearsal fix (RLS era): the entry's org is known from the
+    stream fields, so the lookup runs inside tenant_context(org_id) — a bare
+    PK read sees ZERO rows under FORCE ROW LEVEL SECURITY and every entry
+    would dead-letter. GUC is transaction-scoped (set_config true) inside its
+    own atomic block: dies with the lookup, never leaks into the batch.
+    فارسی: اسلاتِ ناشناخته در زمانِ درین = پیامِ سالم به صندوق مرده، نه کرش؛
+    و خواندنِ اسلات زیر RLS با GUCِ سازمانِ همان ردیف انجام می‌شود.
     """
     from apps.devices.models import SaloonSensorSlot
 
-    try:
-        slot = SaloonSensorSlot.objects.only("saloon_id").get(pk=fields["slot_id"])
-    except SaloonSensorSlot.DoesNotExist:
-        return None
-    return slot.saloon_id
+    def _lookup():
+        try:
+            return SaloonSensorSlot.objects.only("saloon_id").get(
+                pk=fields["slot_id"]
+            ).saloon_id
+        except SaloonSensorSlot.DoesNotExist:
+            return None
+
+    if connection.vendor == "postgresql" and fields.get("org_id"):
+        from apps.tenants.context import tenant_context
+
+        with transaction.atomic(), tenant_context(fields["org_id"]):
+            return _lookup()
+    return _lookup()
 
 
 def touch_sensor_status(client, pairs) -> None:

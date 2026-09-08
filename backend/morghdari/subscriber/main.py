@@ -20,7 +20,6 @@ survive broker restarts and load-balance across N instances, hence:
 """
 
 import http.server
-import itertools
 import logging
 import os
 import sys
@@ -46,7 +45,10 @@ SUBSCRIBE_QOS = 1
 # M7 (v0.7): the /metrics surface Observability §3.2 promises — subscriber_up
 # drives the SubscriberTierDegraded page (monitoring/alerts.yml).
 METRICS_PORT = int(os.environ.get("METRICS_PORT", "9091"))
-_messages_seen = itertools.count(1)
+# True message counter — bumped ONLY by _on_message (a /metrics scrape must
+# never move the metric it reports; rehearsal fix M7-06).
+_messages_seen = 0
+_messages_lock = threading.Lock()
 
 
 def _required_env(name: str) -> str:
@@ -121,17 +123,105 @@ def _on_connect(client, userdata, flags, reason_code, properties=None):
             logger.error("subscribe failed: %s", result)
 
 
-def _status_fetch(gateway_slot: str):
-    """M5-04: the gateway's provisioning status from Django, lazily — the
-    subscriber process may run without Django configured (pure-MQTT mode), in
-    which case legacy behavior applies (no record ⇒ telemetry flows)."""
+_django_configured = False
+
+
+def _django_ready() -> bool:
+    """True once Django is configured for ORM lookups (lazy, once).
+
+    The resolver docstring's contract: the subscriber wires db_fetch to the
+    Django ORM "at integration time" — which requires django.setup(). The
+    prod compose provides DATABASE_URL + DJANGO_SETTINGS_MODULE for the
+    subscriber services (the docs compose never did — rehearsal finding);
+    a pure-MQTT process without them keeps legacy no-record behavior.
+    """
+    global _django_configured
+    if _django_configured:
+        return True
     try:
+        import django
+        from django.conf import settings
+
+        os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings.production")
+        if not settings.configured:
+            django.setup()
+        _django_configured = django.apps.apps.ready
+        return _django_configured
+    except Exception as exc:
+        logger.warning("Django ORM unavailable for slot resolution (%s)", exc)
+        return False
+
+
+def _slot_db_fetch(org_id: str, hardware_id: str, pack_id: str):
+    """M3-05+ integration the resolver docstring promises: wire the pack →
+    slot lookup to the Django ORM.
+
+    v0.7 M7-06 rehearsal fix (RLS era): gateway_sensor_mapping is org-scoped
+    and FORCE-RLS'd — a bare read sees ZERO rows, so every real telemetry
+    message dead-lettered UNKNOWN_SLOT on the rehearsal stack (the demo
+    console always injected its own db_fetch and masked this). The topic's
+    org is verified against the mapping row's org on purpose: a mapping row
+    outside the topic's org is a mis-provision and must NOT resolve.
+    """
+    if not _django_ready():
+        return None
+    try:
+        from django.db import connection, transaction
+
+        from apps.devices.models import GatewaySensorMapping
+
+        def _lookup():
+            return (
+                GatewaySensorMapping.objects.filter(
+                    gateway_hardware_id=hardware_id, pack_id=pack_id
+                )
+                .values_list("slot_id", flat=True)
+                .first()
+            )
+
+        if connection.vendor == "postgresql":
+            from apps.tenants.context import tenant_context
+
+            with transaction.atomic(), tenant_context(org_id):
+                return _lookup()
+        return _lookup()
+    except Exception:
+        logger.exception("slot resolution failed for %s/%s", hardware_id, pack_id)
+        return None
+
+
+def _status_fetch(org_id: str, gateway_slot: str):
+    """M5-04: the gateway's provisioning status from Django, lazily — a
+    pure-MQTT process without Django keeps legacy behavior (no record ⇒
+    telemetry flows).
+
+    v0.7 M7-06 rehearsal fix (RLS era): gateway_slots is FORCE-RLS'd, so the
+    read MUST run inside tenant_context — and the org comes from the TOPIC
+    (the ACL pins every gateway to publish only under its own org's topic
+    prefix, so the topic org is unforgeable org evidence). A bare read would
+    see zero rows and silently route a PENDING_APPROVAL gateway's telemetry
+    as if it were approved — a trust-boundary regression, not a paper cut.
+    """
+    if not _django_ready():
+        return None
+    try:
+        from django.db import connection, transaction
+
         from apps.devices.models import GatewaySlot
 
-        return GatewaySlot.objects.filter(pk=gateway_slot).values_list(
-            "provisioning_status", flat=True
-        ).first()
+        def _lookup():
+            return GatewaySlot.objects.filter(pk=gateway_slot).values_list(
+                "provisioning_status", flat=True
+            ).first()
+
+        if connection.vendor == "postgresql" and org_id:
+            from apps.tenants.context import tenant_context
+
+            with transaction.atomic(), tenant_context(org_id):
+                return _lookup()
+        return _lookup()
     except Exception:
+        logger.exception("provisioning status lookup failed for %s", gateway_slot)
         return None
 
 
@@ -139,9 +229,19 @@ def _on_message(client, userdata, message) -> None:
     # M3-02: every message now passes the pipeline's ordered gates; rejections
     # dead-letter with a reason. M5-04: telemetry from unapproved gateways is
     # held in the pending stream; rejected/suspended gateways are archived.
-    next(_messages_seen)  # M7: /metrics counter (best-effort — never blocks ingestion)
-    handle_message(_redis(), message.topic, message.payload,
-                   status_fetch=_status_fetch)
+    global _messages_seen
+    with _messages_lock:
+        _messages_seen += 1  # M7: /metrics counter (best-effort — never blocks ingestion)
+    topic = message.topic or ""
+    # T1 topic shape: {org}/farms/{farm}/gateways/{slot}/... — the ACL pins
+    # each gateway to publish under its OWN org's prefix, so segment 0 is the
+    # trustworthy org for the RLS-scoped lookups below.
+    org_from_topic = topic.split("/", 1)[0]
+    handle_message(
+        _redis(), topic, message.payload,
+        db_fetch=_slot_db_fetch,
+        status_fetch=lambda gw: _status_fetch(org_from_topic, gw),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +260,7 @@ class _MetricsHandler(http.server.BaseHTTPRequestHandler):
             "subscriber_up 1\n"
             "# HELP telemetry_messages_received_total MQTT messages handed to the pipeline\n"
             "# TYPE telemetry_messages_received_total counter\n"
-            f"telemetry_messages_received_total {next(_messages_seen) - 1}\n"
+            f"telemetry_messages_received_total {_messages_seen}\n"
         ).encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; version=0.0.4")

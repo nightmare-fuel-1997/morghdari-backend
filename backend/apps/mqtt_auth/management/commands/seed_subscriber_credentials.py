@@ -32,7 +32,12 @@ from apps.tenants.models import Organization
 PLATFORM_ORG_NAME = "Morghdari Platform"
 
 # The subscriber's exact subscriptions (morghdari/subscriber/main.py §S1).
-SHARED_TOPIC = "$share/telemetry_workers/+/farms/+/gateways/+/telemetry"
+# ACL rows must name the filter EMQX actually CHECKS: the broker strips the
+# `$share/{group}/` prefix before authorization matching (observed on 5.5;
+# scripts/emqx_provision.py::subscriber_rules documents the same finding), so
+# a rule on the full $share form never matches and no_match=deny rejects the
+# subscription. The stripped form still covers the real $share subscription.
+SHARED_TOPIC = "+/farms/+/gateways/+/telemetry"   # effective filter of $share/telemetry_workers/...
 STATUS_TOPIC = "+/farms/+/gateways/+/status"
 
 
