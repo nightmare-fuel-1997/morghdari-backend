@@ -19,26 +19,39 @@ PROJECT="${PROJECT:--p morghdari}"
 
 START=$(date +%s)
 
-echo "== 1. stop writers"
-docker compose $PROJECT $COMPOSE_FILE stop daphne celery-worker celery-beat subscriber-01 subscriber-02
+echo "== 1. stop writers + session holders (the EMQX authn pool holds up to
+   8 sessions — the first rehearsal run failed DROP with 17 live sessions).
+   postgres-exporter (monitoring compose) is NOT stopped: it is a single
+   session and WITH (FORCE) below kicks it; it reconnects after the restore."
+docker compose $PROJECT $COMPOSE_FILE stop daphne celery-worker celery-beat subscriber-01 subscriber-02 emqx
 
-echo "== 2. drop + recreate (as ADMIN — the app role cannot DROP/CREATE)"
-docker exec -i "$CONTAINER" psql -U "$ADMIN_USER" -d postgres -c "DROP DATABASE IF EXISTS $DB_NAME;"
+echo "== 2. drop + recreate (as ADMIN — the app role cannot DROP/CREATE).
+   WITH (FORCE) (PG13+) terminates any straggler backends — belt and braces
+   over the stop above."
+docker exec -i "$CONTAINER" psql -U "$ADMIN_USER" -d postgres -c "DROP DATABASE IF EXISTS $DB_NAME WITH (FORCE);"
 docker exec -i "$CONTAINER" psql -U "$ADMIN_USER" -d postgres -c "CREATE DATABASE $DB_NAME;"
 
 echo "== 3. TimescaleDB extension BEFORE pg_restore (superuser-only DDL)"
 docker exec -i "$CONTAINER" psql -U "$ADMIN_USER" -d "$DB_NAME" -c "CREATE EXTENSION IF NOT EXISTS timescaledb;"
 
-echo "== 4. pg_restore (custom-format; roles re-pointed to the app role)"
+echo "== 4. pg_restore (custom-format, as ADMIN — ownership in the dump is
+   morghdari_admin's, matching the live volume where migrations run as admin).
+   The first rehearsal run used --role=$APP_ROLE and produced 838 ignored
+   errors + ZERO tables: PG15+ gives the app role no CREATE on schema public,
+   so every CREATE TABLE failed. GRANT statements inside the dump re-grant
+   to the app/exporter roles as admin — no re-pointing needed."
 docker exec -i "$CONTAINER" pg_restore -U "$ADMIN_USER" -d "$DB_NAME" \
-  --no-owner --role="$APP_ROLE" < "$DUMP"
+  --no-owner < "$DUMP"
 
 echo "== 5. verify hypertables"
 docker exec -i "$CONTAINER" psql -U "$ADMIN_USER" -d "$DB_NAME" -c \
   "SELECT hypertable_name, num_dimensions FROM timescaledb_information.hypertables;"
 
-echo "== 6. restart services"
+echo "== 6. restart services (+ nginx reload — recreated containers get new
+   IPs and nginx caches the old upstream: the first rehearsal run 502'd until
+   'nginx -s reload' re-resolved)"
 docker compose $PROJECT $COMPOSE_FILE up -d
+docker compose $PROJECT $COMPOSE_FILE exec -T nginx nginx -s reload || true
 
 END=$(date +%s)
 echo "== restore drill complete in $((END - START))s (log this as RTO evidence)"
