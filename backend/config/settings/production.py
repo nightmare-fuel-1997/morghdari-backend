@@ -27,6 +27,11 @@ SECURE_HSTS_SECONDS = 63072000          # 2 years, includeSubDomains set at ngin
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+# M7-04: the Prometheus scrape hits daphne directly on the internal network
+# (plain HTTP — it cannot follow the redirect into a self-signed TLS port).
+# Exempt ONLY the machine scrape path; nginx still 404s it publicly, so no
+# human-facing surface is affected. Everything else keeps the redirect.
+SECURE_REDIRECT_EXEMPT = ["api/v1/metrics/"]
 
 # --- Logging: JSON to stdout — Loki/Promtail scrapes container logs --------
 LOGGING = {
