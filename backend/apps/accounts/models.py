@@ -30,6 +30,27 @@ class User(AbstractUser):
         db_table = "accounts_user"
 
 
+class PlatformStaffMFA(models.Model):
+    """M7-07: staff MFA enrollment (Security Architecture §4.5 activation).
+
+    One row per platform-staff user; `secret` is the TOTP shared secret in
+    pyotp-native base32, `confirmed_at` flips only after the first live code
+    verifies — a two-step enroll so a typo'd secret never locks the on-call
+    engineer out. Login refuses platform-staff users without a CONFIRMED row.
+    Tenant accounts get no row: tenant MFA is Phase 2 (SEC-MFA).
+    """
+
+    user = models.OneToOneField(
+        "accounts.User", on_delete=models.CASCADE, related_name="platform_mfa"
+    )
+    secret = models.CharField(max_length=64)
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(db_default=Now())
+
+    class Meta:
+        db_table = "platform_staff_mfa"
+
+
 class OrgMember(models.Model):
     id = models.AutoField(primary_key=True)
     org = models.ForeignKey("tenants.Organization", on_delete=models.RESTRICT, null=True, related_name="+")

@@ -16,6 +16,7 @@ Verdicts encoded (contract v1.4.4 + Security §4.5):
 ۴۰۳، نوشتنِ اعضا فقط مالک، نشست پشتیبانی فقط کارکنان پلتفرم.
 """
 
+import pyotp
 import pytest
 from django.contrib.auth import get_user_model
 from django.urls import reverse
@@ -31,8 +32,11 @@ PASSWORD = "strong-pass-123"
 
 
 def _make_world():
-    province = Province.objects.create(name="MP")
-    city = City.objects.create(province=province, name="MC")
+    # get_or_create: this module runs under --reuse-db locally (CI's fresh DB
+    # never collides) and re-runs _make_world per parametrized case in one
+    # session — either way a second bare create() trips provinces.name UNIQUE.
+    province, _ = Province.objects.get_or_create(name="MP")
+    city, _ = City.objects.get_or_create(province=province, name="MC")
     org = Organization.objects.create(name="matrix-org")
     farm = Farm.objects.create(org=org, name="MF", province=province, city=city)
     Saloon.objects.create(org=org, farm=farm, name="MS")
@@ -55,6 +59,13 @@ def _make_world():
     superstaff.is_platform_staff = True
     superstaff.save(update_fields=["is_superuser", "is_platform_staff"])
 
+    # M7-07: staff logins are MFA-gated — pre-enroll the staff actor so the
+    # matrix (which predates MFA) tests RBAC, not the enrollment dance.
+    from apps.accounts import mfa as mfa_mod
+
+    mfa_row = mfa_mod.provision(staff)
+    assert mfa_mod.confirm(staff, pyotp.TOTP(mfa_row.secret).now())
+
     return {
         "org": org,
         "owner_member": owner_member,
@@ -68,9 +79,13 @@ def _make_world():
 
 def _login(username: str) -> str:
     client = APIClient()
+    body = {"username": username, "password": PASSWORD}
+    if username == "mx-staffer":  # the only MFA-enrolled actor in the matrix
+        row = User.objects.get(username=username).platform_mfa
+        body["mfa_code"] = pyotp.TOTP(row.secret).now()
     response = client.post(
         reverse("accounts:auth-login"),
-        {"username": username, "password": PASSWORD},
+        body,
         format="json",
     )
     assert response.status_code == 200, response.data

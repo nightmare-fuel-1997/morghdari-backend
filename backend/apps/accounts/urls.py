@@ -9,8 +9,13 @@ from apps.accounts.views import (
     LoginView,
     RefreshView,
     deactivate_member,
+    mfa_confirm,
+    mfa_setup,
     org_members,
+    support_alert_force_resolve,
+    support_gateway_provisioning,
     support_session,
+    support_task_dispatch,
 )
 
 app_name = "accounts"
@@ -27,4 +32,20 @@ urlpatterns = [
     ),
     # Contract v1.4.4: audited support-session opening (staff-not-superuser).
     path("platform/support/session/", support_session, name="support-session"),
+    # M7-07: staff MFA enrollment + the 3 whitelisted support ops (v1.2). The
+    # /platform/support/* paths ARE contract paths (v1.2) — the M6-08 gate's
+    # /platform/ exclusion was "until M7-07 implements them".
+    path("auth/mfa/setup/", mfa_setup, name="mfa-setup"),
+    path("auth/mfa/confirm/", mfa_confirm, name="mfa-confirm"),
+    path(
+        "platform/support/gateways/<str:gateway_slot_id>/provisioning/",
+        support_gateway_provisioning,
+        name="support-gateway-provisioning",
+    ),
+    path(
+        "platform/support/alerts/<uuid:alert_id>/force-resolve/",
+        support_alert_force_resolve,
+        name="support-alert-force-resolve",
+    ),
+    path("platform/support/tasks/drain/", support_task_dispatch, name="support-task-dispatch"),
 ]

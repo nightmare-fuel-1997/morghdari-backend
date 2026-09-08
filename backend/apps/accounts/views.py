@@ -13,6 +13,7 @@ never disagree about who logged in (one rule, two consumers).
 قراردادی است و نباید یکسان‌سازی شود.
 """
 
+import pyotp
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
@@ -23,6 +24,7 @@ from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
+from apps.accounts import mfa
 from apps.accounts.models import OrgMember
 from apps.accounts.services import (
     register_session,
@@ -47,6 +49,30 @@ class LoginView(TokenObtainPairView):
     def post(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        # M7-07 (Security Architecture §4.5 activation): platform-staff logins
+        # MUST carry a live TOTP code against a CONFIRMED enrollment — the
+        # support surface is the crown jewels. superuser is deliberately NOT
+        # gated (break-glass System Admin; the support surface itself rejects
+        # superusers). Tenant users are never asked for a code (Phase 2).
+        mfa_code = request.data.get("mfa_code")
+        if (
+            serializer.user.is_platform_staff
+            and not serializer.user.is_superuser
+            and not mfa.verify_login_code(serializer.user, mfa_code)
+        ):
+            enrolled = mfa.is_confirmed(serializer.user)
+            return Response(
+                {
+                    "error": "mfa_required",
+                    "detail": (
+                        "platform-staff accounts must verify a TOTP code"
+                        if enrolled
+                        else "no confirmed MFA enrollment — POST /auth/mfa/setup/"
+                    ),
+                    "enrolled": enrolled,
+                },
+                status=403,
+            )
         # M6-10 (O11/O12): one user_sessions row per refresh token. SimpleJWT
         # hands validated_data["refresh"] over as a STRING — parse it to read
         # the jti the register keys on. Best-effort: a register failure must
@@ -266,3 +292,228 @@ def support_session(request):
             "expires_in_sec": 900,
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# M7-07 — platform-staff MFA enrollment (Security Architecture §4.5).
+# Two-step: setup (issue secret) → confirm (first live code flips the row).
+# Staff-only + superuser-rejected, mirroring the support surface itself.
+# ---------------------------------------------------------------------------
+def _staff_not_superuser(request):
+    user = request.user
+    if not user.is_platform_staff or user.is_superuser:
+        return Response({"error": "caller lacks the support platform claim"}, status=403)
+    return None
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def mfa_setup(request):
+    """POST /auth/mfa/setup/ — (re)issue an unconfirmed TOTP enrollment.
+
+    Returns the secret (hex) and the otpauth:// URI the authenticator app
+    consumes. Until /auth/mfa/confirm/ verifies a live code, staff login
+    stays blocked (enroll-then-login is the intended first-run flow).
+    """
+    denied = _staff_not_superuser(request)
+    if denied is not None:
+        return denied
+    row = mfa.provision(request.user)
+    return Response(
+        {
+            "secret": row.secret,
+            "otpauth_uri": mfa.provisioning_uri(request.user, row.secret),
+            "confirmed": False,
+        }
+    )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def mfa_confirm(request):
+    """POST /auth/mfa/confirm/ — verify the first live code; flips
+    confirmed_at so login opens. A wrong code is a plain 400 (retryable)."""
+    denied = _staff_not_superuser(request)
+    if denied is not None:
+        return denied
+    code = request.data.get("code")
+    if not code:
+        return Response({"error": "code required"}, status=400)
+    if not mfa.confirm(request.user, code):
+        return Response({"error": "invalid or already-confirmed code"}, status=400)
+    return Response({"confirmed": True})
+
+
+# ---------------------------------------------------------------------------
+# M7-07 — the 3 whitelisted support ops (v1.2 GS-SUPPORT; Security §4.5).
+# Shared gate: an ACTIVE support-session token (middleware branch ①) whose
+# org_id scopes the op; every success writes a SUPPORT_OP_* audit row with
+# the session's incident_id. superuser is NEVER a valid caller (403).
+# ---------------------------------------------------------------------------
+def _support_op_context(request):
+    """(org_id, incident_id) from claims, or a Response rejecting the call.
+
+    TWO gates, both mandatory (Security §4.5):
+    - the CALLER is staff-NOT-superuser (superuser is never a support actor —
+      a forged support_session claim on a superuser token must not open the
+      surface; the session opener already rejects superusers, this is the
+      second lock on the same door);
+    - the TOKEN carries an ACTIVE session (support_session + org_id claims —
+      a staff token without one has no org scope; a tenant token fails the
+      same gate: no existence oracle, one deny for everyone).
+    """
+    user = request.user
+    if not user.is_platform_staff or user.is_superuser:
+        return None, None, Response(
+            {"error": "no active support session for this org"}, status=403
+        )
+    claims = _claims(request)
+    if not claims.get("support_session") or not claims.get("org_id"):
+        return None, None, Response(
+            {"error": "no active support session for this org"}, status=403
+        )
+    return claims.get("org_id"), claims.get("incident_id"), None
+
+
+def _audit_support_op(request, org_id, action, incident_id, details):
+    """SUPPORT_OP_* row — the tenant-facing accountability delta of every op."""
+    AccountActivityLog.objects.create(
+        actor=request.user,
+        org_id=org_id,
+        action=action,
+        ip_address=request.META.get("REMOTE_ADDR"),
+        details={"incident_id": incident_id, **details},
+    )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def support_gateway_provisioning(request, gateway_slot_id: str):
+    """POST /platform/support/gateways/{id}/provisioning/ — suspend/resume.
+
+    action=suspend flips PROVISIONED → SUSPENDED and revokes the gateway's
+    EMQX ACLs (traffic stops); resume restores the prior status and re-syncs
+    the allows. Reuses the FM-side service functions wholesale — same state
+    matrix, same ACL behavior, same PROVISIONING_STATUS_CHANGED trail — with
+    the SUPPORT_OP_* row added on top (the accountability delta).
+    """
+    org_id, incident_id, denied = _support_op_context(request)
+    if denied is not None:
+        return denied
+    action = request.data.get("action")
+    if action not in {"suspend", "resume"}:
+        return Response({"error": "action must be suspend or resume"}, status=400)
+
+    from apps.devices.models import GatewaySlot
+
+    slot = GatewaySlot.objects.filter(pk=gateway_slot_id, org_id=org_id).first()
+    if slot is None:
+        return Response({"error": "gateway not found in the session org"}, status=404)
+
+    from apps.provisioning.services import resume_gateway, suspend_gateway
+
+    try:
+        if action == "suspend":
+            result = suspend_gateway(
+                slot.slot_id, request.user,
+                reason=str(request.data.get("reason") or "support suspension"),
+            )
+        else:
+            result = resume_gateway(slot.slot_id, request.user)
+    except ValueError as exc:  # state-matrix violation → 409, no write
+        return Response({"error": str(exc)}, status=409)
+
+    _audit_support_op(
+        request, org_id, "SUPPORT_OP_GATEWAY_PROVISIONING", incident_id,
+        {"gateway_slot_id": slot.slot_id, "action": action,
+         "provisioning_status": result.provisioning_status,
+         "reason": request.data.get("reason", "")},
+    )
+    return Response(
+        {"gateway_slot_id": slot.slot_id, "provisioning_status": result.provisioning_status}
+    )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def support_alert_force_resolve(request, alert_id):
+    """POST /platform/support/alerts/{id}/force-resolve/ — runbook-only op for
+    alerts stuck by a known engine defect. Normal resolution stays hysteresis-
+    driven; this writes resolved_at DIRECTLY (idempotent on already-resolved).
+    """
+    org_id, incident_id, denied = _support_op_context(request)
+    if denied is not None:
+        return denied
+    reason = str(request.data.get("reason") or "").strip()
+    if not reason:
+        return Response({"error": "reason required (the runbook defect reference)"}, status=400)
+
+    from apps.alerts.models import AlertInstance
+
+    alert = AlertInstance.objects.filter(pk=alert_id, org_id=org_id).first()
+    if alert is None:
+        return Response({"error": "alert not found in the session org"}, status=404)
+    if alert.resolved_at is not None:
+        return Response({"alert_id": str(alert.pk), "resolved": True, "idempotent": True})
+
+    alert.resolved_at = timezone.now()
+    alert.current_status = "RESOLVED"
+    alert.save(update_fields=["resolved_at", "current_status"])
+
+    _audit_support_op(
+        request, org_id, "SUPPORT_OP_ALERT_FORCE_RESOLVE", incident_id,
+        {"alert_id": str(alert.pk), "reason": reason},
+    )
+    return Response({"alert_id": str(alert.pk), "resolved": True})
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def support_task_dispatch(request):
+    """POST /platform/support/tasks/drain/ — trigger a whitelisted maintenance
+    task (drain_pending_approval / cache rebuilds). 202 = dispatched; the task
+    body runs on the worker with the session org's scope passed explicitly.
+    """
+    org_id, incident_id, denied = _support_op_context(request)
+    if denied is not None:
+        return denied
+    task = request.data.get("task")
+    reason = str(request.data.get("reason") or "").strip()
+    if task not in {"drain_pending_approval", "rebuild_threshold_cache", "rebuild_zone_cache"}:
+        return Response({"error": "unknown task"}, status=400)
+    if not reason:
+        return Response({"error": "reason required"}, status=400)
+
+    dispatched = ""
+    if task == "drain_pending_approval":
+        gateway_slot_id = request.data.get("gateway_slot_id")
+        if not gateway_slot_id:
+            return Response({"error": "task requires gateway_slot_id"}, status=400)
+        from apps.devices.models import GatewaySlot
+
+        slot = GatewaySlot.objects.filter(pk=gateway_slot_id, org_id=org_id).first()
+        if slot is None:
+            return Response({"error": "gateway not found in the session org"}, status=404)
+        # Dispatch to the worker (the queue the drained entries' INSERT path
+        # lives on) — the worker carries its own Redis/DB topology and the
+        # approval drain is exactly its M5-04 contract.
+        from apps.telemetry.tasks import drain_pending_for_gateway
+
+        drain_pending_for_gateway.delay(slot.slot_id)
+        dispatched = f"drain dispatched for {slot.slot_id}"
+    elif task == "rebuild_threshold_cache":
+        from apps.alerts.tasks import cache_daily_thresholds
+
+        cache_daily_thresholds.delay()
+        dispatched = "threshold recache dispatched"
+    else:  # rebuild_zone_cache — the provisioning location tree (cache_key location:tree:{org})
+        from django.core.cache import cache
+
+        cache.delete(f"location:tree:{org_id}")
+        dispatched = "location tree cache invalidated"
+
+    _audit_support_op(
+        request, org_id, "SUPPORT_OP_TASK_DISPATCH", incident_id,
+        {"task": task, "result": dispatched, "reason": reason},
+    )
+    return Response({"task": task, "dispatched": dispatched}, status=202)

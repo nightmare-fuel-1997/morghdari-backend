@@ -13,6 +13,7 @@ psycopg[binary]>=3.1
 redis>=5.0
 bcrypt
 prometheus-client
+pyotp>=2.9          # M7-07: TOTP for platform-staff MFA (Security Architecture §4.5 activation)
 # API documentation tooling - signed off at v0.1 review (serves /api/docs/
 # from v0.1 onward so every endpoint added in v0.2+ self-documents).
 drf-spectacular>=0.27

@@ -95,7 +95,21 @@ def _install_cascade_flush(conn):
     def with_unmanaged(style, tables, *args, **kwargs):
         candidates = [t for t in dict.fromkeys([*tables, *_UNMANAGED_TABLES]) if t not in _REFERENCE_TABLES]
         if conn.vendor == "sqlite":
-            candidates = []
+            # Local-parity fix (2026-09-09, M7-07 wave): the old silent no-op
+            # made transaction=True suites (M2-10 matrix) pass once and then
+            # UNIQUE-collide on every later case under --reuse-db, diverging
+            # from CI's real PG flush. Emit DELETEs for tables that exist;
+            # the unmanaged hypertables never exist on sqlite, so the
+            # existence filter drops them naturally.
+            with conn.cursor() as cursor:
+                existing = {
+                    row[0]
+                    for row in cursor.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                        " AND name NOT LIKE 'sqlite_%'"
+                    ).fetchall()
+                }
+            candidates = [t for t in candidates if t in existing]
         elif conn.vendor == "postgresql":
             with conn.cursor() as cursor:
                 candidates = [t for t in candidates if cursor.execute("SELECT to_regclass('public.' || quote_ident(%s)) IS NOT NULL", (t,)).fetchone()[0]]

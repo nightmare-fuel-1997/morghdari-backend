@@ -18,6 +18,7 @@ differed — see module docstrings in ops_views.py):
 
 import json
 
+import pyotp
 import pytest
 import redis as redis_lib
 from django.contrib.auth import get_user_model
@@ -110,9 +111,14 @@ def _make_world():
 
 def _login(username, password=PASSWORD):
     client = APIClient()
+    body = {"username": username, "password": password}
+    row = User.objects.filter(username=username).first()
+    # M7-07: MFA-gated staff logins must present a live TOTP code.
+    if row is not None and getattr(row, "platform_mfa", None) is not None:
+        body["mfa_code"] = pyotp.TOTP(row.platform_mfa.secret).now()
     res = client.post(
         reverse("accounts:auth-login"),
-        {"username": username, "password": password},
+        body,
         format="json",
     )
     assert res.status_code == 200, res.content
@@ -629,6 +635,12 @@ class TestO11O12Sessions:
         staff = User.objects.create_user(username="ops-staffer", password=PASSWORD)
         staff.is_platform_staff = True
         staff.save(update_fields=["is_platform_staff"])
+        # M7-07: staff logins are MFA-gated — enroll so this suite tests
+        # session listing, not the enrollment dance.
+        from apps.accounts import mfa as mfa_mod
+
+        mfa_row = mfa_mod.provision(staff)
+        assert mfa_mod.confirm(staff, pyotp.TOTP(mfa_row.secret).now())
         res = _client(_login("ops-staffer")).get(reverse("ops:sessions"))
         assert res.status_code == 200
 

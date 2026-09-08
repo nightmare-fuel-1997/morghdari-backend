@@ -12,6 +12,7 @@ returned access_token seeing EXACTLY that org's saloons under FORCE RLS.
 
 import unittest
 
+import pyotp
 import pytest
 from django.contrib.auth import get_user_model
 from django.db import connection
@@ -49,14 +50,32 @@ def _make_org_with_saloon(name: str):
     return org, saloon
 
 
+def _enroll_mfa(user) -> None:
+    """M7-07: the staff login is MFA-gated — pre-enroll actors so these
+    suites test the support-session semantics, not the enrollment dance."""
+    from apps.accounts import mfa as mfa_mod
+
+    mfa_row = mfa_mod.provision(user)
+    assert mfa_mod.confirm(user, pyotp.TOTP(mfa_row.secret).now())
+
+
 def _login_token(client: APIClient, username: str) -> str:
+    body = {"username": username, "password": PASSWORD}
+    row = User.objects.filter(username=username).first()
+    if row is not None and mfa_mod_has_mfa(row):
+        body["mfa_code"] = pyotp.TOTP(row.platform_mfa.secret).now()
     response = client.post(
         reverse("accounts:auth-login"),
-        {"username": username, "password": PASSWORD},
+        body,
         format="json",
     )
     assert response.status_code == 200, response.data
     return response.data["access_token"]
+
+
+def mfa_mod_has_mfa(user) -> bool:
+    """True when the user has a confirmed MFA row (login needs the code)."""
+    return hasattr(user, "platform_mfa") and user.platform_mfa.confirmed_at is not None
 
 
 @pytest.mark.use_migrations
@@ -76,6 +95,7 @@ class SupportSessionTests(TestCase):
         self.staff = User.objects.create_user(username="staffer", password=PASSWORD)
         self.staff.is_platform_staff = True
         self.staff.save(update_fields=["is_platform_staff"])
+        _enroll_mfa(self.staff)
 
     def test_staff_opens_session_and_audit_row_precedes_success(self):
         token = _login_token(self.client, "staffer")

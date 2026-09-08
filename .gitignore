@@ -55,3 +55,4 @@ htmlcov/
 /backups/
 /certbot-www/
 /monitoring/prometheus.runtime.yml
+/.deploy_tag

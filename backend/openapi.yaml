@@ -101,6 +101,11 @@ components:
         password:
           type: string
           format: password
+        mfa_code:
+          type: string
+          description: >-
+            Live TOTP code — REQUIRED for platform-staff accounts (v1.7.1, M7-07:
+            Security Architecture §4.5 activation). Tenant accounts omit it.
 
     LoginResponse:
       type: object
@@ -714,6 +719,56 @@ paths:
                 $ref: '#/components/schemas/LoginResponse'
         '401':
           description: Invalid credentials
+        '403':
+          description: >-
+            MFA required — platform-staff account without a live/valid mfa_code
+            (or without a confirmed enrollment). Body carries error=mfa_required
+            and enrolled=false when setup has not happened yet. (v1.7.1, M7-07)
+
+  /auth/mfa/setup/:
+    post:
+      tags: [Platform Support]
+      summary: Issue (or re-issue) a TOTP enrollment for platform-staff MFA (v1.7.1, M7-07)
+      description: >-
+        Staff-NOT-superuser only. Returns the hex secret and otpauth:// URI for
+        the authenticator app. Until /auth/mfa/confirm/ verifies a live code the
+        enrollment stays unconfirmed and staff login is blocked (403 mfa_required).
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Pending enrollment issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  secret: { type: string }
+                  otpauth_uri: { type: string }
+                  confirmed: { type: boolean, example: false }
+        '403':
+          description: Caller lacks the support platform claim
+
+  /auth/mfa/confirm/:
+    post:
+      tags: [Platform Support]
+      summary: Confirm the enrollment with the first live TOTP code (v1.7.1, M7-07)
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string }
+      responses:
+        '200':
+          description: Enrollment confirmed — staff login now open
+        '400':
+          description: Missing/wrong code, or already confirmed
+        '403':
+          description: Caller lacks the support platform claim
 
   /auth/token/refresh/:
     post:

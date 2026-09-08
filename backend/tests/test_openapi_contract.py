@@ -3,8 +3,10 @@
 Scope (M6-08, versions/v0.6/TASKS.md): the non-platform, non-§4n paths of the
 v1.5.0 yaml (34 paths) PLUS the v1.7.0 ops paths ratified at M6-10 (the
 ratification commit enters the yaml; spec docs/api-ops-v1.md).
-Excluded on purpose: the 4 ``/platform/support/*`` paths (v0.7), the 10 §4n
-paths (v0.9), and the ``/api/compat/*`` prefix (M6-09, v1.6.0).
+M7-07 (2026-09-08): the ``/platform/`` exclusion is GONE — all 4 support paths
++ the 2 MFA paths are implemented, so ``implemented == contract`` now covers
+them. Remaining exclusions: the 10 §4n paths (v0.9) and ``/api/compat/*``
+(M6-09, v1.6.0).
 
 Mechanics:
 - ``implemented - documented`` must ALWAYS be empty (no undocumented extras —
@@ -26,7 +28,9 @@ from django.urls import URLPattern, URLResolver, get_resolver
 
 CONTRACT = Path(__file__).resolve().parent.parent / "openapi.yaml"
 
-EXCLUDED_PREFIXES = ("/platform/",)  # v0.7 scope (M7-07)
+# M7-07: was ("/platform/",) "v0.7 scope" — all /platform/support/* paths and
+# the MFA pair are implemented now, so nothing is prefix-excluded anymore.
+EXCLUDED_PREFIXES = ()
 EXCLUDED_EXACT = {
     # §4n paths — v0.9 scope (Tracker §4n; VERSIONS.md §v0.9)
     "/saloons/{saloon_id}/reports/",
