@@ -52,6 +52,10 @@ ALERT_EVAL_LATENCY = Histogram(
 TELEMETRY_PENDING_APPROVAL_DEPTH = Gauge(
     "telemetry_pending_approval_depth", "XLEN of telemetry:pending_approval stream"
 )
+# Runbook §4 "DLQ spike" rule: XLEN telemetry:dead_letter > 100 ⇒ CRITICAL.
+TELEMETRY_DLQ_DEPTH = Gauge(
+    "telemetry_dead_letter_depth", "XLEN of telemetry:dead_letter stream"
+)
 INSERT_BUFFER_LENGTH = Gauge(
     "insert_buffer_length", "Rows accumulated in the insert buffer awaiting batch flush"
 )
@@ -188,15 +192,19 @@ def _refresh_gauges(client):
         "realtime": "telemetry:realtime",
         "historical": "telemetry:historical",
         "pending_approval": "telemetry:pending_approval",
+        "dead_letter": "telemetry:dead_letter",
     }
     for label, stream in streams.items():
         try:
             depth = client.xlen(stream)
         except Exception:  # noqa: BLE001
             continue
-        REDIS_QUEUE_DEPTH.labels(queue=label).set(depth)
+        if label != "dead_letter":
+            REDIS_QUEUE_DEPTH.labels(queue=label).set(depth)
         if label == "pending_approval":
             TELEMETRY_PENDING_APPROVAL_DEPTH.set(depth)
+        elif label == "dead_letter":
+            TELEMETRY_DLQ_DEPTH.set(depth)
 
     # WS liveness sets (ws.py): ws:active:{user} SCARD sums — bounded by user count.
     try:

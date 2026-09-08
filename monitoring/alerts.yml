@@ -71,6 +71,19 @@ groups:
           summary: "Pending-approval backlog > 1000"
           runbook_url: "Unapproved gateways accumulating — notify Farm Manager(s)"
 
+      - alert: DlqSpike
+        # Gauge telemetry_dead_letter_depth (XLEN of telemetry:dead_letter) —
+        # runbook §4 "DLQ spike" row: > 100 entries ⇒ CRITICAL. The DLQ is the
+        # accountability sink (≥99.99% PUBACKed readings in Timescale OR DLQ,
+        # §2), so a spike means systematic rejection, not one bad gateway.
+        expr: sum(telemetry_dead_letter_depth) > 100
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "DLQ spike — >100 dead-lettered messages"
+          runbook_url: "XRANGE telemetry:dead_letter - + count 5 — sample reasons; check gateway firmware versions (§8 DLQ spike row)"
+
   # WARNING — dashboard (email/webhook). Observability §4.2.
   - name: morghdari-warning
     rules:
