@@ -56,11 +56,13 @@ COPY . .
 # and never touch this path). Prod must additionally mount a named volume on
 # /app/media (see DEPLOYMENT.md) or uploads die with the container.
 RUN mkdir -p /app/media && chown appuser:appuser /app/media
-# Blueprint §8: healthcheck targets the platform health endpoint. NOTE until
-# v0.6 implements /api/v1/health/ this check reports unhealthy by design —
-# logged as CONSTRAINTS C-06 so nobody "fixes" it by weakening the spec
-# (C-05 is taken by the EMQX-mechanism env override noted in M0-07 compose).
+# Blueprint §8: healthcheck targets the platform health endpoint. M7 rehearsal
+# 2026-09-07: probe is a RAW-SOCKET liveness check — SECURE_SSL_REDIRECT=True
+# turns an http probe into a 301 whose https follow times out (urllib hung the
+# container permanently unhealthy); any HTTP response proves the ASGI server
+# answers, the content check is nginx's (external 200). C-06 resolution note:
+# /api/v1/health/ exists since v0.6.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/', timeout=4)" || exit 1
+    CMD python -c "import socket; s=socket.create_connection(('127.0.0.1',8000),4); s.sendall(b'GET /api/v1/health/ HTTP/1.0\r\nHost: localhost\r\n\r\n'); assert s.recv(64).startswith(b'HTTP/')" || exit 1
 USER appuser
 CMD ["daphne", "-b", "0.0.0.0", "-p", "8000", "config.asgi:application"]

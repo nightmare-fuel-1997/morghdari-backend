@@ -89,3 +89,21 @@ $$;
 -- org_id in database.md (doc-first) and is a full policy member above.
 -- Related nuance (unchanged): lifecycle_templates.org_id is NULLable — NULL-org
 -- global templates are invisible to tenant contexts under the equality policy.
+
+-- v0.7 M7-03 (laptop rehearsal finding): the EMQX postgresql authn backend
+-- JOINs gateway_slots as emqx_auth and NEVER sets app.current_org_id, so the
+-- FORCE'd tenant_isolation policy returned zero rows for EVERY authn attempt
+-- (fail-closed "Not authorized"). The exemption is deliberately minimal:
+-- SELECT-only, emqx_auth-only, gateway_slots-only. Tenant isolation for all
+-- other roles is untouched. Twin of tenants/0003_emqx_auth_read_policy.py
+-- (which runs where migrations — not initdb — create the tables).
+DO $$
+BEGIN
+  IF to_regclass('public.gateway_slots') IS NOT NULL THEN
+    DROP POLICY IF EXISTS emqx_auth_read ON gateway_slots;
+    CREATE POLICY emqx_auth_read ON gateway_slots
+        FOR SELECT TO emqx_auth
+        USING (true);
+  END IF;
+END
+$$;

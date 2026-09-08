@@ -19,10 +19,14 @@ survive broker restarts and load-balance across N instances, hence:
 است چون نشست صف‌شده به همین شناسه گره خورده است.
 """
 
+import http.server
+import itertools
 import logging
 import os
 import sys
+import threading
 import time
+from urllib.parse import urlparse
 
 import paho.mqtt.client as mqtt
 import redis
@@ -39,6 +43,11 @@ SHARED_TOPIC = "$share/telemetry_workers/+/farms/+/gateways/+/telemetry"
 STATUS_TOPIC = "+/farms/+/gateways/+/status"
 SUBSCRIBE_QOS = 1
 
+# M7 (v0.7): the /metrics surface Observability §3.2 promises — subscriber_up
+# drives the SubscriberTierDegraded page (monitoring/alerts.yml).
+METRICS_PORT = int(os.environ.get("METRICS_PORT", "9091"))
+_messages_seen = itertools.count(1)
+
 
 def _required_env(name: str) -> str:
     value = os.environ.get(name, "").strip()
@@ -50,6 +59,29 @@ def _required_env(name: str) -> str:
         )
         raise SystemExit(2)
     return value
+
+
+def _apply_tls(client) -> None:
+    """M7 (v0.7): the production listener is TLS-ONLY (8883, emqx.conf) — the
+    subscriber MUST speak TLS or the broker drops every handshake.
+
+    MQTT_TLS=1 enables. MQTT_TLS_CA names a CA bundle (unset = the system
+    trust store — the VPS-day Let's Encrypt path). MQTT_TLS_INSECURE=1 relaxes
+    hostname verification for the SELF-SIGNED laptop rehearsal only — never
+    set it on a VPS.
+    """
+    if os.environ.get("MQTT_TLS", "").strip().lower() not in {"1", "true", "yes"}:
+        return
+    import ssl
+
+    ca = os.environ.get("MQTT_TLS_CA", "").strip() or None
+    context = ssl.create_default_context(cafile=ca)
+    if os.environ.get("MQTT_TLS_INSECURE", "").strip().lower() in {"1", "true", "yes"}:
+        logger.warning("MQTT_TLS_INSECURE=1 — hostname verification OFF (staging only!)")
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    client.tls_set_context(context)
+    logger.info("TLS enabled (ca=%s)", ca or "<system trust store>")
 
 
 def build_client() -> mqtt.Client:
@@ -64,6 +96,7 @@ def build_client() -> mqtt.Client:
     username = os.environ.get("MQTT_USERNAME", "").strip()
     if username:
         client.username_pw_set(username, os.environ.get("MQTT_PASSWORD", ""))
+    _apply_tls(client)
 
     client.on_connect = _on_connect
     client.on_message = _on_message
@@ -106,8 +139,45 @@ def _on_message(client, userdata, message) -> None:
     # M3-02: every message now passes the pipeline's ordered gates; rejections
     # dead-letter with a reason. M5-04: telemetry from unapproved gateways is
     # held in the pending stream; rejected/suspended gateways are archived.
+    next(_messages_seen)  # M7: /metrics counter (best-effort — never blocks ingestion)
     handle_message(_redis(), message.topic, message.payload,
                    status_fetch=_status_fetch)
+
+
+# ---------------------------------------------------------------------------
+# M7 (v0.7): the :9091 /metrics surface (Observability §3.2) — subscriber_up
+# drives the SubscriberTierDegraded page; delivery counters are evidence for
+# the MET-AVAIL SLO math.
+# ---------------------------------------------------------------------------
+class _MetricsHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        if urlparse(self.path).path != "/metrics":
+            self.send_error(404)
+            return
+        body = (
+            "# HELP subscriber_up Subscriber liveness (heartbeat per Observability §3.2)\n"
+            "# TYPE subscriber_up gauge\n"
+            "subscriber_up 1\n"
+            "# HELP telemetry_messages_received_total MQTT messages handed to the pipeline\n"
+            "# TYPE telemetry_messages_received_total counter\n"
+            f"telemetry_messages_received_total {next(_messages_seen) - 1}\n"
+        ).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; version=0.0.4")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):  # scrape noise must not drown the broker log
+        return None
+
+
+def _serve_metrics() -> None:
+    try:
+        http.server.ThreadingHTTPServer(("0.0.0.0", METRICS_PORT), _MetricsHandler).serve_forever()
+    except OSError as exc:
+        # Never take ingestion down for a scrape endpoint — but make it loud.
+        logger.error("metrics server on :%s failed: %s", METRICS_PORT, exc)
 
 
 _redis_client = None
@@ -159,6 +229,7 @@ def main() -> None:
     host = os.environ.get("MQTT_HOST", "127.0.0.1")
     port = int(os.environ.get("MQTT_PORT", "1883"))
     client = build_client()
+    threading.Thread(target=_serve_metrics, daemon=True, name="metrics").start()
     logger.info("booting subscriber → %s:%s", host, port)
     while True:
         try:
