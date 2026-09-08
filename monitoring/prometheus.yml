@@ -1,0 +1,60 @@
+# Prometheus scrape config — mounted into morghdari-prometheus (Audit AU-fix 2026-08-16).
+# Scrapes: cAdvisor, redis-exporter, postgres-exporter, EMQX metrics endpoint,
+# Django (/api/v1/metrics/) and the subscriber tier (:9091). (R3-fix 2026-08-16)
+# Byte-identical port of the docs-repo monitoring/prometheus.yml.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+# R3-fix 2026-08-16: alerting rules (Observability §4) — file is mounted at
+# /etc/prometheus/alerts.yml by monitoring/docker-compose.monitoring.yml.
+# Delivery is via Grafana alerting; alertmanager is NOT deployed in Phase 1.
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["cadvisor:8080"]
+
+  - job_name: redis-exporter
+    static_configs:
+      - targets: ["redis-exporter:9121"]
+
+  - job_name: postgres-exporter
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+
+  # EMQX built-in metrics endpoint. basic_auth = dashboard credentials (or a
+  # dedicated EMQX API key). NOTE: Prometheus does not reliably expand env
+  # vars in this file — replace ${EMQX_DASHBOARD_PASSWORD} at deploy time, e.g.
+  #   sed -i "s/\${EMQX_DASHBOARD_PASSWORD}/$EMQX_DASHBOARD_PASSWORD/" prometheus.yml
+  # plain http is acceptable here: the endpoint stays on the internal docker
+  # network (dashboard is published on host loopback only).
+  - job_name: emqx
+    scheme: http
+    metrics_path: /api/v5/prometheus/stats
+    basic_auth:
+      username: admin
+      password: "${EMQX_DASHBOARD_PASSWORD}"
+    static_configs:
+      - targets: ["emqx:18083"]
+
+  # R3-fix 2026-08-16: Django exposes prometheus metrics under /api/v1/metrics/
+  # per Observability §3.1 (plain http — internal docker network only).
+  - job_name: django
+    metrics_path: /api/v1/metrics/
+    static_configs:
+      - targets: ["daphne:8000"]
+
+  # R3-fix 2026-08-16: subscriber service /metrics on :9091 (Observability §3.2).
+  # subscriber-02 added 2026-08-23 — N≥2 is the default topology (Tracker §4i);
+  # add further targets when scaled (Deployment Guide §8.1).
+  - job_name: subscriber
+    static_configs:
+      - targets: ["subscriber-01:9091", "subscriber-02:9091"]

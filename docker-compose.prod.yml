@@ -1,0 +1,294 @@
+# Morghdari production stack — M7-03 (ported from Deployment & DevOps Guide §2.1,
+# docs-repo canonical, with the v0.7 rehearsal fixes noted inline).
+#
+# NEVER `docker compose up` without ./certs populated (nginx + EMQX refuse to
+# boot without TLS material — Deployment Guide §7.1) and a hardened .env (§3).
+#
+# Run with a PROJECT NAME so the monitoring stack can join the network:
+#   docker compose -p morghdari -f docker-compose.prod.yml up -d
+#
+# Laptop rehearsal (v0.7 M7): add the build override so the app services build
+# locally instead of pulling ghcr.io (no registry in the rehearsal):
+#   docker compose -p morghdari -f docker-compose.prod.yml -f docker-compose.rehearsal.yml up -d
+#
+# Rehearsal deltas vs the docs-repo §2.1 source (all intentional, audited):
+#   1. DJANGO_ALLOWED_HOSTS/DJANGO_DEBUG passed to daphne/celery — production.py
+#      raises without them; the §2.1 listing omitted them (docs gap, fixed here).
+#   2. healthchecks use python/wget forms — the slim runtime image has no curl
+#      and no pgrep (procps absent from python:3.12-slim).
+#   3. stop_grace_period per the TUTORIAL: subscriber drains 30s, worker 60s,
+#      postgres 120s (orderly boot/shutdown, §8.3 ordering rationale).
+#   4. emqx pinned to 5.5.1 — the exact version live-verified in v0.5.
+#   5. media volume mounted on daphne (O6 photo uploads die without it —
+#      Dockerfile note; DEPLOYMENT.md §media).
+
+services:
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: morghdari-nginx
+    mem_limit: 128m
+    stop_grace_period: 10s
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+      - ./certbot-www:/var/www/certbot   # ACME webroot for renewals (R3-fix 2026-08-16)
+      - static_volume:/static
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:80/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      - daphne
+    restart: always
+
+  emqx:
+    image: emqx:5.5.1
+    container_name: morghdari-emqx
+    mem_limit: 1g
+    stop_grace_period: 60s
+    ports:
+      - "8883:8883"                  # MQTT over TLS (gateways) — the only public broker port
+      - "127.0.0.1:18083:18083"      # Dashboard / Management API — loopback only (see §3.1)
+    environment:
+      EMQX_DASHBOARD__DEFAULT_PASSWORD: "${EMQX_DASHBOARD_PASSWORD}"
+      EMQX_NODE__COOKIE: "${EMQX_NODE__COOKIE}"
+      # Consumed by emqx/emqx.conf — the single source of truth for broker
+      # configuration (see MQTT Topic Map & EMQX Config.md §4).
+      DATABASE_HOST: "postgres"
+      DATABASE_NAME: "${DATABASE_NAME}"
+      # R3-fix 2026-08-16: emqx.conf authenticates to Postgres as the dedicated
+      # emqx_auth role (SELECT on mqtt tables only) — never the Django app
+      # role, so the app-role vars are deliberately NOT passed here.
+      EMQX_DB_USER: "${EMQX_DB_USER}"
+      EMQX_DB_PASSWORD: "${EMQX_DB_PASSWORD}"
+      # M7 rehearsal 2026-09-07: EMQX does NOT substitute ${VAR} placeholders
+      # inside emqx.conf (first real boot proved it — the literal became the
+      # authn pool's hostname and nxdomain'd forever). EMQX_* env overrides
+      # are the idiomatic mechanism and take precedence over the file:
+      EMQX_AUTHENTICATION__1__SERVER: "postgres:5432"
+      EMQX_AUTHENTICATION__1__DATABASE: "${DATABASE_NAME}"
+      EMQX_AUTHENTICATION__1__USERNAME: "${EMQX_DB_USER}"
+      EMQX_AUTHENTICATION__1__PASSWORD: "${EMQX_DB_PASSWORD}"
+      EMQX_AUTHORIZATION__SOURCES__1__SERVER: "postgres:5432"
+      EMQX_AUTHORIZATION__SOURCES__1__DATABASE: "${DATABASE_NAME}"
+      EMQX_AUTHORIZATION__SOURCES__1__USERNAME: "${EMQX_DB_USER}"
+      EMQX_AUTHORIZATION__SOURCES__1__PASSWORD: "${EMQX_DB_PASSWORD}"
+    volumes:
+      - emqx_data:/opt/emqx/data
+      - ./certs:/opt/emqx/certs:ro
+      - ./emqx/emqx.conf:/opt/emqx/etc/emqx.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "emqx ctl status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      - postgres
+    restart: always
+
+  redis:
+    image: redis:7-alpine
+    container_name: morghdari-redis
+    mem_limit: 2g
+    stop_grace_period: 30s
+    # requirepass on the command line — never in a file (see redis/redis.conf header, §6)
+    command: redis-server /usr/local/etc/redis/redis.conf --requirepass ${REDIS_PASSWORD}
+    environment:
+      REDIS_PASSWORD: "${REDIS_PASSWORD}"  # runtime expansion for the healthcheck below
+    volumes:
+      - redis_data:/data
+      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a $$REDIS_PASSWORD ping | grep -q PONG"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: always
+
+  postgres:
+    image: timescale/timescaledb:2.29.2-pg16
+    container_name: morghdari-postgres
+    mem_limit: 4g
+    stop_grace_period: 120s
+    environment:
+      POSTGRES_DB: "${DATABASE_NAME}"
+      # R3-fix 2026-08-16: POSTGRES_USER creates the bootstrap SUPERUSER — it
+      # must be morghdari_admin, NEVER the app role (superuser bypasses RLS
+      # entirely; see the warning in §2.2).
+      POSTGRES_USER: "${POSTGRES_ADMIN_USER}"
+      POSTGRES_PASSWORD: "${POSTGRES_ADMIN_PASSWORD}"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: always
+
+  daphne:
+    image: ghcr.io/morghdari/backend:${MORGHDARI_TAG}
+    container_name: morghdari-daphne
+    mem_limit: 1g
+    stop_grace_period: 30s
+    command: daphne -b 0.0.0.0 -p 8000 config.asgi:application
+    environment:
+      DJANGO_SETTINGS_MODULE: "config.settings.production"
+      DJANGO_ALLOWED_HOSTS: "${DJANGO_ALLOWED_HOSTS}"      # rehearsal fix 1
+      DJANGO_DEBUG: "${DJANGO_DEBUG:-False}"               # rehearsal fix 1
+      DATABASE_URL: "postgres://${DATABASE_USER}:${DATABASE_PASSWORD}@postgres:5432/${DATABASE_NAME}"
+      REDIS_URL: "redis://:${REDIS_PASSWORD}@redis:6379"
+      EMQX_HOST: "emqx"
+      # M7 rehearsal 2026-09-07: production.py reads DJANGO_SECRET_KEY — the
+      # docs-repo §2.1 listing passed SECRET_KEY (KeyError → crash loop).
+      DJANGO_SECRET_KEY: "${DJANGO_SECRET_KEY}"
+    volumes:
+      - static_volume:/app/static
+      - media_volume:/app/media                            # rehearsal fix 5
+    healthcheck:
+      # Liveness via raw socket (rehearsal fix 2 + fix 6): the slim runtime has
+      # no curl, and SECURE_SSL_REDIRECT=True turns the http probe into a 301
+      # whose https follow times out — ANY HTTP response proves the ASGI server
+      # answers; the CONTENT check is nginx's job (external 200, M7-03).
+      test: ["CMD-SHELL", "python -c \"import socket; s=socket.create_connection(('127.0.0.1',8000),4); s.sendall(b'GET /api/v1/health/ HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n'); assert s.recv(64).startswith(b'HTTP/')\" || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      - postgres
+      - redis
+    restart: always
+
+  subscriber-01:
+    image: ghcr.io/morghdari/backend:${MORGHDARI_TAG}
+    container_name: morghdari-subscriber-01
+    mem_limit: 512m
+    stop_grace_period: 30s                                 # drain window (TUTORIAL §3.3)
+    command: python -m morghdari.subscriber
+    environment:
+      SUBSCRIBER_CLIENT_ID: "subscriber-01"
+      # M7 rehearsal 2026-09-07: the subscriber reads MQTT_HOST + MQTT_PORT
+      # (main.py) — the docs-repo §2.1 listing passed MQTT_BROKER, which nothing
+      # reads, so the process defaulted to 127.0.0.1:1883 (refused forever).
+      MQTT_HOST: "emqx"
+      MQTT_PORT: "8883"
+      MQTT_USERNAME: "${SUBSCRIBER_USERNAME}"
+      MQTT_PASSWORD: "${SUBSCRIBER_PASSWORD}"
+      # M7: TLS is mandatory against the prod listener (emqx.conf tcp disabled).
+      # MQTT_TLS_INSECURE=1 is STAGING-ONLY (self-signed cert, hostname "emqx"
+      # not in its SAN) — never set it on the VPS.
+      MQTT_TLS: "1"
+      MQTT_TLS_CA: "/app/certs/ca.crt"
+      MQTT_TLS_INSECURE: "1"
+      REDIS_URL: "redis://:${REDIS_PASSWORD}@redis:6379"
+    volumes:
+      - ./certs:/app/certs:ro
+    healthcheck:
+      # /proc scan — no pgrep in the slim image (rehearsal fix 2)
+      test: ["CMD-SHELL", "python -c \"import glob; assert any(b'morghdari.subscriber' in open(f'{p}/cmdline','rb').read() for p in glob.glob('/proc/[0-9]*'))\" || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      - emqx
+      - redis
+    restart: always
+
+  # AU-SUBSCRIBER-N2 closed 2026-08-23 (Tracker §4i): N ≥ 2 subscribers is MANDATORY
+  # (MQTT spec §5.5 / DR T4b) — a single instance makes every restart a full-outage
+  # window against the mqueue clock. subscriber-02 ships in the default topology.
+  subscriber-02:
+    image: ghcr.io/morghdari/backend:${MORGHDARI_TAG}
+    container_name: morghdari-subscriber-02
+    mem_limit: 512m
+    stop_grace_period: 30s
+    command: python -m morghdari.subscriber
+    environment:
+      SUBSCRIBER_CLIENT_ID: "subscriber-02"
+      MQTT_HOST: "emqx"          # same MQTT_HOST/MQTT_PORT fix as subscriber-01
+      MQTT_PORT: "8883"
+      MQTT_USERNAME: "${SUBSCRIBER_USERNAME_2}"
+      MQTT_PASSWORD: "${SUBSCRIBER_PASSWORD_2}"
+      MQTT_TLS: "1"
+      MQTT_TLS_CA: "/app/certs/ca.crt"
+      MQTT_TLS_INSECURE: "1"     # STAGING-ONLY — see subscriber-01
+      REDIS_URL: "redis://:${REDIS_PASSWORD}@redis:6379"
+    volumes:
+      - ./certs:/app/certs:ro
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import glob; assert any(b'morghdari.subscriber' in open(f'{p}/cmdline','rb').read() for p in glob.glob('/proc/[0-9]*'))\" || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      - emqx
+      - redis
+    restart: always
+
+  celery-worker:
+    image: ghcr.io/morghdari/backend:${MORGHDARI_TAG}
+    container_name: morghdari-celery-worker
+    mem_limit: 2g
+    stop_grace_period: 60s                                 # worker drain window
+    command: celery -A config worker -l info --concurrency=4
+    environment:
+      DJANGO_SETTINGS_MODULE: "config.settings.production"
+      DJANGO_ALLOWED_HOSTS: "${DJANGO_ALLOWED_HOSTS}"
+      DJANGO_DEBUG: "${DJANGO_DEBUG:-False}"
+      DATABASE_URL: "postgres://${DATABASE_USER}:${DATABASE_PASSWORD}@postgres:5432/${DATABASE_NAME}"
+      REDIS_URL: "redis://:${REDIS_PASSWORD}@redis:6379"
+      DJANGO_SECRET_KEY: "${DJANGO_SECRET_KEY}"   # same docs-gap fix as daphne
+      CELERY_CONSUMER_ID: "$${HOSTNAME}-worker"   # runtime env — a parse-time ${HOSTNAME} would be blank
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A config inspect ping --timeout=10 || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 60s
+    depends_on:
+      - postgres
+      - redis
+    restart: always
+
+  celery-beat:
+    image: ghcr.io/morghdari/backend:${MORGHDARI_TAG}
+    container_name: morghdari-celery-beat
+    mem_limit: 256m
+    stop_grace_period: 30s
+    command: celery -A config beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    environment:
+      DJANGO_SETTINGS_MODULE: "config.settings.production"
+      DJANGO_ALLOWED_HOSTS: "${DJANGO_ALLOWED_HOSTS}"
+      DJANGO_DEBUG: "${DJANGO_DEBUG:-False}"
+      DATABASE_URL: "postgres://${DATABASE_USER}:${DATABASE_PASSWORD}@postgres:5432/${DATABASE_NAME}"
+      REDIS_URL: "redis://:${REDIS_PASSWORD}@redis:6379"
+      DJANGO_SECRET_KEY: "${DJANGO_SECRET_KEY}"   # same docs-gap fix as daphne
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import glob; assert any(b'celery' in open(f'{p}/cmdline','rb').read() and b'beat' in open(f'{p}/cmdline','rb').read() for p in glob.glob('/proc/[0-9]*'))\" || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      - postgres
+      - redis
+    restart: always
+
+volumes:
+  postgres_data:
+  redis_data:
+  emqx_data:
+  static_volume:
+  media_volume:

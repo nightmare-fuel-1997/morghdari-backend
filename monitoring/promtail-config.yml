@@ -1,0 +1,35 @@
+# Promtail config — scrapes Docker container logs (Audit AU-fix 2026-08-16).
+# Byte-identical port of the docs-repo monitoring/promtail-config.yml.
+# Discovers containers via docker_sd_configs (docker.sock) and tails their
+# JSON log files under /var/lib/docker/containers. Minimal pipeline: parse the
+# docker log envelope, keep the raw line, label by container name/project.
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  # R3-fix 2026-08-16: /tmp is ephemeral — acceptable Phase 1 (re-ingestion on
+  # restart only, Loki dedupes by labels/timestamps). Move to a persistent
+  # volume (/var/lib/promtail/positions.yaml + volume mapping) only if that
+  # ever becomes a problem.
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 15s
+    relabel_configs:
+      - source_labels: ["__meta_docker_container_name"]
+        regex: "/(.*)"
+        target_label: container
+      - source_labels: ["__meta_docker_container_log_stream"]
+        target_label: stream
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_project"]
+        target_label: compose_project
+    pipeline_stages:
+      - docker: {}

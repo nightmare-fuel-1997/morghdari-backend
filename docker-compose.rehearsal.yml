@@ -1,0 +1,23 @@
+# Laptop rehearsal override (v0.7 M7) — NEVER used on the real VPS.
+#
+# The production compose pulls ghcr.io/morghdari/backend by pinned tag and has
+# NO build blocks (single-image strategy — Deployment Guide §2.1 note). The
+# laptop rehearsal has no registry, so this override adds build contexts for
+# the five app-image services; every other service is byte-identical prod.
+#
+#   docker compose -p morghdari \
+#     -f docker-compose.prod.yml -f docker-compose.rehearsal.yml up -d
+#
+# On the VPS: omit this file entirely.
+
+services:
+  daphne:
+    build: ./backend
+  subscriber-01:
+    build: ./backend
+  subscriber-02:
+    build: ./backend
+  celery-worker:
+    build: ./backend
+  celery-beat:
+    build: ./backend

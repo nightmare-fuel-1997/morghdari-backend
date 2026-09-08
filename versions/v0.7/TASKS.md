@@ -8,15 +8,18 @@ Owner decisions (2026-09-07, Tracker §4s sync): **(1)** the contract union stay
 ratification (1.8.0 stays reserved for growth); **(2)** the **reports-merge
 implementation moves to v0.7 scope** (OPEN-4s deadline: end of v0.7) — the §4n
 reports base it rides on comes forward with it → tasks **M7-15..M7-17** below.
-The VPS-resident tasks (M7-01..M7-06, M7-08, M7-09, M7-13) are owner-gated on VPS
-access; the code-side waves (M7-07, M7-11..M7-12, M7-15..M7-17) proceed in parallel
-per the no-reorder convention.
+The VPS-resident tasks (M7-01..M7-06, M7-08, M7-09, M7-13) were owner-gated on VPS
+access; the owner's 2026-09-08 decision treats the LAPTOP AS THE STAGING VPS, so
+M7-01..M7-06/M7-09 proceed as laptop rehearsals (real topology/TLS/backups/chaos,
+with public-DNS/Let's-Encrypt/ufw as VPS-day runbook steps in scripts/). The
+code-side waves (M7-07, M7-11..M7-12, M7-15..M7-17) proceed in parallel per the
+no-reorder convention.
 
 | # | Task | Depends on | Acceptance | Status |
 |---|---|---|---|---|
-| M7-01 | VPS provisioned per Deployment Guide §10 (4c/16 GB/100 GB SSD); ufw + docker-port discipline (§3.1) | v0.6 | only 22/80/443/8883 reachable |
-| M7-02 | TLS issuance runbook executed (certbot webroot; certs copied under BOTH naming conventions; deploy-hook reloads nginx+emqx) | M7-01 | HTTPS live; EMQX 8883 TLS verified |
-| M7-03 | Production compose up (all 9 containers incl. subscriber-02, healthchecks, stop_grace_periods) | M7-02 | `docker compose ps` all healthy; health endpoint 200 |
+| M7-01 | VPS provisioned per Deployment Guide §10 (4c/16 GB/100 GB SSD); ufw + docker-port discipline (§3.1) | v0.6 | only 22/80/443/8883 reachable | ✅ rehearsal (2026-09-08: laptop-as-VPS per owner — port discipline verified live on the running stack: only 80/443/8883 published, EMQX dashboard 18083 loopback-only, everything else internal networks; ufw + SSH hardening remain the VPS-day runbook in scripts/tls_issue_vps.sh §0) |
+| M7-02 | TLS issuance runbook executed (certbot webroot; certs copied under BOTH naming conventions; deploy-hook reloads nginx+emqx) | M7-01 | HTTPS live; EMQX 8883 TLS verified | ✅ rehearsal (2026-09-08: certs staged via scripts/tls_stage_rehearsal.sh under BOTH naming conventions; deploy-hook equivalent scripts/reload-tls.sh; HTTPS live → 200 through nginx TLS termination; EMQX 8883 TLS verified by a real subscriber CONNACK over TLS; Let's Encrypt issuance itself is the VPS-day runbook scripts/tls_issue_vps.sh) |
+| M7-03 | Production compose up (all 9 containers incl. subscriber-02, healthchecks, stop_grace_periods) | M7-02 | `docker compose ps` all healthy; health endpoint 200 | ✅ rehearsal (2026-09-08: all 9 containers healthy on docker-compose.prod.yml + rehearsal override; health endpoint 200 through TLS; prod_bootstrap.sh = role passwords + post-migrate grants + subscriber seeding through the real authn chain; rehearsal findings FIXED in code a9dd05e: EMQX 5.5 conf schema (node.data_dir, limiter root, authn env-override), DJANGO_SECRET_KEY name, healthcheck redirect-follow, subscriber MQTT_HOST/PORT split + TLS; external HTTPS + broker + subscribers all live) |
 | M7-04 | Monitoring stack (loopback-only) + alerts.yml rules wired to Grafana alerting | M7-03 | dashboards render; test rule fires |
 | M7-05 | Backup cron + purge/archive scripts honoring `legal_hold` (DR §5) + restore rehearsal (as admin user; extension pre-create; verify hypertables) | M7-03 | restore drill succeeds on staging; held rows survive purge |
 | M7-06 | Shared-subscription rebalance verified (subscriber-02 already ships in the base compose — AU-SUBSCRIBER-N2 closed 2026-08-23) | M7-03 | kill 01 → 02 absorbs; no data-loss clock |

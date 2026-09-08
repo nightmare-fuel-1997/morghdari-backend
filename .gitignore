@@ -49,3 +49,9 @@ htmlcov/
 .pytest_cache/
 .zcode/
 .opencode/
+
+# --- v0.7 rehearsal runtime (never committed) ---
+/certs/
+/backups/
+/certbot-www/
+/monitoring/prometheus.runtime.yml

@@ -1,0 +1,120 @@
+# Monitoring stack — deployed on the SAME host as the app stack (Audit AU-fix 2026-08-16).
+# Memory budget ~2-3 GB total (fits the ~5 GB headroom left by the app stack's
+# mem_limits — see Deployment & DevOps Guide §2.1).
+# Byte-identical port of the docs-repo monitoring/docker-compose.monitoring.yml.
+#
+# ALL UI/dashboard ports are bound to 127.0.0.1 ONLY — access via SSH tunnel:
+#   ssh -L 3000:127.0.0.1:3000 user@vps   # Grafana
+#   ssh -L 9090:127.0.0.1:9090 user@vps   # Prometheus
+#   ssh -L 5555:127.0.0.1:5555 user@vps   # Flower
+#
+# Run from the repo/deploy root so the app .env is used for credentials:
+#   docker compose --env-file .env -f monitoring/docker-compose.monitoring.yml up -d
+#
+# Services join the app stack's default network (project "morghdari" ->
+# network morghdari_default) so exporters can resolve redis/postgres/emqx
+# by service name. Adjust `networks.default.name` if your project name differs.
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: morghdari-prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # R3-fix 2026-08-16: alert rules — referenced by rule_files in prometheus.yml.
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    restart: always
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: morghdari-grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD}"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    restart: always
+
+  loki:
+    image: grafana/loki:3.1.0
+    container_name: morghdari-loki
+    ports:
+      - "127.0.0.1:3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - loki_data:/loki
+    restart: always
+
+  promtail:
+    image: grafana/promtail:3.1.0
+    container_name: morghdari-promtail
+    # Scrapes Docker container logs via /var/lib/docker/containers + the
+    # Docker socket (container metadata) — see promtail-config.yml.
+    volumes:
+      - ./monitoring/promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command: -config.file=/etc/promtail/config.yml
+    restart: always
+
+  flower:
+    image: mher/flower:2.0
+    container_name: morghdari-flower
+    ports:
+      - "127.0.0.1:5555:5555"
+    # R3-fix 2026-08-16: broker is db 0 (the app db — Celery/Flower share it;
+    # db 1 was unused), and ${REDIS_PASSWORD} is interpolated by compose itself
+    # from --env-file .env (single $ — the old $$ form expanded inside the
+    # container where REDIS_PASSWORD was never set for the shell).
+    command: >
+      celery --broker=redis://:${REDIS_PASSWORD}@redis:6379/0
+      flower --port=5555
+    restart: always
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: morghdari-cadvisor
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    devices:
+      - /dev/kmsg
+    privileged: true
+    restart: always
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.61.0
+    container_name: morghdari-redis-exporter
+    environment:
+      # redis_target: the app stack's Redis (requires AUTH — password from .env).
+      REDIS_ADDR: "redis://redis:6379"
+      REDIS_PASSWORD: "${REDIS_PASSWORD}"
+    restart: always
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: morghdari-postgres-exporter
+    environment:
+      # R3-fix 2026-08-16: connect as morghdari_exporter — created in
+      # initdb/01_roles.sql with pg_monitor grant (see Implementation Blueprint
+      # §3); never the app role.
+      DATA_SOURCE_NAME: "postgresql://morghdari_exporter:${POSTGRES_EXPORTER_PASSWORD}@postgres:5432/${DATABASE_NAME}?sslmode=disable"
+    restart: always
+
+volumes:
+  prometheus_data:
+  grafana_data:
+  loki_data:
+
+networks:
+  default:
+    name: morghdari_default
+    external: true

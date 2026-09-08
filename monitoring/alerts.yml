@@ -1,0 +1,88 @@
+# Prometheus alerting rules — key CRITICAL/WARNING rules from Observability &
+# Monitoring Runbook §4. (R3-fix 2026-08-16)
+# Byte-identical port of the docs-repo monitoring/alerts.yml.
+#
+# Loaded via `rule_files` in prometheus.yml; mounted read-only at
+# /etc/prometheus/alerts.yml by monitoring/docker-compose.monitoring.yml.
+#
+# DELIVERY: via Grafana alerting — alertmanager is NOT deployed in Phase 1.
+# Prometheus evaluates these rules (visible in its UI/API as ALERTS{...});
+# Grafana's alert definitions mirror the same expressions and own the
+# notification channels (SMS/push for CRITICAL, email/webhook for WARNING).
+#
+# Scrape sources (prometheus.yml): Django metrics via /api/v1/metrics/
+# (Observability §3.1), subscriber :9091 (§3.2), redis-exporter, and EMQX's
+# /api/v5/prometheus/stats (§3.4).
+
+groups:
+  # CRITICAL — pager-worthy (SMS/Push). Observability §4.1.
+  - name: morghdari-critical
+    rules:
+      - alert: TelemetryPipelineDown
+        # counter telemetry_ingested_total (Django, /api/v1/metrics/)
+        expr: sum(rate(telemetry_ingested_total[5m])) == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Telemetry pipeline down — no ingestion for 5m"
+          runbook_url: "Observability & Monitoring Runbook §8.1 (check subscriber + Redis + Celery)"
+
+      - alert: RedisDown
+        # redis_up comes from redis_exporter (not the /api/v1/health/ JSON — see
+        # Observability §4.1 note).
+        expr: redis_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis unreachable (redis_exporter)"
+          runbook_url: "Restart Redis container; check AOF recovery"
+
+      - alert: SubscriberTierDegraded
+        # Healthy-instance count below the 2-instance tier, or the series
+        # entirely absent (subscriber_up has a 60s heartbeat expiry — §3.2).
+        # Fires => DR T4b hard SLA (< 2h) starts NOW.
+        expr: count(subscriber_up == 1) < 2 or absent(subscriber_up)
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Subscriber tier degraded — fewer than 2 instances up"
+          runbook_url: "Check subscriber containers + EMQX shared-subscription group members (DR T4b)"
+
+      - alert: EmqxQueueDropped
+        # mqueue overflow = permanent telemetry loss. Metric name per
+        # Observability §3.4 (EMQX /api/v5/prometheus/stats).
+        expr: sum(increase(emqx_client_queue_dropped_total[5m])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "EMQX mqueue overflow — messages dropped"
+          runbook_url: "Raise max_mqueue_len (DR T4b sizing model) + scale subscribers"
+
+      - alert: PendingApprovalBacklog
+        # Gauge telemetry_pending_approval_depth (XLEN of telemetry:pending_approval).
+        expr: sum(telemetry_pending_approval_depth) > 1000
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Pending-approval backlog > 1000"
+          runbook_url: "Unapproved gateways accumulating — notify Farm Manager(s)"
+
+  # WARNING — dashboard (email/webhook). Observability §4.2.
+  - name: morghdari-warning
+    rules:
+      - alert: BeatHeartbeatStale
+        # Beat publishes the unix timestamp of its last tick; stale means the
+        # safety flush + escalation sweep + LOS watchdog are all stopped.
+        # NOTE: metric is to be exported by the beat container — extend the
+        # Observability §3.3 metric list when implementing.
+        expr: time() - max(celery_beat_heartbeat_timestamp_seconds) > 300
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Celery beat heartbeat stale — last tick > 5 min ago"
+          runbook_url: "Check morghdari-celery-beat container"
