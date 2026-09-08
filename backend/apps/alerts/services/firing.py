@@ -76,6 +76,10 @@ def fire_or_coalesce(
                     batch_id=batch_id,
                 )
                 action = "fired"
+                # M7-04 observability: created counter (Redis bridge — runbook §3.1).
+                from apps.monitoring.metrics import bump_alert_created
+
+                bump_alert_created(redis_client, "1", metric)
 
     # Stash the open-alert pointer AFTER the DB commit succeeds (D3 pattern).
     blob = json.dumps({

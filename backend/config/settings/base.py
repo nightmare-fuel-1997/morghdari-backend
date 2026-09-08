@@ -316,6 +316,14 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 60.0,
         "options": {"queue": "alerts"},
     },
+    # M7-04 observability: beat liveness for the BeatHeartbeatStale rule
+    # (monitoring/alerts.yml — 300 s staleness window). The task writes a
+    # Redis timestamp; daphne's /metrics/ export lifts it into the gauge.
+    "monitoring-beat-heartbeat": {
+        "task": "monitoring.beat_heartbeat",
+        "schedule": 60.0,
+        "options": {"queue": "alerts"},
+    },
 }
 # Historical lane is throttled IN THE WORKER from system_configuration (Saas §4);
 # Celery-level rates are intentionally NOT set here to avoid two sources of truth.

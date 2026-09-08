@@ -187,6 +187,7 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None,
 
     processed = 0
     acked: set[str] = set()
+    _cycle_started = time.perf_counter()  # M7-04 ingestion-latency window
     # M4-08 counters span the WHOLE drain call, not one batch: the '>' read
     # and the PEL crash-recovery read arrive as SEPARATE batch tuples and the
     # same entry legitimately appears in both — countdown once per entry.
@@ -226,6 +227,10 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None,
                 # still processed), else the backlog never reaches zero.
                 gw = fields.get("gateway_slot_id", "")
                 buffered_by_gw[gw] = buffered_by_gw.get(gw, 0) + 1
+                # M7-04 observability: replay counter (Redis bridge, runbook §3.1).
+                from apps.monitoring.metrics import bump_buffered
+
+                bump_buffered(client, kwargs["org_id"])
 
         for org, rows in by_org.items():
             from apps.tenants.context import tenant_context
@@ -249,6 +254,7 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None,
                             metrics_data = json.loads(
                                 raw["fields"].get("metrics", "{}")
                             )
+                            _eval_started = time.perf_counter()
                             evaluate_entry(
                                 redis_client=client,
                                 saloon_id=raw["saloon_id"],
@@ -258,6 +264,12 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None,
                                 metrics=metrics_data,
                                 device_ts=raw["fields"].get("device_ts", ""),
                             )
+                            # M7-04 observability: eval latency ring (runbook §3.1).
+                            from apps.monitoring.metrics import note_alert_eval_latency
+
+                            note_alert_eval_latency(
+                                client, time.perf_counter() - _eval_started
+                            )
                         except Exception:
                             logger.exception(
                                 "alert evaluation failed for saloon=%s",
@@ -265,6 +277,15 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None,
                             )
 
             processed += len(rows)
+
+            # M7-04 observability: per-(org, saloon) ingestion counters (Redis
+            # bridge — runbook §3.1; silent-fail, the pipeline is not advisory).
+            from apps.monitoring.metrics import bump_ingested
+            from collections import Counter as _Counter
+
+            per_saloon = _Counter(r["saloon_id"] for r in rows)
+            for saloon_id, count in per_saloon.items():
+                bump_ingested(client, org, saloon_id, count)
 
             # M6-06: WS fan-out AFTER the commit — dashboards are only ever
             # told about DURABLE rows ("UI follows DB"). One group_send per
@@ -318,6 +339,12 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None,
         if ids:
             client.xack(stream, CONSUMER_GROUP, *ids)
             acked.update(ids)
+
+    # M7-04 observability: end-to-end ingestion latency for this drain cycle
+    # (read → commit). Advisory histogram — never alert-critical.
+    from apps.monitoring.metrics import note_ingestion_latency
+
+    note_ingestion_latency(client, time.perf_counter() - _cycle_started)
 
     # M4-08 (Blueprint §5): the historical backlog countdown — when the LAST
     # buffered entry of a gateway's outage drains, dispatch the retroactive

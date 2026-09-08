@@ -22,9 +22,13 @@ services:
     ports:
       - "127.0.0.1:9090:9090"
     volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # File-relative paths (compose v2 project dir = the FIRST -f file's
+      # directory — root-relative ./monitoring/... paths doubled up and the
+      # bind mount failed; same latent bug exists in the docs-repo original,
+      # noted for the docs sync).
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       # R3-fix 2026-08-16: alert rules — referenced by rule_files in prometheus.yml.
-      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - ./alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus_data:/prometheus
     restart: always
 
@@ -56,7 +60,7 @@ services:
     # Scrapes Docker container logs via /var/lib/docker/containers + the
     # Docker socket (container metadata) — see promtail-config.yml.
     volumes:
-      - ./monitoring/promtail-config.yml:/etc/promtail/config.yml:ro
+      - ./promtail-config.yml:/etc/promtail/config.yml:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
     command: -config.file=/etc/promtail/config.yml

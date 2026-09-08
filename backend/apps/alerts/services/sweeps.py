@@ -122,6 +122,10 @@ def escalate_all(now_dt=None) -> int:
             alert.resolved_at = now
             _save_alert(alert, ["current_status", "resolved_at"])
             client.delete(active_alert_key(alert.saloon_id, alert.metric_type))
+            # M7-04 observability: resolved counter (Redis bridge — runbook §3.1).
+            from apps.monitoring.metrics import bump_alert_resolved
+
+            bump_alert_resolved(client, str(alert.highest_tier_reached or 1))
             logger.info("alert %s resolved (metric recovered)", alert.id)
             changed += 1
             continue

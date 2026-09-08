@@ -17,6 +17,8 @@ import os
 import time
 
 from django.db import connection
+from django.http import HttpResponse
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
@@ -110,3 +112,27 @@ def health(request):
 def hardware_time(request):
     """NTP fallback — current server time in whole unix seconds."""
     return Response({"unix_ts": int(time.time())})
+
+
+def metrics(request):
+    """Prometheus scrape endpoint — Observability Runbook §3.1 (v0.7 M7-04).
+
+    NOT a DRF @api_view: the exposition format is plain text, not JSON, and
+    DRF's content negotiation would 400 a plain-GET scrape (the exact failure
+    the monitoring rehearsal caught). Scrape-time refresh_gauges() drains the
+    Redis bridge so worker-side counters/latencies surface here.
+
+    Contract: documented in openapi.yaml (the implemented == contract gate
+    walks every /api/v1/ route), but nginx returns 404 for it — the scrape
+    targets daphne directly on the internal network (Deployment Guide §7).
+    """
+    from apps.monitoring.metrics import refresh_gauges
+
+    refresh_gauges()
+    return HttpResponse(generate_latest(), content_type=CONTENT_TYPE_LATEST)
+
+
+# The contract gate's _view_methods() detects served verbs via attached
+# attributes (DRF's @api_view does exactly this under the hood) — a bare
+# function is invisible to it, so mirror the DRF shape explicitly.
+metrics.get = metrics
