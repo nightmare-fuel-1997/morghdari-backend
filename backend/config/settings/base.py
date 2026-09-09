@@ -130,6 +130,7 @@ INSTALLED_APPS = [
     "apps.auditing",
     "apps.system_config",
     "apps.monitoring",
+    "apps.reports",
     # M6-09: additive Flutter compat layer (legacy_slug_map + /api/compat/v1).
     "apps.compat",
 ]

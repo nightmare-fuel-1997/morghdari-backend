@@ -25,6 +25,7 @@ urlpatterns = [
     path("api/v1/", include("apps.farms.urls")),
     path("api/v1/", include("apps.alerts.urls")),
     path("api/v1/", include("apps.monitoring.urls")),
+    path("api/v1/", include("apps.reports.urls")),
     # M6-10 ops wave (contract v1.7.0-draft): audit/thresholds/photos/
     # gateways/sessions. Mounted from the SAME app's second urlconf —
     # deliberately NOT in apps.monitoring.urls so the implemented ==

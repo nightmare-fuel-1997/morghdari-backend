@@ -136,6 +136,18 @@ class SaloonTelemetryConsumer(JsonWebsocketConsumer):
     def telemetry_gap_fill(self, event):  # parity hook for server-side fills
         self.send_json(event)
 
+    def report_flagged(self, event):
+        """M7-15 receiver for the §4n FLAGGED push (D24-8 leg 3).
+
+        The producer (apps.reports.api._push_flagged) targets the org-scoped
+        `reports_{org_id}` group — same org-in-the-name tenancy boundary as
+        the saloon groups (Decision 19). The v0.9 doctor dashboard joins that
+        group with its own consumer; this handler exists so the event type
+        has a sanctioned receiver TODAY and an accidental membership never
+        warns "No handler for message type report.flagged".
+        """
+        self.send_json(event)
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------

@@ -30,12 +30,12 @@ CONTRACT = Path(__file__).resolve().parent.parent / "openapi.yaml"
 
 # M7-07: was ("/platform/",) "v0.7 scope" — all /platform/support/* paths and
 # the MFA pair are implemented now, so nothing is prefix-excluded anymore.
+# M7-15: the three §4n report paths left the exclusion set (implemented —
+# v0.9 scope pulled forward); /vet-catalog/ and the remaining §4n rows stay
+# excluded until their waves.
 EXCLUDED_PREFIXES = ()
 EXCLUDED_EXACT = {
     # §4n paths — v0.9 scope (Tracker §4n; VERSIONS.md §v0.9)
-    "/saloons/{saloon_id}/reports/",
-    "/reports/{report_id}/",
-    "/reports/{report_id}/vet-review/",
     "/vet-catalog/",
     "/me/panels/",
     "/panels/{role}/",
@@ -72,6 +72,7 @@ _API_ROOTS = (
     "apps.alerts.urls",
     "apps.monitoring.urls",
     "apps.monitoring.urls_ops",  # M6-10 ops wave (contract v1.7.0)
+    "apps.reports.urls",  # M7-15 §4s reports base (v0.9 scope pulled forward)
 )
 
 

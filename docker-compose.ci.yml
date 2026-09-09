@@ -137,11 +137,14 @@ services:
     # service can reference exactly what the test stage built, regardless of
     # the compose -p project name.
     image: morghdari-test:ci
-    # The image packages ONLY ./backend (§8 build context); the bootstrap SQL
-    # is repo-root machinery shared with the postgres entrypoint, so it is
-    # mounted read-only instead of duplicated into the image.
+    # The image packages ONLY ./backend (§8 build context); repo-root
+    # machinery is mounted read-only instead of duplicated into the image:
+    # initdb for the bootstrap SQL, monitoring/ for the MET-AVAIL config
+    # assertions (test_m7_08 reads prometheus.yml + alerts.yml at REPO_ROOT —
+    # inside the image that is / and would otherwise miss the tree entirely).
     volumes:
       - ./initdb:/initdb:ro
+      - ./monitoring:/monitoring:ro
     # Coverage gates live in the command (mirrors docs template); pytest.ini
     # addopts would double-count --cov args otherwise kept minimal here.
     # The module gate runs in the SAME container right after pytest so it reads
