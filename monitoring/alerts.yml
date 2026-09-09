@@ -1,5 +1,9 @@
 # Prometheus alerting rules — key CRITICAL/WARNING rules from Observability &
 # Monitoring Runbook §4. (R3-fix 2026-08-16)
+# v0.7 M7-08 (MET-AVAIL): the two Availability burn-rate rules from §4.2
+# ("external-prober 5xx/failure rate > 1% over 1h ⇒ PAGE; > 0.2% over 6h ⇒
+# WARNING") — they evaluate on the PROBER's probe_success series (blackbox
+# jobs in prometheus.yml), never on self-scraped app metrics.
 # Byte-identical port of the docs-repo monitoring/alerts.yml.
 #
 # Loaded via `rule_files` in prometheus.yml; mounted read-only at
@@ -99,3 +103,36 @@ groups:
         annotations:
           summary: "Celery beat heartbeat stale — last tick > 5 min ago"
           runbook_url: "Check morghdari-celery-beat container"
+
+  # ------------------------------------------------------------------------
+  # M7-08 MET-AVAIL — availability error-budget burn (Runbook §4.2).
+  # Evaluate on the EXTERNAL prober's series (blackbox jobs in
+  # prometheus.yml) — "the burn-rate rules above evaluate on the prober's
+  # data, not on self-scraped metrics". prober "regions" = the isolated
+  # prober containers on the rehearsal stack; Checkly/UptimeRobot agents
+  # publish the same probe_success shape on VPS-day. Aggregation is over
+  # both vantage points: a single probe path failing burns the budget
+  # across whichever vantage still sees it.
+  # 99.9% SLO = 43 min budget / 30d. >1%/1h burns it ~14x too fast; >0.2%/6h
+  # is the slow trend (§4.2 verbatim conditions).
+  # ------------------------------------------------------------------------
+  - name: morghdari-availability-burn
+    rules:
+      - alert: AvailabilityBudgetFastBurn
+        # failure rate > 1% over 1h — i.e. >0.99 success over the window.
+        expr: avg_over_time(probe_success[1h]) < 0.99
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Availability error-budget fast burn — prober failure rate > 1% over 1h"
+          runbook_url: "Observability & Monitoring Runbook §4.2 (check deploy, failover per DR T5)"
+      - alert: AvailabilitySlowBurn
+        # failure rate > 0.2% over 6h — i.e. <0.998 success over the window.
+        expr: avg_over_time(probe_success[6h]) < 0.998
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Availability error-budget slow burn — prober failure rate > 0.2% over 6h"
+          runbook_url: "Observability & Monitoring Runbook §4.2 (investigate before the fast-burn page does)"

@@ -1,0 +1,38 @@
+# Blackbox prober modules — M7-08 MET-AVAIL (Observability Runbook §4.2).
+# The burn-rate rules evaluate probe_success from the http_2xx probe of
+# GET /api/v1/health/ — healthy=200 (HealthCheckResponse) is the probed
+# contract.
+#
+# TLS (public vantage): the rehearsal stack serves a self-signed SAN cert
+# (scripts/tls_stage_rehearsal.sh), so http_2xx_tls skips verification and
+# the probe target pins server_name=https://api.morghdari.com/... — a real
+# SNI + TLS handshake against nginx :443, exactly what a client does, minus
+# trust. VPS-day swaps to Let's Encrypt and flips insecure_skip_verify to
+# false (via the real external probers anyway).
+#
+# fail_if_not_ssl is deliberately ABSENT: region 2 probes the app route
+# over plain http inside the container network (TLS termination is nginx's
+# job — probing it there would double-count TLS as app failure).
+#
+# http_2xx is kept verification-skipping too (parity with the historical
+# config); the burn-rate job uses http_2xx_tls for the public leg.
+
+modules:
+  http_2xx:
+    prober: http
+    timeout: 10s
+    http:
+      preferred_ip_protocol: ip4
+      valid_http_versions: ["HTTP/1.1", "HTTP/2.0"]
+      follow_redirects: true
+      tls_config:
+        insecure_skip_verify: true
+  http_2xx_tls:
+    prober: http
+    timeout: 10s
+    http:
+      preferred_ip_protocol: ip4
+      valid_http_versions: ["HTTP/1.1", "HTTP/2.0"]
+      follow_redirects: true
+      tls_config:
+        insecure_skip_verify: true

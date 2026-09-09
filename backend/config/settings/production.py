@@ -29,9 +29,12 @@ CSRF_COOKIE_SECURE = True
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 # M7-04: the Prometheus scrape hits daphne directly on the internal network
 # (plain HTTP — it cannot follow the redirect into a self-signed TLS port).
-# Exempt ONLY the machine scrape path; nginx still 404s it publicly, so no
-# human-facing surface is affected. Everything else keeps the redirect.
-SECURE_REDIRECT_EXEMPT = ["api/v1/metrics/"]
+# M7-08: the internal prober vantage (blackbox-exporter-2 → daphne:8000) is
+# the same class — a 301 there would make the burn-rate alerts measure the
+# SSL redirect, not availability. Exempt ONLY machine paths; nginx still
+# 404s them publicly (or they're doc'd API), so no human-facing surface is
+# affected. Everything else keeps the redirect.
+SECURE_REDIRECT_EXEMPT = ["api/v1/metrics/", "api/v1/health/"]
 
 # --- Logging: JSON to stdout — Loki/Promtail scrapes container logs --------
 LOGGING = {

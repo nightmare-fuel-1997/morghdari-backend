@@ -267,6 +267,9 @@ services:
       DJANGO_ALLOWED_HOSTS: "${DJANGO_ALLOWED_HOSTS}"
       DJANGO_DEBUG: "${DJANGO_DEBUG:-False}"
       DATABASE_URL: "postgres://${DATABASE_USER}:${DATABASE_PASSWORD}@postgres:5432/${DATABASE_NAME}"
+      # M7-08 MET-SAAS: the nightly org rollup needs a fail-closed-BYPASS for
+      # cross-org reads — the admin role (same precedent as prod_bootstrap.sh).
+      DATABASE_ADMIN_URL: "postgres://${POSTGRES_ADMIN_USER}:${POSTGRES_ADMIN_PASSWORD}@postgres:5432/${DATABASE_NAME}"
       REDIS_URL: "redis://:${REDIS_PASSWORD}@redis:6379"
       DJANGO_SECRET_KEY: "${DJANGO_SECRET_KEY}"   # same docs-gap fix as daphne
       CELERY_CONSUMER_ID: "$${HOSTNAME}-worker"   # runtime env — a parse-time ${HOSTNAME} would be blank

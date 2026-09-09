@@ -303,6 +303,13 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None,
             for saloon_id, count in per_saloon.items():
                 bump_ingested(client, org, saloon_id, count)
 
+            # M7-08 MET-SAAS: the quota metering counter (Saas.md §15 —
+            # org:{org_id}:meter:current_hour, TTL 3600) finally gets its real
+            # bump at the doc-designated point — org known, row durable.
+            from apps.monitoring.metrics import bump_meter_hour
+
+            bump_meter_hour(client, org, len(rows))
+
             # M6-06: WS fan-out AFTER the commit — dashboards are only ever
             # told about DURABLE rows ("UI follows DB"). One group_send per
             # (saloon, slot, device_ts) reading; a redelivered entry after a
@@ -350,11 +357,6 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None,
             if pacer is not None:
                 time.sleep(pacer.sleep_seconds(org))
                 pacer.wait_for_org(org)
-
-        # THE rule: acknowledge only after the DB commit above succeeded.
-        if ids:
-            client.xack(stream, CONSUMER_GROUP, *ids)
-            acked.update(ids)
 
     # M7-04 observability: end-to-end ingestion latency for this drain cycle
     # (read → commit). Advisory histogram — never alert-critical.

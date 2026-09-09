@@ -64,6 +64,17 @@ DATABASES = (
     {"default": _database_from_url(DATABASE_URL)} if DATABASE_URL else {}
 )
 
+# M7-08 (MET-SAAS): the nightly org rollup crosses tenants BY DESIGN, but the
+# runtime connection is morghdari_app — FORCE-RLS fail-closed on purpose. The
+# doc-sanctioned bypass is the admin role (BYPASSRLS; the same role
+# scripts/prod_bootstrap.sh uses for platform paths), wired as an OPTIONAL
+# second alias: prod compose sets DATABASE_ADMIN_URL on the worker, CI/laptop
+# leave it unset (their connect user is the DB superuser already) and the
+# task falls back to "default". Never used by request traffic.
+DATABASE_ADMIN_URL = os.environ.get("DATABASE_ADMIN_URL")
+if DATABASE_ADMIN_URL:
+    DATABASES["admin"] = _database_from_url(DATABASE_ADMIN_URL)
+
 
 def _argon2_installed() -> bool:
     """Argon2 is optional (not pinned); fall back to PBKDF2 silently."""
@@ -323,6 +334,15 @@ CELERY_BEAT_SCHEDULE = {
         "task": "monitoring.beat_heartbeat",
         "schedule": 60.0,
         "options": {"queue": "alerts"},
+    },
+    # M7-08 MET-SAAS: the doc's nightly per-org rollup (data-aggregates-v1
+    # `aggregates.build_org_usage` — "nightly 01:10") + the §5.4 daily
+    # tenant_cost_estimate_usd export. Runs with the default queue: once a
+    # day, no latency contract.
+    "monitoring-build-org-usage": {
+        "task": "monitoring.build_org_usage",
+        "schedule": __import__("celery.schedules", fromlist=["crontab"]).crontab(hour=1, minute=10),  # Asia/Tehran via CELERY_TIMEZONE
+        "options": {"queue": "celery"},
     },
 }
 # Historical lane is throttled IN THE WORKER from system_configuration (Saas §4);

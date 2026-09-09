@@ -21,3 +21,9 @@ services:
     build: ./backend
   celery-beat:
     build: ./backend
+  # M7-08 (2026-09-09): publish Redis on loopback so the LAPTOP TEST LOOP can
+  # reach the rehearsal broker (metrics bridge suites, M6-10 queue legs).
+  # Loopback-only — never a WAN-exposed port. Prod compose stays closed.
+  redis:
+    ports:
+      - "127.0.0.1:6379:6379"

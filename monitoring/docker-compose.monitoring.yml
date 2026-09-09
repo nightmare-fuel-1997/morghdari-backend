@@ -113,6 +113,39 @@ services:
       DATA_SOURCE_NAME: "postgresql://morghdari_exporter:${POSTGRES_EXPORTER_PASSWORD}@postgres:5432/${DATABASE_NAME}?sslmode=disable"
     restart: always
 
+# M7-08 MET-AVAIL: the two external-prober vantages ("≥ 2 regions, 60 s").
+# "External" means the measurement must not share the app's failure modes:
+# two ISOLATED prober containers (separate processes, restart: always) probe
+# two different vantage points — prober 1 hits the PUBLIC TLS ingress
+# (nginx :443, exactly what a real client hits); prober 2 hits the app
+# health route directly on the container network, so an nginx/TLS failure
+# is distinguishable from an app failure. On VPS-day both containers are
+# replaced by Checkly/UptimeRobot regional agents publishing the same
+# probe_success series shape, and MET-STATUS (§5.4b) feeds off their API.
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.25.0
+    container_name: morghdari-blackbox-1
+    command:
+      - "--config.file=/etc/blackbox_exporter/config.yml"
+    # Rehearsal TLS leg: probe the SAN name the staging cert actually carries
+    # (api.morghdari.com) so the handshake exercises real SNI; host-gateway
+    # routes it to the host's published :443 → nginx. On the VPS this maps
+    # to the public IP/DNS naturally.
+    extra_hosts:
+      - "api.morghdari.com:host-gateway"
+    volumes:
+      - ./blackbox.yml:/etc/blackbox_exporter/config.yml:ro
+    restart: always
+
+  blackbox-exporter-2:
+    image: prom/blackbox-exporter:v0.25.0
+    container_name: morghdari-blackbox-2
+    command:
+      - "--config.file=/etc/blackbox_exporter/config.yml"
+    volumes:
+      - ./blackbox.yml:/etc/blackbox_exporter/config.yml:ro
+    restart: always
+
 volumes:
   prometheus_data:
   grafana_data:

@@ -63,6 +63,12 @@ INSERT_BUFFER_LENGTH = Gauge(
 CELERY_QUEUE_DEPTH = Gauge("celery_queue_depth", "Celery broker queue depth", ["queue"])
 # Beat heartbeat — the BeatHeartbeatStale rule (alerts.yml) reads this.
 BEAT_HEARTBEAT_TS = Gauge("celery_beat_heartbeat_timestamp_seconds", "Last beat heartbeat (unix ts)")
+# Runbook §5.4 MET-SAAS: "Exported as tenant_cost_estimate_usd{org_id} by a
+# daily Celery job from v0.7." The daily job computes the estimate and writes
+# it through the Redis bridge (worker → daphne, same as every other gauge).
+TENANT_COST_ESTIMATE_USD = Gauge(
+    "tenant_cost_estimate_usd", "Estimated daily cost per tenant (USD)", ["org_id"]
+)
 
 # ---------------------------------------------------------------------------
 # Redis bridge keys (producers bump; refresh_gauges() drains at scrape time)
@@ -74,6 +80,8 @@ K_ALERTS_RESOLVED = "metrics:alerts_resolved:{tier}"
 K_INGEST_LATENCY_RING = "metrics:ingest_latency_ring"
 K_EVAL_LATENCY_RING = "metrics:alert_eval_latency_ring"
 K_BEAT_TS = "metrics:beat_heartbeat_ts"
+# MET-SAAS daily export (apps.monitoring.tasks.build_org_usage writes these).
+K_TENANT_COST = "metrics:tenant_cost:{org}"
 _LATENCY_RING_MAX = 2000  # bounded: latencies are advisory, never alert-critical
 
 _REDIS_URL = os.environ.get("REDIS_URL", "redis://:dev_redis_password@localhost:6379")
@@ -120,6 +128,25 @@ def note_ingestion_latency(client, seconds):
 def note_alert_eval_latency(client, seconds):
     _safe(client.rpush, K_EVAL_LATENCY_RING, repr(seconds))
     _safe(client.ltrim, K_EVAL_LATENCY_RING, -_LATENCY_RING_MAX, -1)
+
+
+# ---------------------------------------------------------------------------
+# MET-SAAS quota metering key (Saas.md §15 — M7-08 wires the real bump)
+# ---------------------------------------------------------------------------
+METER_KEY = "org:{org_id}:meter:current_hour"
+_METER_TTL_S = 3600  # doc: TTL = 3600s (hourly bucket)
+
+
+def bump_meter_hour(client, org_id, count=1):
+    """INCR org:{org_id}:meter:current_hour (TTL 3600) — Saas.md §15.
+
+    The doc's enforcement consumer (tier allowance compare) stays P2; the
+    metering COUNTER is the v0.7 deliverable (Open Items MET-SAAS). Silent-
+    fail like every producer bump — metering must never break ingestion.
+    """
+    key = METER_KEY.format(org_id=org_id)
+    _safe(client.incrby, key, count)
+    _safe(client.expire, key, _METER_TTL_S)
 
 
 def note_beat_heartbeat(client=None):
@@ -226,6 +253,16 @@ def _refresh_gauges(client):
         raw = client.get(K_BEAT_TS)
         if raw is not None:
             BEAT_HEARTBEAT_TS.set(float(raw))
+    except Exception:  # noqa: BLE001
+        pass
+
+    # MET-SAAS: the daily job's cost estimates (worker → bridge → gauge).
+    try:
+        for key in client.scan_iter("metrics:tenant_cost:*"):
+            org_id = key.split(":", 2)[2]
+            raw = client.get(key)
+            if raw is not None:
+                TENANT_COST_ESTIMATE_USD.labels(org_id=org_id).set(float(raw))
     except Exception:  # noqa: BLE001
         pass
 
