@@ -19,6 +19,7 @@ from apps.compat.consumers_compat import FarmTelemetryConsumer
 ORG = r"(?P<orgSlug>[A-Za-z0-9-]{1,64})"
 FARM = r"(?P<farmSlug>[A-Za-z0-9-]{1,64})"
 DEVICE = r"(?P<deviceSlug>[A-Za-z0-9-]{1,64})"
+SALON = r"(?P<salonSlug>[A-Za-z0-9-]{1,64})"  # W1..W2 Flutter spelling (single l)
 
 urlpatterns = [
     # C1..C4 — orgs (list routes match BOTH slash forms directly — APPEND_SLASH
@@ -41,6 +42,14 @@ urlpatterns = [
     re_path(rf"^telemetry/farms/{FARM}/history/?$", v.telemetry_farm_history),
     re_path(rf"^telemetry/devices/{DEVICE}/latest/?$", v.telemetry_device_latest),
     re_path(rf"^telemetry/devices/{DEVICE}/history/?$", v.telemetry_device_history),
+    # W1..W5 — report aliases (M7-17, docs/api-reports-merge-v1.md §5).
+    # Same two-prefix mounting as C1..C15 (canonical /api/compat/v1/... +
+    # legacy /api/... aliases); trailing-slash tolerant, no 301s.
+    re_path(rf"^farms/{FARM}/salons/{SALON}/reports/?$", v.compat_report_list),
+    re_path(rf"^farms/{FARM}/salons/{SALON}/reports/(?P<report_date>[^/]+)/?$", v.compat_report_by_date),
+    re_path(rf"^farms/{FARM}/reports/?$", v.compat_farm_report_list),
+    re_path(r"^reports/?$", v.compat_report_create),
+    re_path(r"^reports/(?P<report_id>[0-9]+)/?$", v.compat_report_edit),
 ]
 
 # C16 — the farm WS shim, canonical + legacy path (same consumer)

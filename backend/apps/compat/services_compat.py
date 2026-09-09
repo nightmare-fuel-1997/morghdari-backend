@@ -192,3 +192,23 @@ def flutter_metric_names(backend_keys) -> list:
         for key in backend_keys or []
         if key in FLUTTER_METRIC_NAMES
     })
+
+
+def compat_resolve_farm_saloon(farm_slug, salon_slug, claims_org):
+    """W1–W3 pair resolver (M7-17): farm slug + salon slug → (farm, saloon).
+
+    Both slugs resolve through legacy_slug_map against the caller's org
+    claim (compat_resolve_farm / compat_resolve_saloon — kind 'device' IS
+    the salon, spec §1.3), AND the saloon must belong to the farm. ANY
+    miss or disagreement is (None, None) → the view answers 404, never a
+    400 oracle that distinguishes "unknown slug" from "valid but foreign"
+    (compat spec §8 tenancy rule)."""
+    _, farm = compat_resolve_farm(farm_slug, claims_org)
+    if farm is None:
+        return None, None
+    _, saloon = compat_resolve_saloon(salon_slug, claims_org)
+    if saloon is None:
+        return None, None
+    if saloon.farm_id != farm.pk:
+        return None, None
+    return farm, saloon

@@ -6,6 +6,13 @@ info:
     REST API for the Morghdari multi-tenant poultry monitoring platform.
     WebSocket protocol is documented separately in the Frontend Integration Spec.
 
+    v1.7.0 (union — ops wave M6-10 + reports merge M7-16/M7-17, Tracker §4p/§4s):
+    merged daily-report schemas (Flutter input aliases normalized server-side,
+    extras keys appended, is_completed + reported_by/reported_at) plus the
+    W1–W5 compat report aliases under /api/compat/v1 (slugs via
+    legacy_slug_map, reporter = JWT user, ?status=incomplete = DRAFT +
+    SUBMITTED). 1.8.0 stays reserved.
+
     v1.5.0 (2026-09-04 owner-approved plan, Tracker §4n): Daily Reports +
     Ticketing + Panel Permissions + Alert Subscriptions + Farm Events. New role
     `reviewer` (READ-ONLY on daily reports org-wide, no approve/reject).
@@ -2154,10 +2161,14 @@ paths:
   /saloons/{saloon_id}/reports/:
     get:
       tags: [Daily Reports]
-      summary: List daily reports for a saloon (v1.5 — Tracker §4n)
+      summary: List daily reports for a saloon (v1.5 — Tracker §4n; merged keys v1.7.0 — Tracker §4s)
       description: >
         Reviewer role is READ-ONLY org-wide here (no approve/reject).
-        RLS scopes rows to the caller's org (Security §4.1).
+        RLS scopes rows to the caller's org (Security §4.1). v1.7.0 merge:
+        every item appends the §4s extras keys (bird_count,
+        avg_temperature_c, avg_humidity_pct, ventilation_status,
+        health_status, checklist{feed,water,device}) plus is_completed
+        (true when APPROVED) — bare list, no envelope.
       security: [{ BearerAuth: [] }]
       parameters:
         - { name: saloon_id, in: path, required: true, schema: { type: integer } }
@@ -2181,15 +2192,37 @@ paths:
                     water_l: { type: number, nullable: true }
                     avg_weight_g: { type: number, nullable: true }
                     status: { type: string }
+                    bird_count: { type: integer, nullable: true }
+                    avg_temperature_c: { type: number, nullable: true }
+                    avg_humidity_pct: { type: number, nullable: true }
+                    ventilation_status: { type: string, nullable: true }
+                    health_status: { type: string, nullable: true }
+                    checklist:
+                      type: object
+                      properties:
+                        feed: { type: boolean }
+                        water: { type: boolean }
+                        device: { type: boolean }
+                    is_completed: { type: boolean }
         '403': { description: Forbidden — user not in the target org }
     post:
       tags: [Daily Reports]
-      summary: Submit a daily report (v1.5 — Tracker §4n)
+      summary: Submit a daily report (v1.5 — Tracker §4n; merged inputs v1.7.0 — Tracker §4s)
       description: >
         Requires engineer+ role for the saloon. ONE row per (flock, saloon,
         report_date). Report WITH medication lines → status FLAGGED + auto
         support_tickets row (category=medical, assigned to first active
-        doctor) + WS push to doctor.
+        doctor) + WS push to doctor. v1.7.0 merge: Flutter names are
+        input-only aliases (casualties_today→mortality_count,
+        feed_consumed_kg→feed_kg, water_consumed_l→water_l,
+        avg_sample_weight_g→avg_weight_g, is_draft→status, Persian
+        ventilation/health literals→English enums); both-names-sent with
+        different values → 400 conflicting fields; new extras fields
+        (bird_count, avg_temperature_c, avg_humidity_pct,
+        ventilation_status, health_status, checklist) persist to the
+        1:1 side table; SUBMITTED with an incomplete checklist → 400.
+        farm_slug/salon_slug are NOT accepted here (the path carries the
+        saloon) — they exist only on the W3 compat alias.
       security: [{ BearerAuth: [] }]
       parameters:
         - { name: saloon_id, in: path, required: true, schema: { type: integer } }
@@ -2204,9 +2237,26 @@ paths:
                 flock_id: { type: integer }
                 report_date: { type: string, format: date, description: Calendar day in Asia/Tehran }
                 mortality_count: { type: integer, minimum: 0 }
+                casualties_today: { type: integer, minimum: 0, description: Input alias of mortality_count }
                 feed_kg: { type: number }
+                feed_consumed_kg: { type: number, description: Input alias of feed_kg }
                 water_l: { type: number }
+                water_consumed_l: { type: number, description: Input alias of water_l }
                 avg_weight_g: { type: number }
+                avg_sample_weight_g: { type: number, description: Input alias of avg_weight_g }
+                status: { type: string, enum: [DRAFT, SUBMITTED] }
+                is_draft: { type: boolean, description: Input alias of status (true→DRAFT, false→SUBMITTED) }
+                bird_count: { type: integer, minimum: 0 }
+                avg_temperature_c: { type: number }
+                avg_humidity_pct: { type: number, minimum: 0, maximum: 100 }
+                ventilation_status: { type: string, enum: [STABLE, NEEDS_REVIEW, PROBLEM], description: Persian literals accepted }
+                health_status: { type: string, enum: [NORMAL, WARNING, CRITICAL], description: Persian literals accepted }
+                checklist:
+                  type: object
+                  properties:
+                    feed: { type: boolean }
+                    water: { type: boolean }
+                    device: { type: boolean }
                 notes: { type: string }
                 medications:
                   type: array
@@ -2219,17 +2269,85 @@ paths:
                       frequency: { type: string }
       responses:
         '201': { description: Report created (DRAFT, or FLAGGED when medications present) }
-        '400': { description: A report for this flock/saloon/date already exists }
+        '400': { description: Duplicate flock/saloon/date, conflicting alias fields, or checklist incomplete on SUBMITTED }
         '403': { description: Caller lacks the engineer role for this saloon }
+
+  /saloons/{saloon_id}/reports/{report_date}/:
+    get:
+      tags: [Daily Reports]
+      summary: Single daily report by calendar day (v1.7.0 merge — Tracker §4s; the Flutter calendar selection)
+      description: >
+        Merged single shape (§3: list keys + notes, medications,
+        reported_by/reported_at alongside submitted_by/submitted_at, review
+        fields). 404 when absent; 400 on a bad date or when several flocks
+        share the saloon+day (multiple reports for date — UNIQUE is
+        per flock/saloon/date).
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: saloon_id, in: path, required: true, schema: { type: integer } }
+        - { name: report_date, in: path, required: true, schema: { type: string, format: date } }
+      responses:
+        '200':
+          description: The day's report (merged single shape)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer }
+                  farm_id: { type: integer }
+                  saloon_id: { type: integer }
+                  flock_id: { type: integer }
+                  report_date: { type: string, format: date }
+                  mortality_count: { type: integer }
+                  feed_kg: { type: number, nullable: true }
+                  water_l: { type: number, nullable: true }
+                  avg_weight_g: { type: number, nullable: true }
+                  notes: { type: string, nullable: true }
+                  status: { type: string }
+                  bird_count: { type: integer, nullable: true }
+                  avg_temperature_c: { type: number, nullable: true }
+                  avg_humidity_pct: { type: number, nullable: true }
+                  ventilation_status: { type: string, nullable: true }
+                  health_status: { type: string, nullable: true }
+                  checklist:
+                    type: object
+                    properties:
+                      feed: { type: boolean }
+                      water: { type: boolean }
+                      device: { type: boolean }
+                  is_completed: { type: boolean }
+                  submitted_by: { type: integer, nullable: true }
+                  submitted_at: { type: string, nullable: true }
+                  reported_by: { type: integer, nullable: true }
+                  reported_at: { type: string, nullable: true }
+                  reviewed_by: { type: integer, nullable: true }
+                  reviewed_at: { type: string, nullable: true }
+                  review_note: { type: string, nullable: true }
+                  vet_approved_by: { type: integer, nullable: true }
+                  vet_approved_at: { type: string, nullable: true }
+                  medications:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        medication_name: { type: string }
+                        dosage: { type: string, nullable: true }
+                        frequency: { type: string, nullable: true }
+        '400': { description: Bad date format, or several reports share the saloon+day }
+        '404': { description: No report for this saloon+day }
 
   /reports/{report_id}/:
     patch:
       tags: [Daily Reports]
-      summary: Edit a daily report — same calendar day only (v1.5 — Tracker §4n)
+      summary: Edit a daily report — same calendar day only (v1.5 — Tracker §4n; merged inputs v1.7.0 — Tracker §4s)
       description: >
         Edit time-lock: same calendar day ONLY, Asia/Tehran, cutoff 00:00
         sharp, no grace. After that only System Admin / Support (whitelisted,
-        audited) may edit. Reviewer cannot edit (read-only).
+        audited) may edit. Reviewer cannot edit (read-only). v1.7.0 merge:
+        PATCH accepts the same canonical + alias fields as POST (minus
+        flock_id/report_date, which are immutable); SUBMITTED target with an
+        incomplete checklist → 400 once the merge surface is in play.
       security: [{ BearerAuth: [] }]
       parameters:
         - { name: report_id, in: path, required: true, schema: { type: integer } }
@@ -2241,13 +2359,30 @@ paths:
               type: object
               properties:
                 mortality_count: { type: integer, minimum: 0 }
+                casualties_today: { type: integer, minimum: 0, description: Input alias of mortality_count }
                 feed_kg: { type: number }
+                feed_consumed_kg: { type: number, description: Input alias of feed_kg }
                 water_l: { type: number }
+                water_consumed_l: { type: number, description: Input alias of water_l }
                 avg_weight_g: { type: number }
+                avg_sample_weight_g: { type: number, description: Input alias of avg_weight_g }
                 notes: { type: string }
                 status: { type: string, enum: [DRAFT, SUBMITTED] }
+                is_draft: { type: boolean, description: Input alias of status (true→DRAFT, false→SUBMITTED) }
+                bird_count: { type: integer, minimum: 0 }
+                avg_temperature_c: { type: number }
+                avg_humidity_pct: { type: number, minimum: 0, maximum: 100 }
+                ventilation_status: { type: string, enum: [STABLE, NEEDS_REVIEW, PROBLEM], description: Persian literals accepted }
+                health_status: { type: string, enum: [NORMAL, WARNING, CRITICAL], description: Persian literals accepted }
+                checklist:
+                  type: object
+                  properties:
+                    feed: { type: boolean }
+                    water: { type: boolean }
+                    device: { type: boolean }
       responses:
         '200': { description: Report updated }
+        '400': { description: Conflicting alias fields, or checklist incomplete on SUBMITTED }
         '403': { description: Edit window closed (past 00:00 Asia/Tehran) or caller lacks edit rights }
         '404': { description: Report not found }
 
@@ -2894,3 +3029,177 @@ paths:
       responses:
         '200': { description: Revoked }
         '404': { description: Unknown or foreign session (identical) }
+
+  # ------------------------------------------------------------------
+  # v1.7.0 — W1..W5 compat report aliases (M7-17; spec
+  # docs/api-reports-merge-v1.md §5, error contract
+  # docs/api-compat-flutter-v1.md §3/§8). The reports-only compat-write
+  # exception (C-09 stands for everything else). Slugs resolve via
+  # legacy_slug_map against the JWT org claim — unknown, foreign or
+  # disagreeing slugs are 404 {"error": ...} (never a 400 oracle, never
+  # 500); inverted from/to is 400. Reporter is always the JWT user.
+  # Full /api/compat/v1 prefix is documented verbatim here (these routes
+  # live outside /api/v1/); the legacy /api/... twins hit the same views.
+  # ------------------------------------------------------------------
+  /api/compat/v1/farms/{farmSlug}/salons/{salonSlug}/reports/:
+    get:
+      tags: [Compat Reports]
+      summary: W1 — compat daily-report list (Flutter calendar/history)
+      description: >
+        Thin shim over GET /saloons/{saloon_id}/reports/: from/to/status
+        semantics preserved verbatim (bare merged list, newest first).
+        ?status=incomplete returns DRAFT+SUBMITTED (the Flutter dashboard
+        queue); native callers use the v1.5 enum values.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: farmSlug, in: path, required: true, schema: { type: string } }
+        - { name: salonSlug, in: path, required: true, schema: { type: string } }
+        - { name: from, in: query, required: false, schema: { type: string, format: date } }
+        - { name: to, in: query, required: false, schema: { type: string, format: date } }
+        - { name: status, in: query, required: false, schema: { type: string } }
+      responses:
+        '200': { description: Merged report list (bare array) }
+        '400': { description: Inverted or unparseable from/to window }
+        '404': { description: Unknown, foreign or disagreeing farm/salon slug }
+
+  /api/compat/v1/farms/{farmSlug}/salons/{salonSlug}/reports/{report_date}/:
+    get:
+      tags: [Compat Reports]
+      summary: W2 — compat single report by calendar day
+      description: >
+        Thin shim over GET /saloons/{saloon_id}/reports/{report_date}/:
+        merged single shape; absent → 404; several flocks sharing the
+        saloon+day → 400 multiple reports for date.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: farmSlug, in: path, required: true, schema: { type: string } }
+        - { name: salonSlug, in: path, required: true, schema: { type: string } }
+        - { name: report_date, in: path, required: true, schema: { type: string, format: date } }
+      responses:
+        '200': { description: The day's report (merged single shape) }
+        '400': { description: Bad date, or several reports share the saloon+day }
+        '404': { description: Unknown/foreign slug, or no report for the day }
+
+  /api/compat/v1/farms/{farmSlug}/reports/:
+    get:
+      tags: [Compat Reports]
+      summary: W5 — compat farm-level report queue (Flutter dashboard)
+      description: >
+        Every saloon of the farm in one bare merged list (newest first);
+        ?status=incomplete returns DRAFT+SUBMITTED; from/to narrow the
+        window. Other farms' reports never leak in.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: farmSlug, in: path, required: true, schema: { type: string } }
+        - { name: from, in: query, required: false, schema: { type: string, format: date } }
+        - { name: to, in: query, required: false, schema: { type: string, format: date } }
+        - { name: status, in: query, required: false, schema: { type: string } }
+      responses:
+        '200': { description: Merged report list (bare array) }
+        '400': { description: Inverted or unparseable from/to window }
+        '404': { description: Unknown or foreign farm slug }
+
+  /api/compat/v1/reports/:
+    post:
+      tags: [Compat Reports]
+      summary: W3 — compat report write (slugs in body, reporter = JWT user)
+      description: >
+        Thin shim over POST /saloons/{saloon_id}/reports/. Body carries
+        farm_slug + salon_slug (both required; must agree — the salon's
+        farm == the farm, mismatch is 404, never a 400 oracle) plus every
+        §2 canonical/alias field. Aliases, checklist enforcement, FLAGGED
+        auto-ticket and reporter=JWT-user ride along; any client-sent
+        reporter key is ignored.
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [farm_slug, salon_slug, flock_id, report_date]
+              properties:
+                farm_slug: { type: string }
+                salon_slug: { type: string }
+                flock_id: { type: integer }
+                report_date: { type: string, format: date }
+                mortality_count: { type: integer, minimum: 0 }
+                casualties_today: { type: integer, minimum: 0, description: Input alias of mortality_count }
+                feed_kg: { type: number }
+                feed_consumed_kg: { type: number, description: Input alias of feed_kg }
+                water_l: { type: number }
+                water_consumed_l: { type: number, description: Input alias of water_l }
+                avg_weight_g: { type: number }
+                avg_sample_weight_g: { type: number, description: Input alias of avg_weight_g }
+                status: { type: string, enum: [DRAFT, SUBMITTED] }
+                is_draft: { type: boolean }
+                bird_count: { type: integer, minimum: 0 }
+                avg_temperature_c: { type: number }
+                avg_humidity_pct: { type: number, minimum: 0, maximum: 100 }
+                ventilation_status: { type: string, enum: [STABLE, NEEDS_REVIEW, PROBLEM] }
+                health_status: { type: string, enum: [NORMAL, WARNING, CRITICAL] }
+                checklist:
+                  type: object
+                  properties:
+                    feed: { type: boolean }
+                    water: { type: boolean }
+                    device: { type: boolean }
+                notes: { type: string }
+                medications:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      catalog_item_id: { type: integer, nullable: true }
+                      medication_name: { type: string }
+                      dosage: { type: string }
+                      frequency: { type: string }
+      responses:
+        '201': { description: Report created (aliases normalized, reporter = JWT user) }
+        '400': { description: Missing slugs, duplicate flock/saloon/date, conflicting aliases, or checklist incomplete }
+        '404': { description: Unknown, foreign or disagreeing farm/salon slug }
+
+  /api/compat/v1/reports/{report_id}/:
+    patch:
+      tags: [Compat Reports]
+      summary: W4 — compat report edit (aliases accepted)
+      description: >
+        Thin shim over PATCH /reports/{report_id}/: same Tehran-day
+        time-lock, in-play checklist scoping and staff-exempt audit.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: report_id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mortality_count: { type: integer, minimum: 0 }
+                casualties_today: { type: integer, minimum: 0, description: Input alias of mortality_count }
+                feed_kg: { type: number }
+                feed_consumed_kg: { type: number, description: Input alias of feed_kg }
+                water_l: { type: number }
+                water_consumed_l: { type: number, description: Input alias of water_l }
+                avg_weight_g: { type: number }
+                avg_sample_weight_g: { type: number, description: Input alias of avg_weight_g }
+                notes: { type: string }
+                status: { type: string, enum: [DRAFT, SUBMITTED] }
+                is_draft: { type: boolean }
+                bird_count: { type: integer, minimum: 0 }
+                avg_temperature_c: { type: number }
+                avg_humidity_pct: { type: number, minimum: 0, maximum: 100 }
+                ventilation_status: { type: string, enum: [STABLE, NEEDS_REVIEW, PROBLEM] }
+                health_status: { type: string, enum: [NORMAL, WARNING, CRITICAL] }
+                checklist:
+                  type: object
+                  properties:
+                    feed: { type: boolean }
+                    water: { type: boolean }
+                    device: { type: boolean }
+      responses:
+        '200': { description: Report updated }
+        '400': { description: Conflicting alias fields, or checklist incomplete on SUBMITTED }
+        '403': { description: Edit window closed or caller lacks edit rights }
+        '404': { description: Report not found }

@@ -7,6 +7,12 @@ M7-07 (2026-09-08): the ``/platform/`` exclusion is GONE — all 4 support paths
 + the 2 MFA paths are implemented, so ``implemented == contract`` now covers
 them. Remaining exclusions: the 10 §4n paths (v0.9) and ``/api/compat/*``
 (M6-09, v1.6.0).
+M7-17 (2026-09-09): the v1.7.0 union absorbs the merged report schemas
+(by-date GET + alias/extras keys on list/POST/PATCH) and the W1–W5 compat
+report aliases (``/api/compat/v1/.../reports...``). The C1–C16 compat surface
+stays OUT of the gate (spec §1.2 — separate prefix, never drift); only
+compat routes containing ``/reports/`` are walked, and the union test pins
+them to exactly the 5 W routes. 1.8.0 stays reserved.
 
 Mechanics:
 - ``implemented - documented`` must ALWAYS be empty (no undocumented extras —
@@ -75,6 +81,20 @@ _API_ROOTS = (
     "apps.reports.urls",  # M7-15 §4s reports base (v0.9 scope pulled forward)
 )
 
+# M7-17: the v1.7.0 union's compat leg. The C1–C16 surface stays gate-
+# invisible (spec §1.2); only /reports/ routes under the canonical
+# /api/compat/v1 mount are walked, and the union test pins them to
+# exactly these 5 W routes (docs/api-reports-merge-v1.md §5).
+_COMPAT_MOUNT = "/api/compat/v1"
+_COMPAT_URLCONF = "apps.compat.urls_compat"
+_COMPAT_W_ROUTES = frozenset({
+    ("get", f"{_COMPAT_MOUNT}/farms/{{farmSlug}}/salons/{{salonSlug}}/reports/"),
+    ("get", f"{_COMPAT_MOUNT}/farms/{{farmSlug}}/salons/{{salonSlug}}/reports/{{report_date}}/"),
+    ("get", f"{_COMPAT_MOUNT}/farms/{{farmSlug}}/reports/"),
+    ("post", f"{_COMPAT_MOUNT}/reports/"),
+    ("patch", f"{_COMPAT_MOUNT}/reports/{{report_id}}/"),
+})
+
 
 def _documented_full():
     """Every route in the v1.5.0 yaml — used to judge IMPLEMENTED extras (a
@@ -107,6 +127,26 @@ def _django_pattern_to_template(route: str) -> str:
     return "/" + out.lstrip("/")
 
 
+def _compat_pattern_to_template(route: str) -> str:
+    """A urls_compat re_path regex -> the mounted contract path.
+
+    '^farms/(?P<farmSlug>[A-Za-z0-9-]{1,64})/reports/?$' (mounted at
+    /api/compat/v1) -> '/api/compat/v1/farms/{farmSlug}/reports/'.
+    The compat regexes never nest parens inside (?P<...>) groups, so a
+    flat [^)]* match is exact here."""
+    import re
+
+    out = route.strip()
+    if out.startswith("^"):
+        out = out[1:]
+    if out.endswith("$"):
+        out = out[:-1]
+    out = re.sub(r"\(\?P<([^>]+)>[^)]*\)", r"{\1}", out)
+    if out.endswith("/?"):
+        out = out[:-2] + "/"
+    return _COMPAT_MOUNT + "/" + out.lstrip("/")
+
+
 def _view_methods(callback) -> set:
     """HTTP verbs a URL callback serves (DRF CBV, api_view FBV, plain FBV)."""
     methods = set()
@@ -133,6 +173,29 @@ def _implemented():
                     for verb in _view_methods(pat.callback):
                         routes.add((verb, template))
         walk(resolver)
+    routes |= _implemented_compat_w()
+    return routes
+
+
+def _implemented_compat_w():
+    """The compat leg of the v1.7.0 union: /reports/ routes of
+    apps.compat.urls_compat under the canonical mount. The legacy /api/
+    twins hit the same views but stay gate-invisible (C-surface rule)."""
+    routes = set()
+    resolver = URLResolver([], _COMPAT_URLCONF)
+
+    def walk(res, prefix=""):
+        for pat in res.url_patterns:
+            if isinstance(pat, URLResolver):
+                walk(pat, prefix + str(pat.pattern))
+            elif isinstance(pat, URLPattern):
+                template = _compat_pattern_to_template(prefix + str(pat.pattern))
+                if "/reports/" not in template:
+                    continue
+                for verb in _view_methods(pat.callback):
+                    routes.add((verb, template))
+
+    walk(resolver)
     return routes
 
 
@@ -170,3 +233,11 @@ def test_known_gaps_ends_empty():
     """M6-08 exit gate: the diff test IS `implemented == contract` when this
     constant is empty — keep it imported here so the flip is greppable."""
     assert isinstance(KNOWN_GAPS, (set, frozenset))
+
+
+@pytest.mark.django_db(transaction=False)
+def test_compat_w_union_is_exact():
+    """M7-17 ratification pin: the compat leg of the union is EXACTLY the
+    5 W routes — a new compat /reports/ route (or a renamed one) fails
+    here until the yaml absorbs it in the same commit."""
+    assert _implemented_compat_w() == set(_COMPAT_W_ROUTES)
