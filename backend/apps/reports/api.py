@@ -28,6 +28,7 @@ writes an auditable REPORT_ADMIN_EDIT row.
 """
 
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
 from django.db import transaction
@@ -161,7 +162,11 @@ def _normalize_write(data) -> tuple[dict, list[str]]:
         ("health_status", HEALTH_ALIASES, HEALTH_ENUM),
     ):
         if data.get(key) is not None:
-            value = aliases.get(data[key], data[key])
+            raw = data[key]
+            if not isinstance(raw, str):
+                errors.append(f"{key} must be one of {list(enum)} (Persian literals accepted)")
+                continue
+            value = aliases.get(raw, raw)
             if value not in enum:
                 errors.append(f"{key} must be one of {list(enum)} (Persian literals accepted)")
             else:
@@ -169,7 +174,16 @@ def _normalize_write(data) -> tuple[dict, list[str]]:
 
     for key in ("avg_temperature_c", "avg_humidity_pct"):
         if data.get(key) is not None:
-            fields[key] = data[key]
+            raw = data[key]
+            try:
+                number = Decimal(str(raw))
+            except (InvalidOperation, ValueError, TypeError):
+                errors.append(f"{key} must be a number")
+                continue
+            if key == "avg_humidity_pct" and not Decimal("0") <= number <= Decimal("100"):
+                errors.append(f"{key} must be between 0 and 100")
+                continue
+            fields[key] = raw
 
     checklist = data.get("checklist")
     if checklist is not None:
@@ -473,11 +487,16 @@ def saloon_report_by_date(request, saloon_id: int, report_date: str):
         day = datetime.strptime(report_date, "%Y-%m-%d").date()
     except (TypeError, ValueError):
         return Response({"error": "report_date must be YYYY-MM-DD"}, status=400)
-    try:
-        report = DailyReport.objects.prefetch_related("extras").get(saloon_id=saloon_id, org_id=_org_id(request), report_date=day)
-    except DailyReport.DoesNotExist:
+    matches = list(
+        DailyReport.objects.prefetch_related("extras")
+        .filter(saloon_id=saloon_id, org_id=_org_id(request), report_date=day)
+        .order_by("id")
+    )
+    if not matches:
         return Response({"error": "not found"}, status=404)
-    return Response(_report_single(report))
+    if len(matches) > 1:
+        return Response({"error": "multiple reports for date"}, status=400)
+    return Response(_report_single(matches[0]))
 
 
 def _open_medical_ticket(request, report: DailyReport, medications: list[dict]) -> int | None:
@@ -550,23 +569,29 @@ def report_edit(request, report_id: int):
         if mv is None or not isinstance(mv, int) or isinstance(mv, bool) or mv < 0:
             return Response({"error": "mortality_count must be a non-negative integer"}, status=400)
 
-    # §4 checklist gate on the SUBMITTED target (existing + incoming merged;
-    # absent checks read as FALSE per side-table defaults). Staff/session
-    # exempt, same exemption as the time-lock (§4).
+    # §4 checklist gate on the SUBMITTED target (existing row + incoming
+    # merged; absent checks read as FALSE per side-table defaults).
+    # Scope (base-green + §7 byte-compat): the gate fires only once the merge
+    # surface is in play — an extras row exists OR the incoming write carries
+    # checklist keys. A pure-legacy canonical PATCH (no row, no checklist
+    # keys — the M7-15 v1.5 flow) stays ungated so old clients keep their
+    # 200. Staff/session exempt, same exemption as the time-lock (§4).
     effective_status = merged.get("status", report.status)
     if effective_status == "SUBMITTED" and not staff_session:
         try:
             _ex = report.extras
         except DailyReportExtras.DoesNotExist:
             _ex = None
-        _current = {
-            "checklist_feed": _ex.checklist_feed if _ex else False,
-            "checklist_water": _ex.checklist_water if _ex else False,
-            "checklist_device": _ex.checklist_device if _ex else False,
-        }
-        _current.update({k: merged[k] for k in ("checklist_feed", "checklist_water", "checklist_device") if k in merged})
-        if _checklist_incomplete(_current):
-            return Response({"error": "checklist incomplete"}, status=400)
+        _incoming = {k: merged[k] for k in ("checklist_feed", "checklist_water", "checklist_device") if k in merged}
+        if _ex is not None or _incoming:
+            _current = {
+                "checklist_feed": _ex.checklist_feed if _ex else False,
+                "checklist_water": _ex.checklist_water if _ex else False,
+                "checklist_device": _ex.checklist_device if _ex else False,
+            }
+            _current.update(_incoming)
+            if _checklist_incomplete(_current):
+                return Response({"error": "checklist incomplete"}, status=400)
 
     update_fields = []
     for field in ("mortality_count", "feed_kg", "water_l", "avg_weight_g", "notes"):
