@@ -86,6 +86,42 @@ class ReportMedicationUsage(models.Model):
         ]
 
 
+class DailyReportExtras(models.Model):
+    """v0.7 M7-16 (§4s R-02 merge) — the 1:1 side table for the fields the
+    Flutter form carries that v1.5.0 daily_reports never had. Zero ALTER on
+    the frozen table (BN-02 saloon_profile pattern); rows are created
+    LAZILY on the first write carrying a new field — canonical-only reports
+    get no row at all (zero overhead)."""
+
+    report = models.OneToOneField(DailyReport, db_column="report_id", on_delete=models.CASCADE, related_name="extras", primary_key=True)
+    org = models.ForeignKey("tenants.Organization", db_column="org_id", on_delete=models.RESTRICT, related_name="+")
+    bird_count = models.IntegerField(null=True, blank=True)
+    avg_temperature_c = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    avg_humidity_pct = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    ventilation_status = models.CharField(max_length=20, null=True, blank=True)
+    health_status = models.CharField(max_length=20, null=True, blank=True)
+    checklist_feed = models.BooleanField(default=False)
+    checklist_water = models.BooleanField(default=False)
+    checklist_device = models.BooleanField(default=False)
+    created_at = models.DateTimeField(db_default=Now())
+
+    class Meta:
+        db_table = "daily_report_extras"
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(ventilation_status__in=["STABLE", "NEEDS_REVIEW", "PROBLEM"]),
+                name="ck_daily_report_extras_ventilation",
+            ),
+            models.CheckConstraint(
+                check=models.Q(health_status__in=["NORMAL", "WARNING", "CRITICAL"]),
+                name="ck_daily_report_extras_health",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["org"], name="idx_report_extras_org"),
+        ]
+
+
 class VetMedicationCatalog(models.Model):
     id = models.AutoField(primary_key=True)
     org = models.ForeignKey("tenants.Organization", db_column="org_id", on_delete=models.RESTRICT, related_name="+")
