@@ -1,50 +1,35 @@
-"""Compat URL routing — C1..C16 (M6-09).
+"""Compat URL routing — W1..W5 report aliases + the retained C16 WS shim
+(M7-14 scoped removal).
 
-Two prefixes hit the SAME views (spec §3): the canonical `/api/compat/v1/...`
-and the legacy Flutter `/api/...` aliases. No redirects — minimal Flutter
-clients don't follow 301s on authed calls. Trailing-slash tolerance is
-deliberate (the spec's "serve directly, no 301" rule).
+M7-14 scoped removal deleted the C1..C15 REST routes (orgs/farms/devices/
+telemetry). What remains:
 
-REST lives on the HTTP root; the WS shim mounts in config/routing.py (the
-ProtocolTypeRouter's websocket leg) on both prefixes.
+Two prefixes hit the SAME W views (spec §3): the canonical
+`/api/compat/v1/...` and the legacy Flutter `/api/...` aliases. No
+redirects — minimal Flutter clients don't follow 301s on authed calls.
+Trailing-slash tolerance is deliberate (the spec's "serve directly, no 301"
+rule).
+
+REST lives on the HTTP root; the C16 WS shim (apps.compat.consumers_compat,
+retained untouched per the scoped-keep rule) mounts below on both prefixes
+and is re-exported to config/routing.py.
 
 فارسی: مسیرهای سازگاری — پیشوندِ جدید و نام‌های قدیمیِ فلاتر به همان ویوها.
 """
 
-from django.urls import path, re_path
+from django.urls import re_path
 
 from apps.compat import views_compat as v
 from apps.compat.consumers_compat import FarmTelemetryConsumer
 
-ORG = r"(?P<orgSlug>[A-Za-z0-9-]{1,64})"
 FARM = r"(?P<farmSlug>[A-Za-z0-9-]{1,64})"
-DEVICE = r"(?P<deviceSlug>[A-Za-z0-9-]{1,64})"
 SALON = r"(?P<salonSlug>[A-Za-z0-9-]{1,64})"  # W1..W2 Flutter spelling (single l)
 
 urlpatterns = [
-    # C1..C4 — orgs (list routes match BOTH slash forms directly — APPEND_SLASH
-    # would 301, and minimal Flutter clients don't follow redirects: spec §4)
-    re_path(rf"^orgs/{ORG}/?$", v.org_detail),
-    re_path(r"^orgs/?$", v.orgs_list),
-    re_path(rf"^orgs/{ORG}/farms/?$", v.org_farms),
-    re_path(rf"^orgs/{ORG}/devices/?$", v.org_devices),
-    # C5..C7 — farms
-    re_path(r"^farms/?$", v.farms_list),
-    re_path(rf"^farms/{FARM}/?$", v.farm_detail),
-    re_path(rf"^farms/{FARM}/devices/?$", v.farm_devices),
-    # C8..C9 — devices (== saloons)
-    re_path(r"^devices/?$", v.devices_list),
-    re_path(rf"^devices/{DEVICE}/?$", v.device_detail),
-    # C10..C15 — telemetry flat records
-    re_path(rf"^telemetry/orgs/{ORG}/latest/?$", v.telemetry_org_latest),
-    re_path(rf"^telemetry/orgs/{ORG}/history/?$", v.telemetry_org_history),
-    re_path(rf"^telemetry/farms/{FARM}/latest/?$", v.telemetry_farm_latest),
-    re_path(rf"^telemetry/farms/{FARM}/history/?$", v.telemetry_farm_history),
-    re_path(rf"^telemetry/devices/{DEVICE}/latest/?$", v.telemetry_device_latest),
-    re_path(rf"^telemetry/devices/{DEVICE}/history/?$", v.telemetry_device_history),
     # W1..W5 — report aliases (M7-17, docs/api-reports-merge-v1.md §5).
-    # Same two-prefix mounting as C1..C15 (canonical /api/compat/v1/... +
-    # legacy /api/... aliases); trailing-slash tolerant, no 301s.
+    # Same two-prefix mounting as the removed C1..C15 (canonical
+    # /api/compat/v1/... + legacy /api/... aliases); trailing-slash
+    # tolerant, no 301s.
     re_path(rf"^farms/{FARM}/salons/{SALON}/reports/?$", v.compat_report_list),
     re_path(rf"^farms/{FARM}/salons/{SALON}/reports/(?P<report_date>[^/]+)/?$", v.compat_report_by_date),
     re_path(rf"^farms/{FARM}/reports/?$", v.compat_farm_report_list),
@@ -52,7 +37,11 @@ urlpatterns = [
     re_path(r"^reports/(?P<report_id>[0-9]+)/?$", v.compat_report_edit),
 ]
 
-# C16 — the farm WS shim, canonical + legacy path (same consumer)
+# C16 — the farm WS shim, RETAINED (M7-14 scoped keeps the shim: the task's
+# KEEP list names consumers_compat.py untouched, and the module gate FAILs
+# any consumers*.py under 80% — an unmounted-but-retained consumer is dead
+# code that reds the required full gate. Full C16 removal needs an explicit
+# owner go AND the consumer file's deletion/exemption in the same commit).
 websocket_urlpatterns = [
     re_path(
         rf"^api/compat/v1/ws/farms/{FARM}/telemetry$",

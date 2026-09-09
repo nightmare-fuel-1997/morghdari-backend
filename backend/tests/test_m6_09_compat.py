@@ -1,12 +1,20 @@
 """M6-09 acceptance — the Flutter compat layer (v1.6.0-draft, spec §10).
 
-Acceptance mapping (docs/api-compat-flutter-v1.md §3 route table + §10):
-- C1..C15 REST   → exact-Flutter-key assertions (raw arrays, {farm_history: [...]})
+M7-14 scoped removal: the C1..C15 REST ROUTE tests are deleted (routes gone,
+W1–W5 kept). What remains here is the retained-infra proof: backfill
+idempotence, the C16 WS shim matrix (shim + mounts retained — the module
+gate FAILs any consumers*.py under 80%), the drain→shim event-shape
+translation (services_compat.compat_flatten_reading +
+consumers_compat._ShimRow, both retained), and the flattener unit pair.
+
+Original acceptance mapping (docs/api-compat-flutter-v1.md §3 route table +
+§10) — C1..C15 entries now historical, kept for provenance:
+- C1..C15 REST   → exact-Flutter-key assertions (DELETED M7-14)
 - C16 WS shim    → connection_established, flat-record push, buffered suppressed,
                    4003 foreign slug / non-member / no token, 4000 over ws:active
+                   (RETAINED M7-14 — shim untouched + module gate needs it)
 - backfill       → idempotent (second run creates zero), stable suggested slugs
-- error contract → {"error": ...} envelopes; foreign slug is 404, never 500;
-                   bad charset 404; inverted window 400
+- error contract → {"error": ...} envelopes (C-route probes DELETED M7-14)
 
 Posture: REST view tests run wherever the suite runs (views are same-thread;
 uncommitted world rows are visible; the tenant middleware arms the GUC the
@@ -282,104 +290,18 @@ def test_backfill_is_idempotent_with_suggested_slugs(_compat_stack):
 
 
 # ---------------------------------------------------------------------------
-# C1..C4 — orgs
+# C1..C4 — orgs — REMOVED (M7-14 scoped): routes + tests deleted, W1–W5 kept.
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.django_db
-def test_c1_orgs_list_raw_array(_compat_stack):
-    world = _make_world()
-    body = _client_for(world, "owner").get(f"{CANON}/orgs/").json()
-    assert isinstance(body, list) and len(body) == 1
-    assert body[0]["slug"] == world["slugs"]["org"]
-    assert body[0]["name"] == world["org"].name
-    assert set(body[0]) == {"slug", "name", "created_at"}
-
-
-@pytest.mark.django_db
-def test_c2_org_detail_and_foreign_slug_404(_compat_stack):
-    world = _make_world()
-    response = _client_for(world, "engineer").get(f"{CANON}/orgs/{world['slugs']['org']}")
-    assert response.status_code == 200
-    assert response.json()["slug"] == world["slugs"]["org"]
-
-    foreign = _client_for(world, "stranger").get(f"{CANON}/orgs/{world['slugs']['org']}")
-    assert foreign.status_code == 404
-    assert foreign.json() == {"error": "org not found"}
-
-    charset = _client_for(world, "owner").get(f"{CANON}/orgs/bad~slug!")
-    assert charset.status_code == 404  # never 500, never an empty 200
-
-
-@pytest.mark.django_db
-def test_c3_c4_org_farms_and_devices(_compat_stack):
-    world = _make_world()
-    client = _client_for(world, "worker")
-    farms = client.get(f"{CANON}/orgs/{world['slugs']['org']}/farms").json()
-    assert [f["slug"] for f in farms] == [world["slugs"]["farm"]]
-    assert farms[0]["organization_slug"] == world["slugs"]["org"]
-
-    devices = client.get(f"{CANON}/orgs/{world['slugs']['org']}/devices").json()
-    assert [d["slug"] for d in devices] == world["slugs"]["devices"]
-    assert devices[0]["sensor_capabilities"] == ["humidity", "temperature"]  # mapped names
-    assert devices[0]["org_slug"] == devices[0]["organization_slug"] == world["slugs"]["org"]
-    assert devices[0]["firmware_version"] == ""
-    assert devices[0]["last_seen_at"] == ""  # no telemetry yet
-
-
 # ---------------------------------------------------------------------------
-# C5..C9 — farms + devices
+# C5..C9 — farms + devices — REMOVED (M7-14 scoped): routes + tests deleted.
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.django_db
-def test_c5_to_c9_farms_and_devices_surface(_compat_stack):
-    world = _make_world()
-    client = _client_for(world, "owner")
-
-    farms = client.get(f"{CANON}/farms/").json()
-    assert [f["slug"] for f in farms] == [world["slugs"]["farm"]]
-
-    farm = client.get(f"{CANON}/farms/{world['slugs']['farm']}").json()
-    assert farm["name"] == world["farm"].name
-
-    farm_devices = client.get(f"{CANON}/farms/{world['slugs']['farm']}/devices").json()
-    assert [d["slug"] for d in farm_devices] == world["slugs"]["devices"]
-
-    devices = client.get(f"{CANON}/devices/").json()
-    assert [d["slug"] for d in devices] == world["slugs"]["devices"]
-
-    device = client.get(f"{CANON}/devices/{world['slugs']['device']}").json()
-    assert device["name"] == world["saloon"].name
-    assert device["farm_slug"] == world["slugs"]["farm"]
-
-    # foreign/unknown slugs are clean 404s for every resolver
-    assert client.get(f"{CANON}/farms/{world['slugs']['farm_other']}").status_code == 404
-    assert _client_for(world, "stranger").get(
-        f"{CANON}/devices/{world['slugs']['device']}"
-    ).status_code == 404
-    assert client.get(f"{CANON}/devices/does-not-exist").status_code == 404
-
-
-@pytest.mark.django_db
-def test_legacy_aliases_hit_the_same_views(_compat_stack):
-    world = _make_world()
-    client = _client_for(world, "owner")
-    assert client.get(f"{LEGACY}/orgs/").json() == client.get(f"{CANON}/orgs/").json()
-    assert client.get(f"{LEGACY}/devices/{world['slugs']['device']}").status_code == 200
-    # trailing-slash tolerant — no 301 (minimal clients don't follow redirects)
-    assert client.get(f"{CANON}/orgs").status_code == 200
-
-
-@pytest.mark.django_db
-def test_unauthenticated_is_401(_compat_stack):
-    _make_world()
-    assert APIClient().get(f"{CANON}/orgs/").status_code == 401
-    assert APIClient().get(f"{CANON}/devices/").status_code == 401
-
-
 # ---------------------------------------------------------------------------
-# C10..C15 — telemetry flat records
+# C10..C15 — telemetry flat records — REMOVED (M7-14 scoped).
+# FLAT_KEYS stays: the retained drain-shape proof below pins the same set.
 # ---------------------------------------------------------------------------
 
 FLAT_KEYS = {
@@ -388,103 +310,10 @@ FLAT_KEYS = {
 }
 
 
-@pytest.mark.django_db
-def test_c10_c14_latest_single_flat_record(_compat_stack):
-    world = _make_world()
-    _seed_telemetry(world)
-    client = _client_for(world, "engineer")
-
-    org_latest = client.get(f"{CANON}/telemetry/orgs/{world['slugs']['org']}/latest").json()
-    assert set(org_latest) == FLAT_KEYS
-    assert org_latest["temperature"] == "26.5"  # newest window across the org
-    assert org_latest["humidity"] == "55.0"
-    assert org_latest["lux"] == "" and org_latest["nh3"] == ""  # never null
-    assert org_latest["seq"] == ""
-    assert org_latest["device_slug"] in world["slugs"]["devices"]
-
-    device_latest = client.get(
-        f"{CANON}/telemetry/devices/{world['slugs']['device']}/latest"
-    ).json()
-    assert device_latest["device_slug"] == world["slugs"]["device"]
-    assert device_latest["is_buffered"] is False
-    # clock_drift_ms: received − sent = the 60 s window → 60000
-    assert device_latest["clock_drift_ms"] == "60000"
-
-    farm_latest = client.get(f"{CANON}/telemetry/farms/{world['slugs']['farm']}/latest").json()
-    assert farm_latest["received_at"] == org_latest["received_at"]
-
-    # empty saloon → the spec's 404, not an empty 200
-    response = _client_for(world, "stranger").get(
-        f"{CANON}/telemetry/devices/{_other_device_slug(world)}/latest"
-    )
-    assert response.status_code == 404
-    assert response.json() == {"error": "no telemetry"}
-
-
-@pytest.mark.django_db
-def test_c11_c15_history_windowing_and_order(_compat_stack):
-    world = _make_world()
-    _seed_telemetry(world, per_saloon=5)
-    client = _client_for(world, "worker")
-
-    history = client.get(
-        f"{CANON}/telemetry/devices/{world['slugs']['device']}/history", {"limit": 3}
-    ).json()
-    assert isinstance(history, list) and len(history) == 3
-    stamps = [row["received_at"] for row in history]
-    assert stamps == sorted(stamps, reverse=True)  # newest first
-    assert all(set(row) == FLAT_KEYS for row in history)
-
-    offset_page = client.get(
-        f"{CANON}/telemetry/devices/{world['slugs']['device']}/history",
-        {"limit": 2, "offset": 1},
-    ).json()
-    assert [row["received_at"] for row in offset_page] == stamps[1:3]
-
-    window = client.get(
-        f"{CANON}/telemetry/devices/{world['slugs']['device']}/history",
-        {"from_dt": "2026-09-06T10:02:00Z", "to_dt": "2026-09-06T10:04:00Z"},
-    ).json()
-    assert 1 <= len(window) <= 3
-    assert all(row["received_at"] >= "2026-09-06T10:02" for row in window)
-    assert all(row["received_at"] <= "2026-09-06T10:04:59" for row in window)
-
-    epoch = client.get(
-        f"{CANON}/telemetry/devices/{world['slugs']['device']}/history",
-        {"from_dt": 1789000000000},
-    )
-    assert epoch.status_code == 200  # epoch-ms accepted on the way in
-
-    inverted = client.get(
-        f"{CANON}/telemetry/devices/{world['slugs']['device']}/history",
-        {"from_dt": "2026-09-06T10:00:00Z", "to_dt": "2026-09-06T09:00:00Z"},
-    )
-    assert inverted.status_code == 400
-    assert inverted.json() == {"error": "invalid time window"}
-
-
-@pytest.mark.django_db
-def test_c13_farm_history_envelope_and_default_limit_24(_compat_stack):
-    world = _make_world()
-    _seed_telemetry(world, per_saloon=30)  # 60 rows total — the default caps at 24
-    client = _client_for(world, "owner")
-    body = client.get(f"{CANON}/telemetry/farms/{world['slugs']['farm']}/history").json()
-    assert set(body) == {"farm_history"}  # the EXACT key the chart reads
-    assert len(body["farm_history"]) == 24
-    assert all(row["device_slug"] in world["slugs"]["devices"] for row in body["farm_history"])
-
-
-@pytest.mark.django_db
-def test_c10_no_telemetry_is_404(_compat_stack):
-    world = _make_world()
-    client = _client_for(world, "owner")
-    response = client.get(f"{CANON}/telemetry/orgs/{world['slugs']['org']}/latest")
-    assert response.status_code == 404
-    assert response.json() == {"error": "no telemetry"}
-
-
 # ---------------------------------------------------------------------------
-# C16 — the farm WS shim
+# C16 — the farm WS shim — RETAINED (M7-14 scoped keeps the shim: the
+# consumer file is untouched, its mounts stay, and the module gate FAILs
+# any consumers*.py under 80% — deleting these tests reds the full gate).
 # ---------------------------------------------------------------------------
 
 
