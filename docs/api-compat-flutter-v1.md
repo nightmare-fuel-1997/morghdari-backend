@@ -1,5 +1,7 @@
 # Flutter Compat Layer — Additive Adapter Spec (Contract v1.6.0-draft, App v0.6 scope)
 
+> **Scope note 2026-09-10 (v0.7 M7-14, scoped per owner):** the C1–C15 REST routes in §3 below are REMOVED (Django 404); only the C16 WS shim and the W1–W5 report aliases (`docs/api-reports-merge-v1.md` §5) still ship. This file stays as the as-built v0.6 record — see `docs/releases/v0.7.md`.
+
 > **Status:** DRAFT 2026-09-05 · **Additive-only** — no `ALTER` on core tables, no change to
 > existing `/api/v1` paths, no refactor of internal contracts.
 > **Canonical homes:** this file (compat surface) · `API Contract (OpenAPI).yaml` v1.5.0 (frozen core)

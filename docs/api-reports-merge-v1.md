@@ -1,6 +1,6 @@
 # Daily Reports Payload Merge — Additive Extension (Contract v1.6.0, App v0.6 scope)
 
-> **Status:** DRAFT 2026-09-07 · **Additive-only** — zero `ALTER` on frozen tables; one new 1:1
+> **Status:** DELIVERED 2026-09-10 in App **v0.7** (M7-15 base + M7-16 merge + M7-17 W1–W5 aliases; see `docs/releases/v0.7.md`) · **Additive-only** — zero `ALTER` on frozen tables; one new 1:1
 > side table (`daily_report_extras`); every v1.5.0 field, path, verb and envelope stays valid.
 > **Owner decisions:** `Open Items Tracker.md` §4s (R-01 auth unchanged · R-02 merge · R-03 vehicle).
 > **Canonical homes:** this file (merged surface) · `API Contract (OpenAPI).yaml` v1.5.0 report

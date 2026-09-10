@@ -48,7 +48,7 @@ reserved for growth), and the **reports-merge implementation moves into v0.7**
 - `openapi.yaml` +1 path; gate green.
 
 ## Phase 4 — Reports-merge wave (M7-15 → M7-16 → M7-17)
-**Status:** pending
+**Status:** ✅ done (2026-09-09; proven live 2026-09-10)
 
 - M7-15 §4n base: `daily_reports` + `report_medication_usages` (database.md
   verbatim, additive migrations, FORCE-RLS template, org_id denormalized), the v1.5
@@ -65,7 +65,7 @@ reserved for growth), and the **reports-merge implementation moves into v0.7**
   gate re-scoped and re-green).
 
 ## Phase 5 — M7-07 support activation (code side)
-**Status:** pending
+**Status:** ✅ done (2026-09-09; proven live 2026-09-10 — MFA 7/7, session opens after the tenant_context fix, suspend→PUB-denied→resume→flows, force-resolve idempotent, drain 202)
 
 - Staff MFA enforced (django-otp TOTP) on platform-staff accounts; the 4 v1.2
   support-op endpoints (`/platform/support/*` — session, gateway suspend via
@@ -73,7 +73,7 @@ reserved for growth), and the **reports-merge implementation moves into v0.7**
   org-context session; superuser path untouched.
 
 ## Phase 6 — VPS-resident waves (owner-gated)
-**Status:** blocked on VPS access
+**Status:** ✅ done as laptop-as-VPS rehearsals (owner decision 2026-09-08; VPS-day runbook steps remain in scripts/)
 
 - M7-01..M7-06 (provision, TLS, prod compose, monitoring, backups, subscriber
   rebalance), M7-08 (prober + cost metering), M7-09 (chaos drill), M7-13 (frontend
@@ -81,17 +81,18 @@ reserved for growth), and the **reports-merge implementation moves into v0.7**
   land with their tasks once access exists.
 
 ## Phase 7 — M7-14 compat removal (hard-sequenced)
-**Status:** pending (after the M7-13 staging proof)
+**Status:** ✅ done (2026-09-09: SCOPED per owner — C1–C15 deleted in `34e0d08`, W1–W5 + C16 + slugs retained; proven live 2026-09-10 — removed routes 404, W-routes live)
 
 - Unmount urls_compat → delete apps/compat + tests → migration dropping
   legacy_slug_map. Gate is prefix-neutral (compat was never in the root list) —
   verify anyway.
 
 ## Phase 8 — M7-10 DoD sweep
-**Status:** pending
+**Status:** ✅ done (2026-09-10)
 
-- CHANGELOG `[v0.7]`, release note `docs/releases/v0.7.md`, tag `v0.7`, docs/KB
-  sweep, demo script per WALKTHROUGH.
+- CHANGELOG `[v0.7]`, release note `docs/releases/v0.7.md`, tag `v0.7`, repo-local docs sweep
+  (shipped-state draft statuses), live drills 10/10 + `versions/v0.7/DEMO-M7.md` transcript
+  (recording waived per v0.5 precedent). **v0.7 is closed.**
 
 ## Errors Encountered
 
@@ -99,7 +100,7 @@ reserved for growth), and the **reports-merge implementation moves into v0.7**
 |---|---:|---|
 
 ## Next Step
-Phase 4 — the reports-merge wave (M7-15 §4n base first, then M7-16 merge, then
-M7-17 compat aliases + ratification). M7-11 + M7-12 verified green: full gate
-434 passed @ 89.83% (PG/Timescale + Redis), contract gate re-greened at 62
-documented paths.
+v0.8 planning on owner go. v0.7 is CLOSED: all M7-01..M7-17 + M7-10 ✅, full gate
+513 passed, 3 skipped @ 88.09% on PG/Timescale + Redis, contract gate implemented ==
+contract at the ratified v1.7.0 yaml, migrate-gate RESULT: DEPLOYABLE (69 migrations),
+live drills 10/10 legs green, tag `v0.7` in place (push waived — no remote).

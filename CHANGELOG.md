@@ -3,6 +3,70 @@
 All notable changes per version. Format follows the spiral-roadmap discipline:
 one section per version tag, each listing what risk the version killed.
 
+## [v0.7] — 2026-09-10 — production birth on the laptop (M7)
+
+The system runs on real hardware and screams when it is sick: laptop-as-VPS rehearsed, metrics/bridges/heartbeats live, native lists + reports merged, support activated, compat scoped down. Contract gate: `implemented == contract`.
+
+### Risk killed
+**Silent sickness on unproven prod.** Before v0.7 the stack never ran as production: no `/api/v1/metrics/` (the runbook promised it, the code never had it), no burn-rate rules, no native farm/saloon lists, no reports surface, dormant support ops, unscoped compat. Now the 9-container prod compose runs on the laptop, Prometheus watches 10/10 targets, DLQ spikes page, rollbacks are drilled, and every DoD leg is proven live over real HTTPS/TLS.
+
+### Added — M7-01..M7-06 laptop-as-VPS rehearsals (2026-09-08)
+- Port discipline 80/443/8883, staged TLS certs under both naming conventions, 9-container prod compose healthy, monitoring loopback with 8 Prometheus targets UP, backup+restore drill (3 script bugs fixed by the drill), shared-sub rebalance (4 systemic prod bugs fixed)
+- Rehearsal fixes committed in `a9dd05e` (M7-03 stack), `da9dd05e` (M7-05 scripts), `f48e8dd` (M7-06 pipeline)
+
+### Added — M7-04 observability seam
+- Django `/api/v1/metrics/` implemented (runbook promised it, code never had it — `1b3c19f`) + Redis bridge + beat heartbeat; `DlqSpike` rule added
+
+### Added — M7-07 support activation (MFA + 3 ops)
+- Staff TOTP MFA enforced (`pyotp`, two-step setup→confirm) + 3 support ops (gateway suspend/resume with ACL revocation, alert force-resolve idempotent, task drain whitelisted) + contract-gate `/platform/` exclusion shrunk
+- Full CI 452 passed @ 88.59%
+
+### Added — M7-08 MET-AVAIL + MET-SAAS
+- MET-AVAIL: 2 blackbox vantages, burn-rate rules vs `probe_success`
+- MET-SAAS: hourly meter key, nightly `build_org_usage` → `org_daily_usage`, `tenant_cost_estimate_usd` export
+- 8-test suite; full CI 452 @ 88.59%
+
+### Added — M7-09 chaos drill
+- DLQ spike 104 → FIRING → cleared; `scripts/deploy.sh <tag>` rollback drilled for real (~35 s, auto-rollback on failed gate)
+
+### Added — M7-11/M7-12 native v1.6 lists
+- **M7-11** `GET /api/v1/farms/` + `/api/v1/saloons/` (`?org_id=`/`?farm_id=`, foreign → 403)
+- **M7-12** `GET /farms/{id}/telemetry/` aggregate + `?limit=`/`?offset=` newest-first (`?limit=1` IS latest)
+- Combined gate 434 @ 89.83%
+
+### Added — M7-13 frontend migration proof (2026-09-09)
+- Native-ID session, 3 hits 200, ZERO compat/legacy hits in the nginx log
+
+### Added — M7-14 compat removal SCOPED per owner
+- C1–C15 REST handlers deleted (now Django 404), W1–W5 + C16 WS + `legacy_slug_map` retained; `urls_compat` still mounted
+
+### Added — M7-15/M7-16 reports-merge (Tracker §4s)
+- **M7-15** reports base: 4 tables (`daily_reports`, `report_medication_usages`, `vet_medication_catalog`, `support_tickets`) + v1.5 endpoints + FLAGGED auto-ticket + WS push + D24-3 Tehran time-lock; full CI 488 + 3 skipped @ 88.74%
+- **M7-16** `daily_report_extras` 1:1 side table, alias normalization, checklist 400, GET by-date, `is_completed`/`reported_by` aliases
+
+### Added — M7-17 aliases + v1.7.0 ratification
+- W1–W5 compat aliases + v1.7.0 ratification (yaml absorbs compat routes); contract union stays v1.7.0 (owner §4s decision; 1.8.0 reserved for growth)
+
+### Added — M7-10 DoD live-drill fixes (2026-09-10, proven live on the rehearsal stack BEFORE closing)
+- (1) `reports.0001` created `vet_medication_catalog` AFTER its FK dependent → real migrate died `UndefinedColumn` (never caught: test matrix runs `--nomigrations`, migrate-gate last ran pre-M7-15)
+- (2) subscriber logged subscribed when the SUBSCRIBE was only queued — a boot race left both subscribers 74 min with zero broker-side subs, PUBs ACK'd into the void; now SUBACK-verified + 5 s resubscribe retry + `subscriber_subscribed` gauge
+- (3) support-session opener did a bare org lookup — staff tokens are org-less (D15) and `organizations` is FORCE-RLS'd → every open 400'd on prod; now atomic + `tenant_context`
+- (4) reports models lacked `managed=False` (docstring claimed unmanaged) + no migration state → `makemigrations --check` red; state folded into `0001`/`0002`
+
+### Verification
+- Full CI gate (Postgres/Timescale + Redis): **513 passed, 3 skipped @ 88.09%**, exit 0; module coverage gate GREEN; contract gate green (`implemented == contract` on the ratified v1.7.0 yaml, `KNOWN_GAPS` empty)
+- Migrate gate RESULT: DEPLOYABLE (69 migrations forward + idempotent re-run + every app unwinds to zero)
+- Live drills 10/10 legs green over real HTTPS/TLS: lists, paging newest-first, farm==saloon-union, TLS publish end-to-end + trust-boundary DLQ `TOPIC_PAYLOAD_IDENTITY_MISMATCH`, reports DRAFT→SUBMITTED→APPROVED + FLAGGED auto-ticket + checklist 400 + W-alias byte-compat + C-route 404s, MFA enroll→confirm→enforce + wrong-code 403, suspend→PUB-denied→resume→flows, force-resolve idempotent, drain 202, 10/10 Prometheus targets UP, rollup counts exact
+
+### Deployment notes
+- Rebuild images after the M7-15 wave (stale-image 404 lesson)
+- nginx reload after recreating app containers (upstream IP cache — third confirmation)
+- Rehearsal-DB migrate as the ADMIN role (as-app fail-closed on schema `public`)
+- EMQX authn needs a `gateway_slots` row with valid `provisioning_status` (CONNACK gate)
+- Subscriber needs `MQTT_TLS_INSECURE=1` staging-only
+- Tenant login over app role still P0 (RLS pre-GUC, M7-13 finding, VPS-day)
+- Drill GW credential re-seeded during testing
+
 ## [v0.6] — 2026-09-06 — full REST + the living dashboard (M6)
 
 The dashboard is live (WebSocket push + reconnect gap-fill), the whole v1.1–v1.4

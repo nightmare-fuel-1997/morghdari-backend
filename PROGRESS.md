@@ -1,4 +1,18 @@
-# Progress — v0.6 Full REST + WebSocket
+# Progress — v0.7 Production Birth on the Laptop
+
+## M7-10 DoD sweep — 2026-09-10 (v0.7 CLOSED)
+
+- **CHANGELOG**: `[v0.7]` section written (risk killed / Added M7-01..M7-17 / live-drill fixes / verification / deployment notes); release drafts re-pointed at shipped state (`v1.6-compat-draft` scope-reduced, `v1.7-ops-draft` ratified, `api-reports-merge-v1` delivered, `api-compat-flutter-v1` scope-noted).
+- **Release note**: `docs/releases/v0.7.md` (house v0.5 format — scope, condensed changelog, acceptance table, verification, next steps).
+- **Tag `v0.7`**: annotated on the last functional commit (the M7-10 live-drill fix), following the v0.5/v0.6 tag style (push waived — no remote).
+- **Live drills**: 10/10 legs green over real HTTPS/TLS on the rehearsal stack; transcript `versions/v0.7/DEMO-M7.md` — recording waived by owner (v0.5 precedent), runnable on request.
+- **Docs/boards sweep**: repo-local only per owner (backend_docs + KB resync stay parked); `versions/v0.7/TASKS.md` M7-10/14/16/17 ticked, `task_plan.md` Phases 4–8 flipped, Next Step → v0.8 planning on owner go.
+
+## Verification — v0.7 (final, 2026-09-10)
+
+- **Full CI gate**: 513 passed, 3 skipped @ 88.09% coverage (Postgres/Timescale + Redis), exit 0; module coverage gate GREEN; contract gate green on the ratified v1.7.0 yaml (`implemented == contract`, `KNOWN_GAPS` empty).
+- **Migrate gate**: RESULT: DEPLOYABLE — 69 migrations forward + idempotent re-run on a throwaway DB, every app unwinds to zero.
+- Milestones M7-01..M7-17 + M7-10 all ✅ in `versions/v0.7/TASKS.md`.
 
 ## M6-11 DoD sweep — 2026-09-06 (v0.6 CLOSED)
 
