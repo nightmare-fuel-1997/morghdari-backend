@@ -40,8 +40,40 @@ echo "== 4. pg_restore (custom-format, as ADMIN — ownership in the dump is
    errors + ZERO tables: PG15+ gives the app role no CREATE on schema public,
    so every CREATE TABLE failed. GRANT statements inside the dump re-grant
    to the app/exporter roles as admin — no re-pointing needed."
+# F3 (2026-09-10 v0.7 re-verify): pg_restore exits non-zero on a handful of
+# IGNORABLE TimescaleDB constraint conflicts (chunk-level "... already
+# exists") — under `set -e` that killed the drill at step 4 and the stack
+# was never restarted (step 6 never ran). Capture the log and only fail on
+# lines that are NOT ignorable; the hypertable + row-parity checks in steps
+# 5/6 (and the drill's own parity check) are the real verdict.
+RESTORE_LOG="$(mktemp)"
+set +e
 docker exec -i "$CONTAINER" pg_restore -U "$ADMIN_USER" -d "$DB_NAME" \
-  --no-owner < "$DUMP"
+  --no-owner < "$DUMP" 2> "$RESTORE_LOG"
+RESTORE_RC=$?
+set -e
+if [ "$RESTORE_RC" -ne 0 ]; then
+  # Observed ignorable classes (2026-09-10 drills, TimescaleDB 2.29 on PG16):
+  #   * chunk/constraint "... already exists" from the dump replaying DDL
+  #     the live migration already created;
+  #   * "... is not a hypertable" + "ONLY option not supported on hypertable
+  #     operations" — the dump replays ALTER TABLE ONLY ... ADD CONSTRAINT
+  #     for hypertable FKs that TimescaleDB manages on the chunks itself
+  #     (the constraints exist after restore; the replay is redundant).
+  # Judge ONLY actual error lines ("pg_restore: error/fatal") — CONTEXT /
+  # "Command was" continuations carry no verdict of their own.
+  if grep -E "pg_restore: (fatal|error)" "$RESTORE_LOG" \
+    | grep -Ev "already exists|not a hypertable|ONLY option not supported on hypertable operations" \
+    | grep -q .; then
+    echo "pg_restore FAILED (exit $RESTORE_RC) with unexpected errors:" >&2
+    cat "$RESTORE_LOG" >&2
+    rm -f "$RESTORE_LOG"
+    exit "$RESTORE_RC"
+  fi
+  echo "pg_restore exited $RESTORE_RC on ignorable constraint conflicts — continuing:"
+  cat "$RESTORE_LOG"
+fi
+rm -f "$RESTORE_LOG"
 
 echo "== 5. verify hypertables"
 docker exec -i "$CONTAINER" psql -U "$ADMIN_USER" -d "$DB_NAME" -c \

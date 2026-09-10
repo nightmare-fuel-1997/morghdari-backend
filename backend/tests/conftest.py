@@ -243,6 +243,107 @@ def _reference_seed_guard(request):
 
 
 @pytest.fixture(scope="session")
+def django_db_setup(
+    request,
+    django_test_environment,
+    django_db_blocker,
+    django_db_use_migrations,
+    django_db_keepdb,
+    django_db_createdb,
+    django_db_modify_db_settings,
+):
+    """pytest-django's django_db_setup (same contract, ordering and flags)
+    PLUS the `use_migrations` marker's SQL artifacts.
+
+    WHY the override (F2, 2026-09-10 v0.7 re-verify): the marker was declared
+    in pytest.ini but implemented NOWHERE, so a COLD test DB — created by
+    syncdb under --nomigrations — never received the reports app's UNMANAGED
+    tables (daily_reports & co. exist ONLY as reports/0001-0002 RunSQL DDL),
+    and all 45 reports tests failed with `relation "daily_reports" does not
+    exist`. Warm/`--reuse-db` runs masked it (the DoD's 513-green sat on a
+    DB polluted by dev-time migrates). The RLS policies, hypertables and
+    reference seeds the marker exists for are ALREADY materialized on every
+    PG session by the seeded_rls_db / timescale_db fixtures — the reports
+    DDL was the one artifact nothing provided, so this override materializes
+    it (idempotent RunSQL: to_regclass guards + DROP POLICY IF EXISTS) right
+    after the test DB is created, restoring the documented marker contract on
+    a truly fresh database.
+    فارسی: پیاده‌سازی مارکر use_migrations — جدول‌های unmanaged گزارش‌ها روی
+    دیتابیس تستِ خام ساخته می‌شوند تا گیت از حالت سرد سبز بماند.
+    """
+    from django.test.utils import setup_databases, teardown_databases
+    from pytest_django.fixtures import _disable_migrations, _get_databases_for_setup
+
+    setup_databases_args = {}
+    if not django_db_use_migrations:
+        _disable_migrations()
+    if django_db_keepdb and not django_db_createdb:
+        setup_databases_args["keepdb"] = True
+    aliases, serialized_aliases = _get_databases_for_setup(request.session.items)
+
+    with django_db_blocker.unblock():
+        db_cfg = setup_databases(
+            verbosity=request.config.option.verbose,
+            interactive=False,
+            aliases=aliases,
+            serialized_aliases=serialized_aliases,
+            **setup_databases_args,
+        )
+        _materialize_use_migrations_schema(request)
+
+    yield
+
+    if not django_db_keepdb:
+        with django_db_blocker.unblock():
+            try:
+                teardown_databases(db_cfg, verbosity=request.config.option.verbose)
+            except Exception as exc:  # noqa: BLE001
+                request.node.warn(
+                    pytest.PytestWarning(
+                        f"Error when trying to teardown test databases: {exc!r}"
+                    )
+                )
+
+
+def _materialize_use_migrations_schema(request) -> None:
+    """Create the `use_migrations` marker's SQL artifacts on a fresh test DB.
+
+    Only the reports app needs this: its models are managed=False and their
+    tables exist solely as RunSQL inside reports/0001-0002, so syncdb skips
+    them and a cold DB has no daily_reports (F2). The migration SQL is
+    written idempotently (to_regclass guards, DROP POLICY IF EXISTS) — safe
+    to execute directly, exactly like the timescale_db fixture does for
+    telemetry/0002. Non-Postgres (sqlite laptop loop) and marker-less
+    sessions skip — same pragmatism as the seeded fixtures.
+    """
+    if connection.vendor != "postgresql":
+        return
+    if not any(item.get_closest_marker("use_migrations") for item in request.session.items):
+        return
+    reports_dir = BACKEND_DIR / "apps" / "reports" / "migrations"
+    with connection.cursor() as cursor:
+        if not cursor.execute(
+            "SELECT to_regclass('public.daily_reports') IS NOT NULL"
+        ).fetchone()[0]:
+            _execute_sql(cursor, _reports_ddl(reports_dir / "0001_initial.py"))
+        if not cursor.execute(
+            "SELECT to_regclass('public.daily_report_extras') IS NOT NULL"
+        ).fetchone()[0]:
+            _execute_sql(cursor, _reports_ddl(reports_dir / "0002_daily_report_extras.py"))
+
+
+def _reports_ddl(path: Path) -> str:
+    """Load a reports migration and return its DDL. Reports migrations expose
+    `_sql()` (a function — connection.vendor is read at CALL time), unlike
+    telemetry/0002 which ships a module-level `SQL` constant; the loader in
+    _sql_from_migration only handles the latter."""
+    spec = importlib.util.spec_from_file_location(path.stem, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module._sql()
+
+
+@pytest.fixture(scope="session")
 def timescale_db(seeded_rls_db, django_db_blocker):
     with django_db_blocker.unblock():
         if connection.vendor == "postgresql":

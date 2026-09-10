@@ -24,7 +24,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
-APP_VERSION = "0.6"  # bumped by the M6-11 DoD sweep; contract v1.5.0 surface
+APP_VERSION = "0.7"  # bumped by the v0.7 DoD sweep (F5, 2026-09-10 re-verify: health still said 0.6)
 
 
 def _redis():

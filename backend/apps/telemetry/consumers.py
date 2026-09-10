@@ -46,6 +46,10 @@ logger = logging.getLogger(__name__)
 
 CONSUMER_GROUP = "telemetry_workers"   # Q2: contract name (Tracker Â§4k)
 BATCH_SIZE_DEFAULT = 50
+# F4 (2026-09-10 v0.7 re-verify): PEL entries orphaned by a DEAD consumer
+# (container recreation / stack swap mints a fresh SUBSCRIBER_CONSUMER_ID)
+# are reclaimed by drain_stream once they have been undelivered this long.
+ORPHAN_PEL_IDLE_SEC = 60
 
 CONSUMERS_REDIS_URL = os.environ.get(
     "REDIS_URL", "redis://:dev_redis_password@localhost:6379"
@@ -196,6 +200,31 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None,
     batches = list(
         client.xreadgroup(CONSUMER_GROUP, consumer, {stream: ">"}, count=count, block=1000)
     )
+    # F4 (2026-09-10 v0.7 re-verify): reclaim PEL entries orphaned by a DEAD
+    # consumer. Entries the old consumer read but never acked are invisible to
+    # every live reader — observed as a permanently plateaued pending count
+    # (49/40) on the rehearsal stack after a worker recreation. XAUTOCLAIM
+    # moves entries idle > ORPHAN_PEL_IDLE_SEC into THIS consumer's PEL; the
+    # crash-recovery read below then drains them like any redelivery
+    # (justid=True: that read fetches the bodies). Live in-flight entries keep
+    # a fresh idle clock and are never stolen. Skipped for the M5-05 approval
+    # drain (gateway_slot filter): claiming ANOTHER gateway's held entries
+    # into our PEL would strand them unacked under the filter. Clients
+    # without XAUTOCLAIM (test doubles) fall back to the old behavior.
+    if gateway_slot is None:
+        xautoclaim = getattr(client, "xautoclaim", None)
+        if xautoclaim is not None:
+            try:
+                xautoclaim(
+                    stream,
+                    CONSUMER_GROUP,
+                    consumer,
+                    ORPHAN_PEL_IDLE_SEC,
+                    count=count,
+                    justid=True,
+                )
+            except redis.ResponseError:
+                pass  # stream/group vanished mid-cycle — next cycle re-creates
     # Crash recovery: OUR OWN pending deliveries (id "0" = the PEL).
     batches.extend(client.xreadgroup(CONSUMER_GROUP, consumer, {stream: "0"}, count=count))
     if not batches:
