@@ -21,8 +21,10 @@ Four surfaces must hold on the REAL middleware path:
 
 import pyotp
 from django.contrib.auth import get_user_model
+from django.db import connection
 from django.test import TestCase, override_settings
 from unittest import mock
+import unittest
 from django.urls import reverse
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import AccessToken
@@ -326,6 +328,9 @@ class SupportOpsSemanticsTests(TestCase):
         )
         self.assertEqual(response.status_code, 202, response.data)
         self.assertIn("recache", sent)
+
+
+
         row = AccountActivityLog.objects.get(action="SUPPORT_OP_TASK_DISPATCH")
         self.assertEqual(row.details["task"], "rebuild_threshold_cache")
         self.assertEqual(row.details["incident_id"], "INC-9")
@@ -367,3 +372,77 @@ class SupportOpsSemanticsTests(TestCase):
             {"task": "drain_pending_approval", "reason": "x"}, format="json",
         )
         self.assertEqual(missing.status_code, 400)
+
+
+class SupportSessionAppRoleTests(TestCase):
+    """M7-10 live-drill regression — the opener under the PROD identity.
+
+    Staff tokens are ORG-LESS by design (D15), so the middleware sets no GUC
+    for this caller — and organizations is FORCE-RLS'd. The opener used to do
+    a bare lookup, which saw ZERO rows as the app role: every session open
+    400'd "unknown org_id" on prod while the suite (DB superuser, BYPASSRLS)
+    stayed green. These tests SET ROLE morghdari_app with no GUC — the exact
+    live shape — so a bare-lookup regression fails here first.
+    """
+
+    def setUp(self):
+        if connection.vendor != "postgresql":
+            raise unittest.SkipTest("support-session truth requires PostgreSQL (CI/dev-container)")
+        self.client = APIClient()
+        self.org = _make_org("APPROLE-ORG")
+        self.staff = _make_staff("approlestaff", mfa_code="enrolled")
+
+    def _as_app_role(self):
+        with connection.cursor() as cursor:
+            cursor.execute("SET ROLE morghdari_app")
+        self.addCleanup(self._reset_role)
+
+    def _reset_role(self):
+        with connection.cursor() as cursor:
+            cursor.execute("RESET ROLE")
+
+    def _staff_token(self) -> str:
+        token = _login(
+            self.client, "approlestaff",
+            mfa_code=pyotp.TOTP(self.staff.platform_mfa.secret).now(),
+        )
+        self.assertEqual(token.status_code, 200, token.data)
+        return token.data["access_token"]
+
+    def test_session_opens_as_app_role_without_guc(self):
+        """The live shape: app role, no GUC, real org UUID → 200 + the org's
+        claims + the SUPPORT_ORG_ENTER audit row."""
+        self._as_app_role()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {self._staff_token()}")
+        opened = self.client.post(
+            reverse("accounts:support-session"),
+            {"org_id": str(self.org.org_id), "incident_id": "INC-RLS", "reason": "drill"},
+            format="json",
+        )
+        self.assertEqual(opened.status_code, 200, opened.data)
+        self.assertEqual(opened.data["org_id"], str(self.org.org_id))
+        self.assertTrue(
+            AccountActivityLog.objects.filter(
+                action="SUPPORT_ORG_ENTER", org=self.org
+            ).exists()
+        )
+
+    def test_session_still_400s_unknown_and_garbage_org(self):
+        """The fix scopes reads, it does not open them: a wrong UUID and a
+        non-UUID both stay 400 unknown org_id (no existence oracle widened)."""
+        self._as_app_role()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {self._staff_token()}")
+        import uuid
+
+        bad = self.client.post(
+            reverse("accounts:support-session"),
+            {"org_id": str(uuid.uuid4()), "incident_id": "INC-RLS"},
+            format="json",
+        )
+        self.assertEqual(bad.status_code, 400, bad.data)
+        garbage = self.client.post(
+            reverse("accounts:support-session"),
+            {"org_id": "not-a-uuid", "incident_id": "INC-RLS"},
+            format="json",
+        )
+        self.assertEqual(garbage.status_code, 400, garbage.data)

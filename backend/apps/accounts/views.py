@@ -14,7 +14,10 @@ never disagree about who logged in (one rule, two consumers).
 """
 
 import pyotp
+from uuid import UUID
+
 from django.contrib.auth import get_user_model
+from django.db import transaction
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.exceptions import AuthenticationFailed
@@ -34,6 +37,7 @@ from apps.accounts.services import (
 from apps.accounts.permissions import _claims
 from apps.accounts.serializers import LoginSerializer, resolve_active_membership
 from apps.auditing.models import AccountActivityLog
+from apps.tenants.context import tenant_context
 from apps.tenants.models import Organization
 from apps.tenants.models import Organization
 
@@ -266,32 +270,51 @@ def support_session(request):
     if not incident:
         return Response({"error": "incident_id required"}, status=400)
 
-    org = Organization.objects.filter(org_id=request.data.get("org_id") or "").first()
-    if org is None:
+    raw_org_id = (request.data.get("org_id") or "").strip()
+    try:
+        org_uuid = str(UUID(raw_org_id))
+    except (ValueError, AttributeError):
         return Response({"error": "unknown org_id"}, status=400)
 
-    token = AccessToken.for_user(user)
-    token["org_id"] = str(org.org_id)
-    token["support_session"] = True
-    token["incident_id"] = incident
+    # M7-10 live-drill fix: staff tokens are ORG-LESS by design (D15), so the
+    # middleware sets no GUC for this caller — and organizations is FORCE-RLS'd,
+    # so the lookup below saw ZERO rows for EVERY org on prod (the M7-07 suite
+    # runs as the DB superuser, which BYPASSRLS's straight past this — the same
+    # masking class the M7-06 db_fetch fix already paid for). Scope the lookup
+    # AND the audit write to the REQUESTED org via tenant_context: a wrong UUID
+    # still 400s, no privilege widens — the opener only ever returns the one
+    # org the caller named.
+    #
+    # فارسی: نشست پشتیبانی برای کارکنانِ بدون سازمان است، پس خواندن سازمان و
+    # ثبت ممیزی باید در زمینهٔ همان سازمانِ درخواستی انجام شود؛ وگرنه RLS
+    # همه‌چیز را پنهان می‌کند و نشست هرگز باز نمی‌شود.
+    with transaction.atomic(), tenant_context(org_uuid):
+        org = Organization.objects.filter(org_id=org_uuid).first()
+        if org is None:
+            return Response({"error": "unknown org_id"}, status=400)
 
-    # Audit BEFORE success — the write must not be skippable by a later error.
-    AccountActivityLog.objects.create(
-        actor=user,
-        org=org,
-        action="SUPPORT_ORG_ENTER",
-        ip_address=request.META.get("REMOTE_ADDR"),
-        details={"incident_id": incident, "reason": request.data.get("reason", "")},
-    )
+        token = AccessToken.for_user(user)
+        token["org_id"] = str(org.org_id)
+        token["support_session"] = True
+        token["incident_id"] = incident
 
-    return Response(
-        {
-            "access_token": str(token),
-            "org_id": str(org.org_id),
-            "incident_id": incident,
-            "expires_in_sec": 900,
-        }
-    )
+        # Audit BEFORE success — the write must not be skippable by a later error.
+        AccountActivityLog.objects.create(
+            actor=user,
+            org=org,
+            action="SUPPORT_ORG_ENTER",
+            ip_address=request.META.get("REMOTE_ADDR"),
+            details={"incident_id": incident, "reason": request.data.get("reason", "")},
+        )
+
+        return Response(
+            {
+                "access_token": str(token),
+                "org_id": str(org.org_id),
+                "incident_id": incident,
+                "expires_in_sec": 900,
+            }
+        )
 
 
 # ---------------------------------------------------------------------------
