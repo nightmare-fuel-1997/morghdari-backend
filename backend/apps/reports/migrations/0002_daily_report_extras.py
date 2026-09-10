@@ -15,6 +15,10 @@ Guarded to vendor=='postgresql' (M7-08/M7-15 pattern); model UNMANAGED.
 
 from django.db import connection, migrations
 
+import django.db.models.deletion
+import django.db.models.functions.datetime
+from django.db import models
+
 
 def _sql() -> str:
     if connection.vendor == "sqlite":
@@ -57,6 +61,28 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        # State registration for the UNMANAGED model (compat/0001 pattern —
+        # same as reports/0001): records DailyReportExtras in the migration
+        # graph; Django emits no SQL for it, the DDL is the RunSQL below.
+        migrations.CreateModel(
+            name='DailyReportExtras',
+            fields=[
+                ('report', models.OneToOneField(db_column='report_id', on_delete=django.db.models.deletion.CASCADE, primary_key=True, related_name='extras', serialize=False, to='reports.dailyreport')),
+                ('bird_count', models.IntegerField(blank=True, null=True)),
+                ('avg_temperature_c', models.DecimalField(blank=True, decimal_places=2, max_digits=5, null=True)),
+                ('avg_humidity_pct', models.DecimalField(blank=True, decimal_places=2, max_digits=5, null=True)),
+                ('ventilation_status', models.CharField(blank=True, max_length=20, null=True)),
+                ('health_status', models.CharField(blank=True, max_length=20, null=True)),
+                ('checklist_feed', models.BooleanField(default=False)),
+                ('checklist_water', models.BooleanField(default=False)),
+                ('checklist_device', models.BooleanField(default=False)),
+                ('created_at', models.DateTimeField(db_default=django.db.models.functions.datetime.Now())),
+            ],
+            options={
+                'db_table': 'daily_report_extras',
+                'managed': False,
+            },
+        ),
         migrations.RunSQL(
             sql=_sql(),
             reverse_sql=migrations.RunSQL.noop,

@@ -57,6 +57,7 @@ class DailyReport(models.Model):
 
     class Meta:
         db_table = "daily_reports"
+        managed = False
         constraints = [
             models.CheckConstraint(
                 check=models.Q(status__in=["DRAFT", "SUBMITTED", "FLAGGED", "APPROVED", "REJECTED"]),
@@ -81,6 +82,7 @@ class ReportMedicationUsage(models.Model):
 
     class Meta:
         db_table = "report_medication_usages"
+        managed = False
         indexes = [
             models.Index(fields=["org", "report"], name="idx_medusage_org"),
         ]
@@ -107,6 +109,7 @@ class DailyReportExtras(models.Model):
 
     class Meta:
         db_table = "daily_report_extras"
+        managed = False
         constraints = [
             models.CheckConstraint(
                 check=models.Q(ventilation_status__in=["STABLE", "NEEDS_REVIEW", "PROBLEM"]),
@@ -135,6 +138,7 @@ class VetMedicationCatalog(models.Model):
 
     class Meta:
         db_table = "vet_medication_catalog"
+        managed = False
         constraints = [
             models.UniqueConstraint(fields=["org", "name"], name="uq_vet_medication_catalog_org_name"),
         ]
@@ -161,6 +165,7 @@ class SupportTicket(models.Model):
 
     class Meta:
         db_table = "support_tickets"
+        managed = False
         constraints = [
             models.CheckConstraint(check=models.Q(category__in=["medical", "support", "installer", "report"]), name="ck_support_tickets_category"),
             models.CheckConstraint(check=models.Q(status__in=["OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"]), name="ck_support_tickets_status"),

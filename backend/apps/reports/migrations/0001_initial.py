@@ -20,6 +20,9 @@ FORCE-RLS و گاردِ وندور (فقط Postgres).
 
 from django.db import connection, migrations
 
+import django.db.models.functions.datetime
+from django.db import models
+
 
 def _sql() -> str:
     if connection.vendor == "sqlite":
@@ -156,6 +159,81 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        # State registration for the UNMANAGED models (compat/0001 pattern):
+        # records DailyReport + VetMedicationCatalog + ReportMedicationUsage +
+        # SupportTicket in the migration graph so `makemigrations --check`
+        # (migrate-gate step 1) stays clean — the DDL itself comes from the
+        # RunSQL below and Django emits no SQL for unmanaged CreateModels.
+        # Block order mirrors the DDL order (FK targets first). Added 2026-09-10.
+        migrations.CreateModel(
+            name='DailyReport',
+            fields=[
+                ('id', models.AutoField(primary_key=True, serialize=False)),
+                ('report_date', models.DateField()),
+                ('mortality_count', models.IntegerField(default=0)),
+                ('feed_kg', models.DecimalField(blank=True, decimal_places=2, max_digits=10, null=True)),
+                ('water_l', models.DecimalField(blank=True, decimal_places=2, max_digits=10, null=True)),
+                ('avg_weight_g', models.DecimalField(blank=True, decimal_places=2, max_digits=8, null=True)),
+                ('notes', models.TextField(blank=True, null=True)),
+                ('status', models.CharField(default='DRAFT', max_length=20)),
+                ('submitted_at', models.DateTimeField(blank=True, null=True)),
+                ('reviewed_at', models.DateTimeField(blank=True, null=True)),
+                ('review_note', models.TextField(blank=True, null=True)),
+                ('vet_approved_at', models.DateTimeField(blank=True, null=True)),
+                ('created_at', models.DateTimeField(db_default=django.db.models.functions.datetime.Now(), null=True)),
+            ],
+            options={
+                'db_table': 'daily_reports',
+                'managed': False,
+            },
+        ),
+        migrations.CreateModel(
+            name='VetMedicationCatalog',
+            fields=[
+                ('id', models.AutoField(primary_key=True, serialize=False)),
+                ('name', models.CharField(max_length=200)),
+                ('dosage_default', models.CharField(blank=True, max_length=100, null=True)),
+                ('unit', models.CharField(blank=True, max_length=20, null=True)),
+                ('notes', models.TextField(blank=True, null=True)),
+                ('is_active', models.BooleanField(default=True)),
+                ('created_at', models.DateTimeField(db_default=django.db.models.functions.datetime.Now(), null=True)),
+            ],
+            options={
+                'db_table': 'vet_medication_catalog',
+                'managed': False,
+            },
+        ),
+        migrations.CreateModel(
+            name='ReportMedicationUsage',
+            fields=[
+                ('id', models.AutoField(primary_key=True, serialize=False)),
+                ('medication_name', models.CharField(max_length=200)),
+                ('dosage', models.CharField(blank=True, max_length=100, null=True)),
+                ('frequency', models.CharField(blank=True, max_length=100, null=True)),
+            ],
+            options={
+                'db_table': 'report_medication_usages',
+                'managed': False,
+            },
+        ),
+        migrations.CreateModel(
+            name='SupportTicket',
+            fields=[
+                ('id', models.AutoField(primary_key=True, serialize=False)),
+                ('category', models.CharField(max_length=20)),
+                ('title', models.CharField(max_length=200)),
+                ('description', models.TextField(blank=True, null=True)),
+                ('status', models.CharField(default='OPEN', max_length=20)),
+                ('priority', models.CharField(default='NORMAL', max_length=10)),
+                ('created_at', models.DateTimeField(db_default=django.db.models.functions.datetime.Now(), null=True)),
+                ('resolved_at', models.DateTimeField(blank=True, null=True)),
+                ('resolution_notes', models.TextField(blank=True, null=True)),
+            ],
+            options={
+                'db_table': 'support_tickets',
+                'managed': False,
+            },
+        ),
         migrations.RunSQL(
             sql=_sql(),
             reverse_sql=migrations.RunSQL.noop,
