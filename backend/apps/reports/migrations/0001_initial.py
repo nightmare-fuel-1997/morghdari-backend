@@ -58,19 +58,6 @@ BEGIN
     CREATE INDEX idx_reports_saloon ON public.daily_reports(saloon_id, report_date DESC);
   END IF;
 
-  IF to_regclass('public.report_medication_usages') IS NULL THEN
-    CREATE TABLE public.report_medication_usages (
-      id              SERIAL PRIMARY KEY,
-      org_id          UUID NOT NULL REFERENCES public.organizations(org_id) ON DELETE RESTRICT,
-      report_id       INT  NOT NULL REFERENCES public.daily_reports(id) ON DELETE CASCADE,
-      catalog_item_id INT  NULL REFERENCES public.vet_medication_catalog(id) ON DELETE SET NULL,
-      medication_name VARCHAR(200) NOT NULL,
-      dosage          VARCHAR(100),
-      frequency       VARCHAR(100)
-    );
-    CREATE INDEX idx_medusage_org ON public.report_medication_usages(org_id, report_id);
-  END IF;
-
   IF to_regclass('public.vet_medication_catalog') IS NULL THEN
     CREATE TABLE public.vet_medication_catalog (
       id             SERIAL PRIMARY KEY,
@@ -85,6 +72,19 @@ BEGIN
       CONSTRAINT uq_vet_medication_catalog_org_name UNIQUE (org_id, name)
     );
     CREATE INDEX idx_vetcat_org ON public.vet_medication_catalog(org_id, is_active);
+  END IF;
+
+  IF to_regclass('public.report_medication_usages') IS NULL THEN
+    CREATE TABLE public.report_medication_usages (
+      id              SERIAL PRIMARY KEY,
+      org_id          UUID NOT NULL REFERENCES public.organizations(org_id) ON DELETE RESTRICT,
+      report_id       INT  NOT NULL REFERENCES public.daily_reports(id) ON DELETE CASCADE,
+      catalog_item_id INT  NULL REFERENCES public.vet_medication_catalog(id) ON DELETE SET NULL,
+      medication_name VARCHAR(200) NOT NULL,
+      dosage          VARCHAR(100),
+      frequency       VARCHAR(100)
+    );
+    CREATE INDEX idx_medusage_org ON public.report_medication_usages(org_id, report_id);
   END IF;
 
   IF to_regclass('public.support_tickets') IS NULL THEN
