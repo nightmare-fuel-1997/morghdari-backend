@@ -42,6 +42,23 @@ SHARED_TOPIC = "$share/telemetry_workers/+/farms/+/gateways/+/telemetry"
 STATUS_TOPIC = "+/farms/+/gateways/+/status"
 SUBSCRIBE_QOS = 1
 
+# v0.7 M7-10 live-drill fix: a denied SUBACK (granted 0x80) used to be
+# invisible — main() logged "subscribed" the moment the SUBSCRIBE packet was
+# QUEUED, never checked the broker's verdict, and never retried. A broker
+# restart race (EMQX still initializing its authz pool when the subscriber
+# boots) could therefore leave ingestion silently dead: PUBs ACK'd, no
+# matching subscription, nothing in any stream, no DLQ, no log line. Now the
+# SUBACK verdict is checked per topic; a denied lane is CRITICAL-logged and
+# resubscribed with backoff until the broker grants it.
+#
+# فارسی: بررسی رأی SUBACK — اگر بروکر اشتراک را رد کند (۰x۸۰) دیگر سکوت
+# نمی‌کنیم؛ خطای CRITICAL می‌نویسیم و با فاصلهٔ زمانی دوباره سابسکرایب
+# می‌کنیم تا ingestion بی‌صدا نمیرد.
+_SUBACK_DENIED = 0x80
+_SUBSCRIBE_RETRY_S = 5
+_pending_subs: dict = {}  # mid -> topic (the SUBACK only carries the mid)
+_granted_topics: set = set()  # topics the broker has currently granted
+
 # M7 (v0.7): the /metrics surface Observability §3.2 promises — subscriber_up
 # drives the SubscriberTierDegraded page (monitoring/alerts.yml).
 METRICS_PORT = int(os.environ.get("METRICS_PORT", "9091"))
@@ -101,9 +118,58 @@ def build_client() -> mqtt.Client:
     _apply_tls(client)
 
     client.on_connect = _on_connect
+    client.on_subscribe = _on_subscribe
     client.on_message = _on_message
     client.on_disconnect = _on_disconnect
     return client
+
+
+def _request_subscriptions(client) -> None:
+    """(Re)send both subscribes; the verdict lands in _on_subscribe.
+
+    Called on EVERY connect (paho does not resubscribe by itself) and again
+    after any denied SUBACK. The mid->topic map lets the SUBACK handler name
+    the lane instead of logging a bare mid.
+    """
+    for topic in (SHARED_TOPIC, STATUS_TOPIC):
+        result, mid = client.subscribe(topic, qos=SUBSCRIBE_QOS)
+        if result == mqtt.MQTT_ERR_SUCCESS:
+            _pending_subs[mid] = topic
+            logger.debug("subscribe requested: %s (mid=%s)", topic, mid)
+        else:
+            logger.error("subscribe request failed locally: %s (%s)", topic, result)
+
+
+def _on_subscribe(client, userdata, mid, granted_qos, properties=None):
+    """SUBACK verdict — the check the boot path never had.
+
+    Granted: log the lane (this is the ONLY "subscribed" log that means the
+    broker holds the subscription). Denied (0x80): ingestion is DOWN on this
+    lane — CRITICAL-log it and resubscribe with backoff until granted.
+    """
+    topic = _pending_subs.pop(mid, "<unknown>")
+    codes = [getattr(q, "value", q) for q in granted_qos]
+    if any(code == _SUBACK_DENIED for code in codes):
+        _granted_topics.discard(topic)
+        logger.critical(
+            "SUBACK DENIED for %s (mid=%s, granted=%s) — ingestion is DOWN "
+            "on this lane; resubscribing in %ss",
+            topic, mid, codes, _SUBSCRIBE_RETRY_S,
+        )
+        timer = threading.Timer(_SUBSCRIBE_RETRY_S, _request_subscriptions, args=(client,))
+        timer.daemon = True
+        timer.start()
+        return
+    _granted_topics.add(topic)
+    if topic == STATUS_TOPIC:
+        logger.info("subscribed to %s (granted qos=%s)", topic, codes)
+    else:
+        logger.info("subscribed via %s (mid=%s, granted qos=%s)", topic, mid, codes)
+
+
+def _subscriptions_ok() -> bool:
+    """Both lanes currently granted — drives the subscriber_subscribed gauge."""
+    return {SHARED_TOPIC, STATUS_TOPIC} <= _granted_topics
 
 
 def _on_connect(client, userdata, flags, reason_code, properties=None):
@@ -112,15 +178,7 @@ def _on_connect(client, userdata, flags, reason_code, properties=None):
         logger.error("CONNACK failure: %s", reason_code)
         return
     logger.info("connected to broker (session_present=%s)", flags.session_present)
-    for topic in (SHARED_TOPIC, STATUS_TOPIC):
-        result, mid = client.subscribe(topic, qos=SUBSCRIBE_QOS)
-        if result == mqtt.MQTT_ERR_SUCCESS:
-            if topic == STATUS_TOPIC:
-                logger.info("subscribed to %s", topic)
-            else:
-                logger.info("subscribed via %s (mid=%s, qos=%s)", topic, mid, SUBSCRIBE_QOS)
-        else:
-            logger.error("subscribe failed: %s", result)
+    _request_subscriptions(client)
 
 
 _django_configured = False
@@ -261,6 +319,9 @@ class _MetricsHandler(http.server.BaseHTTPRequestHandler):
             "# HELP telemetry_messages_received_total MQTT messages handed to the pipeline\n"
             "# TYPE telemetry_messages_received_total counter\n"
             f"telemetry_messages_received_total {_messages_seen}\n"
+            "# HELP subscriber_subscribed Both lanes granted by the broker (0 = ingestion DOWN)\n"
+            "# TYPE subscriber_subscribed gauge\n"
+            f"subscriber_subscribed {1 if _subscriptions_ok() else 0}\n"
         ).encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; version=0.0.4")

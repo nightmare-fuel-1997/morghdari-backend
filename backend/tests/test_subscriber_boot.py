@@ -77,8 +77,10 @@ def test_on_connect_logs_conack_failure_and_skips_subscribe(fake_client, caplog)
 
 
 def test_on_connect_subscribes_telemetry_and_status_on_success(fake_client, caplog):
-    """A successful CONNACK subscribes BOTH lanes — the telemetry share group
-    and the pack-liveness status topic — and logs the session flag."""
+    """A successful CONNACK requests BOTH lanes — the telemetry share group
+    and the pack-liveness status topic — and logs the session flag. The
+    "subscribed" confirmation only lands when the broker's SUBACK grants
+    (see the SUBACK tests below): a queued SUBSCRIBE is not a subscription."""
     fake_client.subscribe.return_value = (0, 321)  # MQTT_ERR_SUCCESS == 0
 
     class _Ok:
@@ -90,8 +92,67 @@ def test_on_connect_subscribes_telemetry_and_status_on_success(fake_client, capl
     assert "connected to broker (session_present=False)" in caplog.text
     topics = [c.args[0] for c in fake_client.subscribe.call_args_list]
     assert topics == [sub.SHARED_TOPIC, sub.STATUS_TOPIC]
+    assert "subscribed via" not in caplog.text  # no SUBACK yet — no claim yet
+
+
+@pytest.fixture
+def clean_sub_state():
+    """The SUBACK bookkeeping is module-global — each test starts blank."""
+    sub._pending_subs.clear()
+    sub._granted_topics.clear()
+    yield
+    sub._pending_subs.clear()
+    sub._granted_topics.clear()
+
+
+def test_on_subscribe_granted_logs_the_lane(fake_client, clean_sub_state, caplog):
+    """A granted SUBACK is the ONLY "subscribed" log that means the broker
+    holds the subscription — one per lane, naming the grant."""
+    sub._pending_subs[11] = sub.SHARED_TOPIC
+    sub._pending_subs[12] = sub.STATUS_TOPIC
+
+    with caplog.at_level("INFO", logger="morghdari.subscriber"):
+        sub._on_subscribe(fake_client, None, 11, [1])
+        sub._on_subscribe(fake_client, None, 12, [1])
+
     assert "subscribed via" in caplog.text
     assert "subscribed to +/farms/+/gateways/+/status" in caplog.text
+    assert sub._subscriptions_ok()
+
+
+def test_on_subscribe_denied_is_critical_and_resubscribes(
+    fake_client, clean_sub_state, monkeypatch, caplog
+):
+    """M7-10 live-drill regression: a denied SUBACK (0x80, e.g. EMQX still
+    initializing authz at boot) must be CRITICAL-loud and resubscribe with
+    backoff — never the old silent "subscribed" lie that left ingestion dead
+    with zero broker-side subscriptions."""
+    timers = []
+
+    class _Timer:
+        def __init__(self, delay, fn, args=None, kwargs=None):
+            timers.append((delay, fn, args))
+
+        daemon = False
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(sub.threading, "Timer", _Timer)
+    sub._pending_subs[7] = sub.SHARED_TOPIC
+    fake_client.subscribe.return_value = (0, 44)  # retry re-sends cleanly
+
+    with caplog.at_level("INFO", logger="morghdari.subscriber"):
+        sub._on_subscribe(fake_client, None, 7, [0x80])
+
+    assert "SUBACK DENIED" in caplog.text
+    assert sub.SHARED_TOPIC in caplog.text
+    assert not sub._subscriptions_ok()
+    assert timers and timers[0][0] == sub._SUBSCRIBE_RETRY_S
+    # firing the backoff re-sends both subscribes:
+    timers[0][1](*timers[0][2])
+    topics = [c.args[0] for c in fake_client.subscribe.call_args_list]
+    assert topics == [sub.SHARED_TOPIC, sub.STATUS_TOPIC]
 
 
 def test_build_client_uses_the_required_stable_client_id(fake_client, monkeypatch):
