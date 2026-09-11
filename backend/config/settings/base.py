@@ -258,18 +258,79 @@ SIMPLE_JWT = {
 # مستندسازی شوند.
 # ---------------------------------------------------------------------------
 SPECTACULAR_SETTINGS = {
-    "TITLE": "Morghdari API",
+    "TITLE": "Morghdari Poultry Monitoring API",
     "DESCRIPTION": (
-        "Poultry-farm IoT platform API. v0.1 ships the schema/RLS foundation "
-        "with no business endpoints yet — auth lands v0.2, telemetry v0.3, "
-        "alerts v0.4. The canonical human-written contract lives in "
-        "backend_docs/API Contract (OpenAPI).yaml."
+        "REST API for the Morghdari multi-tenant poultry monitoring platform. "
+        "Contract v1.7.0 (ops wave + merged daily-report schemas).\n\n"
+        "Authentication: Bearer JWT (15-min access token, 7-day refresh token; "
+        "rotation is intentionally OFF — deactivated members fail closed via "
+        "org-claim re-derivation). Gateway devices use HTTP Basic "
+        "(username = gateway_slot_id) on the config endpoint only.\n\n"
+        "Tenancy: every response is scoped to the caller's org_id claim; "
+        "cross-org ids answer 404 (never distinguished from unknown ids). "
+        "Roles: owner > manager > engineer > doctor/worker/installer; "
+        "reviewer is read-only on daily reports.\n\n"
+        "Base URL: https://api.morghdari.com/api/v1/ — the canonical "
+        "human-written contract is backend/openapi.yaml (the "
+        "implemented == contract gate); this page is its generated mirror."
     ),
-    "VERSION": "0.1.0",
+    "VERSION": "1.7.0",
+    "CONTACT": {"name": "Morghdari Platform Team"},
+    "LICENSE": {"name": "Proprietary — Morghdari"},
+    # 2026-09-11 fix (Swagger "Try it out" NetworkError): the server is a
+    # bare relative "/" — never a hardcoded host. drf-spectacular emits full
+    # operation paths (/api/v1/...), so Swagger UI concatenates server + path
+    # and Executes same-origin on EVERY door (:8000 dev, :443 rehearsal, the
+    # VPS). A hardcoded https://api.morghdari.com first entry made every
+    # Execute POST to a host that only resolves in production — the browser
+    # failed the fetch (TypeError: NetworkError) and the response panel read
+    # "(Undocumented)" because nothing ever arrived. The production base URL
+    # stays documented in DESCRIPTION text above.
+    "SERVERS": [{"url": "/", "description": "This server — requests resolve against the host serving these docs"}],
     "SERVE_INCLUDE_SCHEMA": False,
     # Docs pages are public read-only even though the API itself is not:
     # a contract you cannot see cannot be integrated against.
     "SERVE_PERMISSIONS": ["rest_framework.permissions.AllowAny"],
+    # Every endpoint is Bearer-gated unless its @extend_schema says auth=[].
+    # The scheme itself comes from CachedJWTAuthenticationExtension
+    # (apps/accounts/authentication.py); GatewayBasicAuth is declared here
+    # for the dual-auth gateway config endpoint.
+    "SECURITY": [{"BearerAuth": []}],
+    "APPEND_COMPONENTS": {
+        "securitySchemes": {
+            "GatewayBasicAuth": {
+                "type": "http",
+                "scheme": "basic",
+                "description": (
+                    "Gateway device authentication for the zero-touch config "
+                    "endpoint. Username = gateway_slot_id, password = the "
+                    "current MQTT credential."
+                ),
+            }
+        }
+    },
+    "TAGS": [
+        {"name": "Authentication", "description": "Login, token refresh, MFA, sessions."},
+        {"name": "Org Management", "description": "Owner-exclusive member invite/deactivate."},
+        {"name": "Farms & Saloons", "description": "Farm list, saloon detail, operational-state loop, flock cycles."},
+        {"name": "Telemetry", "description": "Saloon/farm sensor reads, hourly analytics, metric catalog."},
+        {"name": "Provisioning & Gateways", "description": "Geography drill-down, gateway requests/review, lifecycle, config, rotation."},
+        {"name": "Alerts & KPI", "description": "Saloon alerts + ack, weight/feed/water intake, biosecurity, capabilities, KPIs, dashboard config."},
+        {"name": "Monitoring", "description": "Public health + hardware-time probes."},
+        {"name": "Ops", "description": "Audit logs, thresholds, photos, gateway reads, password change, sessions."},
+        {"name": "Reports", "description": "Daily saloon reports (DRAFT→SUBMITTED→APPROVED/REJECTED + FLAGGED), vet review."},
+        {"name": "Platform Support", "description": "Staff-scoped support session + whitelisted ops (audited)."},
+        {"name": "Compat", "description": "Flutter compat aliases under /api/compat/v1 (W1–W5 report routes)."},
+    ],
+    "COMPONENT_SPLIT_REQUEST": True,
+    # Drop the legacy /api/ compat twins from the DOCS only (they share view
+    # functions with /api/compat/v1, so per-view exclude would kill both).
+    # add_metrics_scrape_path: /api/v1/metrics/ is a plain Django view
+    # (text/plain scrape — not @api_view) so spectacular can't introspect it.
+    "POSTPROCESSING_HOOKS": [
+        "apps.common.schema_hooks.drop_legacy_compat_aliases",
+        "apps.common.schema_hooks.add_metrics_scrape_path",
+    ],
 }
 
 # ---------------------------------------------------------------------------

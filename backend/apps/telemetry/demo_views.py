@@ -32,6 +32,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from django.db.models import Max
+from drf_spectacular.utils import extend_schema
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -84,6 +85,7 @@ def _group_snapshot(client, stream):
     return {"pending": 0, "last_delivered_id": None, "lag": None}
 
 
+@extend_schema(exclude=True)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def pipeline_status(request):
@@ -101,6 +103,7 @@ def pipeline_status(request):
     })
 
 
+@extend_schema(exclude=True)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def dlq_tail(request):
@@ -120,6 +123,7 @@ def dlq_tail(request):
     return Response({"count": client.xlen(DLQ_STREAM), "entries": entries})
 
 
+@extend_schema(exclude=True)
 @api_view(["GET"])
 @permission_classes([])
 def demo_identity(request):
@@ -185,6 +189,7 @@ def _flock_out(flock, cycle_days: int):
     }
 
 
+@extend_schema(exclude=True)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def farm_topology(request):
@@ -302,6 +307,7 @@ def farm_topology(request):
 # Per-saloon dashboard cards
 # ---------------------------------------------------------------------------
 
+@extend_schema(exclude=True)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def saloon_sensors(request, saloon_id: int):
@@ -361,6 +367,7 @@ def _breaching_metrics(client, saloon_id: int, metrics) -> list:
     return out
 
 
+@extend_schema(exclude=True)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def saloon_stats(request, saloon_id: int):
@@ -412,6 +419,7 @@ def saloon_stats(request, saloon_id: int):
     })
 
 
+@extend_schema(exclude=True)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def emqx_status(request):
@@ -454,6 +462,7 @@ def _ensure_mapping_for_org(org):
     )
 
 
+@extend_schema(exclude=True)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def simulate_reading(request):

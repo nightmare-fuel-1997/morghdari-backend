@@ -19,6 +19,8 @@ it here without a new written decision.
 نقش‌ها؛ عضویت فعال صفر یعنی خطای ۴۰۱ و بدون توکن.
 """
 
+from drf_spectacular.utils import OpenApiExample
+from rest_framework import serializers
 from rest_framework.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
@@ -72,3 +74,256 @@ def resolve_active_membership(user):
         AccountRoleScope.objects.filter(user=user, org=member.org).values_list("role", flat=True)
     )
     return member, sorted({member.role} | extra_roles)
+
+
+# Docs-only DRF mirrors for @extend_schema (never used at runtime).
+# Each mirrors the dict the view builds (_member_out / the support envelopes)
+# and backend/openapi.yaml examples, so the generated schema cannot drift from
+# what the endpoints actually return (contract v1.4.3 + M7-07).
+# ---------------------------------------------------------------------------
+
+
+class LoginRequestSerializer(serializers.Serializer):
+    """LoginRequest — contract v1.4.3 + the v1.7.1 staff MFA field."""
+
+    username = serializers.CharField()
+    password = serializers.CharField(write_only=True, style={"input_type": "password"})
+    mfa_code = serializers.CharField(
+        required=False,
+        help_text=(
+            "Live TOTP code — REQUIRED for platform-staff accounts (v1.7.1, M7-07). "
+            "Tenant accounts omit it."
+        ),
+    )
+
+
+class UserProfileSerializer(serializers.Serializer):
+    """The `user` envelope — reuses the claim rule, so it cannot disagree with the token."""
+
+    id = serializers.IntegerField()
+    username = serializers.CharField()
+    roles = serializers.ListField(
+        child=serializers.ChoiceField(
+            choices=["owner", "manager", "engineer", "doctor", "worker", "installer", "reviewer"]
+        ),
+        help_text="Sorted union of the membership role and the account role scopes.",
+    )
+    org_id = serializers.CharField(
+        allow_null=True,
+        required=False,
+        help_text="Null for platform staff — staff tokens are org-less by design (D15).",
+    )
+    org_name = serializers.CharField(allow_null=True, required=False)
+    is_platform_staff = serializers.BooleanField()
+
+
+class LoginResponseSerializer(serializers.Serializer):
+    """LoginResponse — contract keys, NOT SimpleJWT's stock `{access, refresh}`."""
+
+    access_token = serializers.CharField()
+    refresh_token = serializers.CharField()
+    user = UserProfileSerializer()
+
+
+class MfaRequiredSerializer(serializers.Serializer):
+    """403 body for a platform-staff login without a valid TOTP code."""
+
+    error = serializers.CharField(help_text='Always "mfa_required".')
+    detail = serializers.CharField(
+        help_text='Enrollment hint: verify a code, or run /auth/mfa/setup/ when unenrolled.'
+    )
+    enrolled = serializers.BooleanField(help_text="Whether a confirmed enrollment exists.")
+
+
+class RefreshRequestSerializer(serializers.Serializer):
+    """RefreshRequest — the stock key name `refresh` is contractual."""
+
+    refresh = serializers.CharField(help_text="The refresh token issued at login.")
+
+
+class RefreshResponseSerializer(serializers.Serializer):
+    """RefreshResponse — stock `{access}` ONLY (the asymmetry with login is contractual).
+
+    The new access is minted from CURRENT DB truth: a deactivated member gets
+    an org-less access token instead of their old org's claims (C-14)."""
+
+    access = serializers.CharField(help_text="Fresh access token (15 min).")
+
+
+class MemberOutSerializer(serializers.Serializer):
+    """OrgMemberOut — one row of GET /org/members/ and the invite responses."""
+
+    member_id = serializers.IntegerField(help_text="OrgMember row id.")
+    user_id = serializers.IntegerField(help_text="User id (stable across memberships).")
+    username = serializers.CharField()
+    role = serializers.CharField(help_text="Base org role from the membership row.")
+    is_active = serializers.BooleanField(
+        help_text="Soft-off flag: deactivated members stay as rows (never deleted)."
+    )
+    joined_at = serializers.CharField(allow_null=True, required=False, help_text="ISO Z.")
+
+
+class MemberInviteRequestSerializer(serializers.Serializer):
+    """OrgMemberInviteRequest — owner-exclusive invite/reactivate body."""
+
+    username = serializers.CharField(help_text="Existing user is reused; a new one is created with an unusable password.")
+    role = serializers.ChoiceField(
+        choices=["owner", "manager", "engineer", "doctor", "worker", "installer"]
+    )
+
+
+class MemberDeactivateResponseSerializer(serializers.Serializer):
+    is_active = serializers.BooleanField(help_text="Always false — the soft-off result.")
+
+
+class SupportSessionRequestSerializer(serializers.Serializer):
+    """/platform/support/session/ body — staff-not-superuser only."""
+
+    org_id = serializers.UUIDField(help_text="Target organization UUID; unknown values are a 400, never a hint.")
+    incident_id = serializers.CharField(
+        max_length=64, help_text="MANDATORY audit anchor — a blank value is a 400."
+    )
+    reason = serializers.CharField(
+        required=False, allow_blank=True, help_text="Free-text context stored on the SUPPORT_ORG_ENTER audit row."
+    )
+
+
+class SupportSessionResponseSerializer(serializers.Serializer):
+    """Scoped support token — 15 minutes, claims add org_id + support_session + incident_id."""
+
+    access_token = serializers.CharField(help_text="Short-lived, org-scoped Bearer token.")
+    org_id = serializers.CharField(help_text="The org the session is scoped to.")
+    incident_id = serializers.CharField()
+    expires_in_sec = serializers.IntegerField(help_text="Always 900 (15 minutes).")
+
+
+class MfaSetupResponseSerializer(serializers.Serializer):
+    """TOTP enrollment secret; login stays blocked until /mfa/confirm/."""
+
+    secret = serializers.CharField(help_text="Base32/hex secret for the authenticator app.")
+    otpauth_uri = serializers.CharField(help_text="otpauth:// URI to scan.")
+    confirmed = serializers.BooleanField(help_text="False until a live code is verified.")
+
+
+class MfaConfirmRequestSerializer(serializers.Serializer):
+    code = serializers.CharField(help_text="Current TOTP code from the enrolled device.")
+
+
+class MfaConfirmResponseSerializer(serializers.Serializer):
+    confirmed = serializers.BooleanField(help_text="True once the enrollment row is confirmed.")
+
+
+class SupportGatewayProvisioningRequestSerializer(serializers.Serializer):
+    """Suspend/resume one gateway inside the session org."""
+
+    action = serializers.ChoiceField(choices=["suspend", "resume"])
+    reason = serializers.CharField(
+        required=False, allow_blank=True, help_text="Stored on the audit row (defaults to 'support suspension')."
+    )
+
+
+class SupportGatewayProvisioningResponseSerializer(serializers.Serializer):
+    gateway_slot_id = serializers.CharField(help_text="Gateway the op was applied to.")
+    provisioning_status = serializers.CharField(
+        help_text="Status after the op: SUSPENDED on suspend, the prior status on resume."
+    )
+
+
+class SupportForceResolveRequestSerializer(serializers.Serializer):
+    reason = serializers.CharField(help_text="MANDATORY runbook defect reference — a blank value is a 400.")
+
+
+class SupportForceResolveResponseSerializer(serializers.Serializer):
+    alert_id = serializers.CharField(help_text="Stringified alert uuid.")
+    resolved = serializers.BooleanField(help_text="True once the alert is resolved.")
+    idempotent = serializers.BooleanField(
+        required=False, help_text="Present (true) only when the alert was already resolved."
+    )
+
+
+class SupportTaskDispatchRequestSerializer(serializers.Serializer):
+    """Whitelisted maintenance task — anything else is a 400."""
+
+    task = serializers.ChoiceField(
+        choices=["drain_pending_approval", "rebuild_threshold_cache", "rebuild_zone_cache"]
+    )
+    reason = serializers.CharField(help_text="MANDATORY justification — a blank value is a 400.")
+    gateway_slot_id = serializers.CharField(
+        required=False,
+        help_text="Required for drain_pending_approval; must belong to the session org.",
+    )
+
+
+class SupportTaskDispatchResponseSerializer(serializers.Serializer):
+    task = serializers.CharField(help_text="Echo of the dispatched task.")
+    dispatched = serializers.CharField(help_text="Human-readable outcome of the dispatch.")
+
+
+LOGIN_REQUEST_EXAMPLE = OpenApiExample(
+    "Tenant login",
+    request_only=True,
+    value={"username": "tom@goldenegg.com", "password": "farm-floor-2026"},
+)
+
+LOGIN_RESPONSE_EXAMPLE = OpenApiExample(
+    "Login response",
+    response_only=True,
+    value={
+        "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9…",
+        "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9…",
+        "user": {
+            "id": 9,
+            "username": "tom@goldenegg.com",
+            "roles": ["owner", "doctor"],
+            "org_id": "1f0c3a54-6f2b-4c9d-9d5e-2b7f4a1c8e30",
+            "org_name": "Golden Egg",
+            "is_platform_staff": False,
+        },
+    },
+)
+
+MEMBER_INVITE_EXAMPLE = OpenApiExample(
+    "Invite an engineer",
+    request_only=True,
+    value={"username": "sara.engineer", "role": "engineer"},
+)
+
+MEMBER_OUT_EXAMPLE = OpenApiExample(
+    "Member row",
+    response_only=True,
+    value={
+        "member_id": 18,
+        "user_id": 42,
+        "username": "sara.engineer",
+        "role": "engineer",
+        "is_active": True,
+        "joined_at": "2026-08-18T09:14:02Z",
+    },
+)
+
+SUPPORT_SESSION_REQUEST_EXAMPLE = OpenApiExample(
+    "Open a support session",
+    request_only=True,
+    value={"org_id": "1f0c3a54-6f2b-4c9d-9d5e-2b7f4a1c8e30", "incident_id": "INC-2041", "reason": "NH3 sensor stuck"},
+)
+
+SUPPORT_SESSION_RESPONSE_EXAMPLE = OpenApiExample(
+    "Scoped session token",
+    response_only=True,
+    value={
+        "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9…",
+        "org_id": "1f0c3a54-6f2b-4c9d-9d5e-2b7f4a1c8e30",
+        "incident_id": "INC-2041",
+        "expires_in_sec": 900,
+    },
+)
+
+MFA_SETUP_RESPONSE_EXAMPLE = OpenApiExample(
+    "Fresh TOTP enrollment",
+    response_only=True,
+    value={
+        "secret": "JBSWY3DPEHPK3PXP",
+        "otpauth_uri": "otpauth://totp/Morghdari:support%40morghdari.com?secret=JBSWY3DPEHPK3PXP&issuer=Morghdari",
+        "confirmed": False,
+    },
+)

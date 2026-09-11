@@ -33,6 +33,7 @@ from zoneinfo import ZoneInfo
 
 from django.db import transaction
 from django.utils import timezone
+from drf_spectacular.utils import OpenApiExample, OpenApiParameter, extend_schema
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -40,6 +41,7 @@ from rest_framework.response import Response
 
 from apps.accounts.permissions import _claims
 from apps.auditing.models import AccountActivityLog
+from apps.common.schemas import ERROR_RESPONSES, TAG_REPORTS
 from apps.farms.models import Saloon
 from apps.reports.models import (
     DailyReport,
@@ -47,6 +49,14 @@ from apps.reports.models import (
     ReportMedicationUsage,
     SupportTicket,
     VetMedicationCatalog,
+)
+from apps.reports.serializers import (
+    ReportCreateSerializer,
+    ReportDetailSerializer,
+    ReportEditSerializer,
+    ReportListItemSerializer,
+    ReportSingleSerializer,
+    VetReviewRequestSerializer,
 )
 from apps.telemetry.models import FlockCycle
 
@@ -363,6 +373,141 @@ def _create_medication_rows(report: DailyReport, medications: list[dict]) -> Non
         )
 
 
+@extend_schema(
+    methods=["GET"],
+    tags=[TAG_REPORTS],
+    operation_id="list_saloon_reports",
+    summary="List daily reports for a saloon",
+    description="""Bare merged list (newest first — **no** `{results, count}` envelope).
+
+**State machine:** `DRAFT → SUBMITTED → APPROVED / REJECTED`, plus the
+`FLAGGED` branch — a report created **with** medication lines lands in
+`FLAGGED` atomically with an auto medical support ticket and a WS push to
+the org's doctor. The `reviewer` role is **read-only** org-wide here
+(no approve/reject). Rows are RLS-scoped to the caller's org.
+
+**Merge keys (v1.7.0):** every item appends the extras keys (`bird_count`,
+`avg_temperature_c`, `avg_humidity_pct`, `ventilation_status`,
+`health_status`, `checklist{feed, water, device}`) plus `is_completed`
+(`true` when `APPROVED`).
+
+Optional `from`/`to` narrow the calendar window; `status` filters one
+exact status (`?status=incomplete` exists only on the W1 compat alias).""",
+    parameters=[
+        OpenApiParameter(
+            "saloon_id", int, OpenApiParameter.PATH, description="Saloon id (caller's org)."
+        ),
+        OpenApiParameter(
+            "from",
+            str,
+            OpenApiParameter.QUERY,
+            required=False,
+            description="Window start, calendar day `YYYY-MM-DD` (inclusive).",
+        ),
+        OpenApiParameter(
+            "to",
+            str,
+            OpenApiParameter.QUERY,
+            required=False,
+            description="Window end, calendar day `YYYY-MM-DD` (inclusive).",
+        ),
+        OpenApiParameter(
+            "status",
+            str,
+            OpenApiParameter.QUERY,
+            required=False,
+            enum=["DRAFT", "SUBMITTED", "FLAGGED", "APPROVED", "REJECTED"],
+            description="Filter to one exact status.",
+        ),
+    ],
+    request=None,
+    responses={200: ReportListItemSerializer(many=True), **ERROR_RESPONSES},
+)
+@extend_schema(
+    methods=["POST"],
+    tags=[TAG_REPORTS],
+    operation_id="create_saloon_report",
+    summary="Submit a daily report",
+    description="""Requires an **engineer+** role (`reviewer` is read-only).
+**One** row per `(flock, saloon, report_date)` — a duplicate is a 400.
+
+**FLAGGED branch (D24-8):** any `medications` entry forces
+`status=FLAGGED` atomically with an auto `support_tickets` row
+(`category=medical`, assigned to the org's first active doctor) and a WS
+push to the org's reports group. Reporter is always the **JWT user**
+(`submitted_by=request.user`) — never client input.
+
+**Merge inputs (v1.7.0):** Flutter names are input-only aliases
+(`casualties_today→mortality_count`, `feed_consumed_kg→feed_kg`,
+`water_consumed_l→water_l`, `avg_sample_weight_g→avg_weight_g`,
+`is_draft→status`, Persian ventilation/health literals→English enums),
+normalized server-side; both-names-sent with different values is a 400
+naming the field. New extras fields persist to the 1:1 side table; a
+`SUBMITTED` target with an incomplete checklist is a 400.""",
+    parameters=[
+        OpenApiParameter(
+            "saloon_id", int, OpenApiParameter.PATH, description="Saloon id (caller's org)."
+        ),
+    ],
+    request=ReportCreateSerializer,
+    responses={201: ReportSingleSerializer, **ERROR_RESPONSES},
+    examples=[
+        OpenApiExample(
+            "Submitted report",
+            value={
+                "flock_id": 12,
+                "report_date": "2026-09-04",
+                "mortality_count": 3,
+                "feed_kg": 125.5,
+                "water_l": 210.0,
+                "avg_weight_g": 1850.0,
+                "status": "SUBMITTED",
+                "bird_count": 5000,
+                "avg_temperature_c": 24.5,
+                "avg_humidity_pct": 60.0,
+                "ventilation_status": "STABLE",
+                "health_status": "NORMAL",
+                "checklist": {"feed": True, "water": True, "device": True},
+                "notes": "Evening round: all lines nominal.",
+            },
+            request_only=True,
+        ),
+        OpenApiExample(
+            "Created report",
+            value={
+                "id": 44,
+                "report_date": "2026-09-04",
+                "mortality_count": 3,
+                "feed_kg": 125.5,
+                "water_l": 210.0,
+                "avg_weight_g": 1850.0,
+                "status": "SUBMITTED",
+                "bird_count": 5000,
+                "avg_temperature_c": 24.5,
+                "avg_humidity_pct": 60.0,
+                "ventilation_status": "STABLE",
+                "health_status": "NORMAL",
+                "checklist": {"feed": True, "water": True, "device": True},
+                "is_completed": False,
+                "farm_id": 7,
+                "saloon_id": 21,
+                "flock_id": 12,
+                "notes": "Evening round: all lines nominal.",
+                "submitted_by": 9,
+                "submitted_at": "2026-09-04T19:42:00Z",
+                "reported_by": 9,
+                "reported_at": "2026-09-04T19:42:00Z",
+                "reviewed_by": None,
+                "reviewed_at": None,
+                "review_note": None,
+                "vet_approved_by": None,
+                "vet_approved_at": None,
+                "medications": [],
+            },
+            response_only=True,
+        ),
+    ],
+)
 @api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated])
 def saloon_reports(request, saloon_id: int):
@@ -475,6 +620,34 @@ def saloon_reports(request, saloon_id: int):
     return Response(_report_single(report), status=status.HTTP_201_CREATED)
 
 
+@extend_schema(
+    tags=[TAG_REPORTS],
+    operation_id="get_saloon_report_by_date",
+    summary="Fetch one saloon report by calendar day",
+    description="""Flutter calendar day-selection (§3): the merged single object for that
+`report_date`, or 404 when the day has no report.
+
+Verdicts: `400` malformed date (`report_date must be YYYY-MM-DD`) or more than
+one report on that day; `404` `{"error": "not found"}`; and the C-14 rule — a
+foreign/unknown saloon answers an **empty 200** `{"results": [], "count": 0}`,
+never a 404 that would confirm the saloon exists.""",
+    parameters=[
+        OpenApiParameter(
+            "saloon_id", int, OpenApiParameter.PATH, description="Saloon id (caller's org)."
+        ),
+        OpenApiParameter(
+            "report_date",
+            str,
+            OpenApiParameter.PATH,
+            description="Calendar day in Asia/Tehran, `YYYY-MM-DD`.",
+        ),
+    ],
+    request=None,
+    responses={
+        200: ReportSingleSerializer,
+        **ERROR_RESPONSES,
+    },
+)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def saloon_report_by_date(request, saloon_id: int, report_date: str):
@@ -529,6 +702,38 @@ def _open_medical_ticket(request, report: DailyReport, medications: list[dict]) 
     return ticket.id
 
 
+@extend_schema(
+    tags=[TAG_REPORTS],
+    operation_id="edit_saloon_report",
+    summary="Edit a daily report (same-day only)",
+    description="""Requires engineer+ (staff on an active support session are exempt,
+see below). Flutter aliases are accepted exactly like POST, folded
+server-side; both-names-sent with different values is a 400 naming the field.
+
+**Time-lock (D24-3):** editable on the report's own calendar day only,
+Asia/Tehran, cutoff **00:00 sharp, no grace**. Past midnight a normal caller
+gets 403; platform staff on an active §4.5 support session may still edit and
+the write lands in the audit log as `REPORT_ADMIN_EDIT` with the incident id.
+
+Verdicts: 403 already-reviewed (APPROVED/REJECTED verdicts are immutable
+outside vet-review), already-reviewed reports, closed window and missing role;
+400 non-negative `mortality_count`, `status` outside DRAFT/SUBMITTED, or an
+incomplete checklist on a SUBMITTED target (the §4 gate — it fires once the
+merge surface is in play, so pure-legacy canonical PATCHes stay ungated).
+`flock_id`/`report_date` are immutable here; `updated` is not a field.
+
+Returns the merged single object (`_report_single`).""",
+    parameters=[
+        OpenApiParameter(
+            "report_id", int, OpenApiParameter.PATH, description="Report id (caller's org)."
+        )
+    ],
+    request=ReportEditSerializer,
+    responses={
+        200: ReportSingleSerializer,
+        **ERROR_RESPONSES,
+    },
+)
 @api_view(["PATCH"])
 @permission_classes([IsAuthenticated])
 def report_edit(request, report_id: int):
@@ -634,6 +839,33 @@ def report_edit(request, report_id: int):
     return Response(_report_single(report))
 
 
+@extend_schema(
+    tags=[TAG_REPORTS],
+    operation_id="vet_review_saloon_report",
+    summary="Vet-review a report (approve/reject)",
+    description="""The doctor/reviewer verdict surface: only a SUBMITTED or FLAGGED report
+is reviewable (`reviewer` alone cannot write anything else — the read-only role
+keeps its read-only guarantee here).
+
+`decision` must be `APPROVED` or `REJECTED`; `review_note` is optional free
+text stored verbatim. The verdict, reviewer and timestamp are written together
+and `APPROVED` is what makes `is_completed` true on the merged reads.
+
+Returns the **v1.5.0 canonical detail body** (`_report_detail`) — the merge
+extras (`bird_count`, checklist, …) stay on the merged list/single surfaces.
+404 covers both "no such report" and "not reviewable", never distinguishing
+the two.""",
+    parameters=[
+        OpenApiParameter(
+            "report_id", int, OpenApiParameter.PATH, description="Report id (caller's org)."
+        )
+    ],
+    request=VetReviewRequestSerializer,
+    responses={
+        200: ReportDetailSerializer,
+        **ERROR_RESPONSES,
+    },
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def report_vet_review(request, report_id: int):

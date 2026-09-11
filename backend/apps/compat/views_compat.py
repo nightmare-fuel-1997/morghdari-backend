@@ -22,13 +22,21 @@ Global error contract: {"error": "<string>"} with the spec §8 codes —
 
 from datetime import datetime as _datetime
 
+from drf_spectacular.utils import OpenApiExample, OpenApiParameter, extend_schema
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.accounts.permissions import _claims
+from apps.common.schemas import TAG_COMPAT, error_responses
 from apps.compat import services_compat as svc
+from apps.compat.serializers import (
+    CompatReportCreateSerializer,
+    CompatReportEditSerializer,
+    CompatReportListItemSerializer,
+    CompatReportSingleSerializer,
+)
 from apps.reports import api as reports_api
 from apps.reports.models import DailyReport
 
@@ -80,6 +88,93 @@ def _merged_report_qs(**filters):
     )
 
 
+_WINDOW_PARAMS = [
+    OpenApiParameter(
+        "from",
+        str,
+        OpenApiParameter.QUERY,
+        required=False,
+        description="Window start, calendar day `YYYY-MM-DD` (inclusive).",
+    ),
+    OpenApiParameter(
+        "to",
+        str,
+        OpenApiParameter.QUERY,
+        required=False,
+        description="Window end, calendar day `YYYY-MM-DD` (inclusive).",
+    ),
+]
+
+_W_EXAMPLE = OpenApiExample(
+    "Merged report list",
+    response_only=True,
+    value=[
+        {
+            "id": 44,
+            "report_date": "2026-09-04",
+            "mortality_count": 3,
+            "feed_kg": 125.5,
+            "water_l": 210.0,
+            "avg_weight_g": 1850.0,
+            "status": "SUBMITTED",
+            "bird_count": 5000,
+            "avg_temperature_c": 24.5,
+            "avg_humidity_pct": 60.0,
+            "ventilation_status": "STABLE",
+            "health_status": "NORMAL",
+            "checklist": {"feed": True, "water": True, "device": True},
+            "is_completed": False,
+        }
+    ],
+)
+
+
+@extend_schema(
+    tags=[TAG_COMPAT],
+    operation_id="compat_report_list",
+    summary="W1 — saloon report list (legacy slugs)",
+    description="""Flutter calendar/history list, delegated verbatim to the canonical
+`GET /api/v1/saloons/{saloon_id}/reports/`: same window semantics, same
+**bare merged list** (no `{results, count}` envelope).
+
+Slugs resolve through `legacy_slug_map`; a miss, a foreign org, or a
+farm/salon disagreement is always a 404 with `{"error": "not found"}` —
+never a 400 oracle. `from`/`to` are `YYYY-MM-DD`; unparseable is a 400 and
+`from > to` is `400 invalid time window`.
+
+The one compat-only filter: `?status=incomplete` answers DRAFT+SUBMITTED (the
+Flutter dashboard queue), while every other value keeps the canonical
+single-status semantics.""",
+    parameters=[
+        OpenApiParameter(
+            "farmSlug",
+            str,
+            OpenApiParameter.PATH,
+            description="Legacy farm slug (legacy_slug_map).",
+        ),
+        OpenApiParameter(
+            "salonSlug",
+            str,
+            OpenApiParameter.PATH,
+            description="Legacy salon slug — Flutter's single-l spelling.",
+        ),
+        *_WINDOW_PARAMS,
+        OpenApiParameter(
+            "status",
+            str,
+            OpenApiParameter.QUERY,
+            required=False,
+            enum=["incomplete", "DRAFT", "SUBMITTED", "FLAGGED", "APPROVED", "REJECTED"],
+            description="`incomplete` = DRAFT+SUBMITTED; otherwise one exact status.",
+        ),
+    ],
+    request=None,
+    responses={
+        200: CompatReportListItemSerializer(many=True),
+        **error_responses(400, 401, 404),
+    },
+    examples=[_W_EXAMPLE],
+)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def compat_report_list(request, farmSlug, salonSlug):
@@ -111,6 +206,40 @@ def compat_report_list(request, farmSlug, salonSlug):
     return reports_api.saloon_reports(request._request, saloon.pk)
 
 
+@extend_schema(
+    tags=[TAG_COMPAT],
+    operation_id="compat_report_by_date",
+    summary="W2 — single report by calendar day (legacy slugs)",
+    description="""Delegates to the canonical single-by-date read: the merged single
+object, 404 when the day has no report, 400 on a malformed date or a
+multi-flock day, and the same `{"error": "not found"}` 404 for unknown or
+foreign slugs.""",
+    parameters=[
+        OpenApiParameter(
+            "farmSlug",
+            str,
+            OpenApiParameter.PATH,
+            description="Legacy farm slug (legacy_slug_map).",
+        ),
+        OpenApiParameter(
+            "salonSlug",
+            str,
+            OpenApiParameter.PATH,
+            description="Legacy salon slug — Flutter's single-l spelling.",
+        ),
+        OpenApiParameter(
+            "report_date",
+            str,
+            OpenApiParameter.PATH,
+            description="Calendar day in Asia/Tehran, `YYYY-MM-DD`.",
+        ),
+    ],
+    request=None,
+    responses={
+        200: CompatReportSingleSerializer,
+        **error_responses(400, 401, 404),
+    },
+)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def compat_report_by_date(request, farmSlug, salonSlug, report_date):
@@ -122,6 +251,40 @@ def compat_report_by_date(request, farmSlug, salonSlug, report_date):
     return reports_api.saloon_report_by_date(request._request, saloon.pk, report_date)
 
 
+@extend_schema(
+    tags=[TAG_COMPAT],
+    operation_id="compat_farm_report_list",
+    summary="W5 — farm-wide report queue (legacy slug)",
+    description="""Farm-level dashboard queue: every saloon of the farm, same window
+validation and bare merged list as W1.
+
+`?status=incomplete` narrows to DRAFT+SUBMITTED (the Flutter queue); any other
+value is passed through as one exact status, so native enum values keep working
+unchanged. Unknown/foreign farm slug → 404 `{"error": "not found"}`.""",
+    parameters=[
+        OpenApiParameter(
+            "farmSlug",
+            str,
+            OpenApiParameter.PATH,
+            description="Legacy farm slug (legacy_slug_map).",
+        ),
+        *_WINDOW_PARAMS,
+        OpenApiParameter(
+            "status",
+            str,
+            OpenApiParameter.QUERY,
+            required=False,
+            enum=["incomplete", "DRAFT", "SUBMITTED", "FLAGGED", "APPROVED", "REJECTED"],
+            description="`incomplete` = DRAFT+SUBMITTED; otherwise one exact status.",
+        ),
+    ],
+    request=None,
+    responses={
+        200: CompatReportListItemSerializer(many=True),
+        **error_responses(400, 401, 404),
+    },
+    examples=[_W_EXAMPLE],
+)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def compat_farm_report_list(request, farmSlug):
@@ -148,6 +311,41 @@ def compat_farm_report_list(request, farmSlug):
     return Response([reports_api._report_list_item(r) for r in qs])
 
 
+@extend_schema(
+    tags=[TAG_COMPAT],
+    operation_id="compat_report_create",
+    summary="W3 — submit a report (legacy slugs)",
+    description="""The reports-only compat-write exception. The body carries
+`farm_slug` + `salon_slug` **in addition to** the canonical/alias report
+fields; both slugs are required (400 when missing) and must agree — the
+salon must belong to the farm, a mismatch is a 404, never a 400 oracle.
+
+After resolution the request is handed to the canonical
+`POST /api/v1/saloons/{saloon_id}/reports/`, so Flutter aliases, the
+SUBMITTED-checklist gate, the FLAGGED auto medical ticket and
+`submitted_by = JWT user` all ride along untouched. There is no
+`reporter`/`reported_by` request key — client-sent values are ignored.""",
+    request=CompatReportCreateSerializer,
+    responses={
+        201: CompatReportSingleSerializer,
+        **error_responses(400, 401, 403, 404),
+    },
+    examples=[
+        OpenApiExample(
+            "Flutter write",
+            request_only=True,
+            value={
+                "farm_slug": "morghdari-north",
+                "salon_slug": "salon-a1",
+                "flock_id": 12,
+                "report_date": "2026-09-09",
+                "casualties_today": 1,
+                "is_draft": True,
+                "checklist": {"feed": True, "water": True, "device": True},
+            },
+        )
+    ],
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def compat_report_create(request):
@@ -175,6 +373,25 @@ def compat_report_create(request):
     return reports_api.saloon_reports(request._request, saloon.pk)
 
 
+@extend_schema(
+    tags=[TAG_COMPAT],
+    operation_id="compat_report_edit",
+    summary="W4 — edit a report (legacy route)",
+    description="""Delegates to the canonical PATCH: aliases accepted, the Asia/Tehran
+same-day time-lock enforced (00:00 sharp, no grace), the checklist gate
+scoped to the merge surface, and the staff-exempt path still audited as
+`REPORT_ADMIN_EDIT`. Returns the merged single object.""",
+    parameters=[
+        OpenApiParameter(
+            "report_id", int, OpenApiParameter.PATH, description="Report id (caller's org)."
+        )
+    ],
+    request=CompatReportEditSerializer,
+    responses={
+        200: CompatReportSingleSerializer,
+        **error_responses(400, 401, 403, 404),
+    },
+)
 @api_view(["PATCH"])
 @permission_classes([IsAuthenticated])
 def compat_report_edit(request, report_id):

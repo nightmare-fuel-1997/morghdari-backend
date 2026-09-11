@@ -13,6 +13,7 @@ cross-org acknowledge is a 404 (nothing to acknowledge).
 ردیف و کلیدِ ردیس را یک‌جا می‌نویسد.
 """
 
+from drf_spectacular.utils import OpenApiExample, OpenApiParameter, extend_schema
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -20,6 +21,15 @@ from rest_framework.response import Response
 
 from apps.accounts.permissions import _claims
 from apps.alerts.models import AlertInstance
+from apps.alerts.serializers import (
+    ALERT_ACK_REQUEST_EXAMPLE,
+    ALERT_ACK_RESPONSE_EXAMPLE,
+    ALERT_LIST_RESPONSE_EXAMPLE,
+    AlertAcknowledgeRequestSerializer,
+    AlertAcknowledgeResponseSerializer,
+    SaloonAlertsResponseSerializer,
+)
+from apps.common.schemas import TAG_ALERTS, error_responses
 from apps.alerts.services.ack import acknowledge_alert as acknowledge_service
 from apps.alerts.services.ack import pause_minutes
 
@@ -49,6 +59,47 @@ def _alert_out(row: AlertInstance) -> dict:
 # ---------------------------------------------------------------------------
 # GET /saloons/{saloon_id}/alerts/
 # ---------------------------------------------------------------------------
+@extend_schema(
+    tags=[TAG_ALERTS],
+    operation_id="list_saloon_alerts",
+    summary="List alerts for a saloon",
+    description="""Active alerts (default) or the full history for one saloon.
+Newest-first by `triggered_at`; rows are RLS-scoped to the caller's org.
+
+Filters: `status=ACTIVE` (default, `resolved_at IS NULL`) or `status=ALL`;
+`source=REALTIME|REPLAY_ANALYSIS` narrows the lane. Anything else is a 400 —
+a typo must never silently widen a page.
+
+A foreign/unknown `saloon_id` is an **empty 200**, never a 404 (C-14: ids
+outside the caller's org are never distinguished from unknown ids).""",
+    parameters=[
+        OpenApiParameter(
+            "saloon_id", int, OpenApiParameter.PATH, description="Saloon id (caller's org)."
+        ),
+        OpenApiParameter(
+            "status",
+            str,
+            OpenApiParameter.QUERY,
+            required=False,
+            enum=["ACTIVE", "ALL"],
+            description="ACTIVE (default) skips resolved rows; ALL returns the history.",
+        ),
+        OpenApiParameter(
+            "source",
+            str,
+            OpenApiParameter.QUERY,
+            required=False,
+            enum=["REALTIME", "REPLAY_ANALYSIS"],
+            description="Restrict to one alert source lane.",
+        ),
+    ],
+    request=None,
+    responses={
+        200: SaloonAlertsResponseSerializer,
+        **error_responses(400, 401),
+    },
+    examples=[ALERT_LIST_RESPONSE_EXAMPLE],
+)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def saloon_alerts(request, saloon_id: int):
@@ -81,6 +132,35 @@ def saloon_alerts(request, saloon_id: int):
 # ---------------------------------------------------------------------------
 # POST /alerts/{alert_id}/acknowledge/
 # ---------------------------------------------------------------------------
+@extend_schema(
+    tags=[TAG_ALERTS],
+    operation_id="acknowledge_alert",
+    summary="Acknowledge an alert",
+    description="""Writes the acknowledgement row and the Redis escalation-pause key
+in one transaction (M4-06 service). Allowed for `worker`/`engineer`/`manager`/
+`owner` — a bare reader cannot pause an escalation.
+
+Acknowledging pauses **escalation** for the configured window (default
+10 minutes, `system_configuration`); it does not resolve the alert or hide a
+Tier-1 velocity breach from the paging paths (Decision 10: NH3 and temp
+velocity always page).
+
+Cross-org ids are a 404 — nothing to acknowledge, never an oracle.""",
+    parameters=[
+        OpenApiParameter(
+            "alert_id",
+            str,
+            OpenApiParameter.PATH,
+            description="Alert instance id (uuid).",
+        )
+    ],
+    request=AlertAcknowledgeRequestSerializer,
+    responses={
+        200: AlertAcknowledgeResponseSerializer,
+        **error_responses(401, 403, 404),
+    },
+    examples=[ALERT_ACK_REQUEST_EXAMPLE, ALERT_ACK_RESPONSE_EXAMPLE],
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def alert_acknowledge(request, alert_id):

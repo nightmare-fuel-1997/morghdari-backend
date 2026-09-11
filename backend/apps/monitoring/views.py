@@ -18,11 +18,15 @@ import time
 
 from django.db import connection
 from django.http import HttpResponse
+from drf_spectacular.utils import OpenApiExample, OpenApiResponse, extend_schema
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+
+from apps.common.schemas import TAG_MONITORING
+from apps.monitoring.serializers import HardwareTimeSerializer, HealthResponseSerializer
 
 APP_VERSION = "0.7"  # bumped by the v0.7 DoD sweep (F5, 2026-09-10 re-verify: health still said 0.6)
 
@@ -75,6 +79,58 @@ def _redis_probe() -> dict:
         return {"status": "error", "ping_ms": None, "detail": str(exc)[:200]}
 
 
+@extend_schema(
+    tags=[TAG_MONITORING],
+    operation_id="health_check",
+    summary="Service health probe",
+    description="""Public, unauthenticated health check (load balancers and the
+monitoring stack call it): database + Redis probes.
+
+`healthy` → 200; `degraded` → **503** when the DATABASE probe fails (the app
+cannot serve) or the REDIS probe fails (the alert/telemetry stack cannot
+function — a broker-less farm is sick, not fine).
+
+Gauges whose producers do not exist yet stay `null` — an honest "not measured
+here", never a fabricated zero (D22/D23 degradation rule):
+`redis.queue_depth.pending_approval`, `redis.memory_usage_mb`,
+`redis.insert_buffer_length`, `subscriber.group_members`, `celery.*`.""",
+    auth=[],
+    request=None,
+    responses={
+        200: HealthResponseSerializer,
+        503: OpenApiResponse(
+            response=HealthResponseSerializer,
+            description="Degraded — the database or Redis probe failed.",
+        ),
+    },
+    examples=[
+        OpenApiExample(
+            "Healthy",
+            response_only=True,
+            value={
+                "status": "healthy",
+                "version": APP_VERSION,
+                "timestamp": "2026-09-06T12:00:00Z",
+                "services": {
+                    "database": {"status": "ok", "latency_ms": 0.42},
+                    "redis": {
+                        "status": "ok",
+                        "ping_ms": 0.31,
+                        "queue_depth": {
+                            "realtime": 0,
+                            "historical": 12,
+                            "pending_approval": None,
+                        },
+                        "memory_usage_mb": None,
+                        "insert_buffer_length": None,
+                    },
+                    "subscriber": {"group_members": None},
+                    "celery": {"status": None, "active_workers": None},
+                },
+            },
+        )
+    ],
+)
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def health(request):
@@ -107,6 +163,17 @@ def health(request):
     return Response(body, status=status.HTTP_503_SERVICE_UNAVAILABLE if degraded else status.HTTP_200_OK)
 
 
+@extend_schema(
+    tags=[TAG_MONITORING],
+    operation_id="hardware_time",
+    summary="Server time for hardware NTP fallback",
+    description="""Public, unauthenticated: current server time in whole unix seconds, so
+device firmware keeps working when its RTC drifts (AU-fix 2026-08-16).
+Rate-limited at nginx; not a DRF-authenticated surface.""",
+    auth=[],
+    request=None,
+    responses={200: HardwareTimeSerializer},
+)
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def hardware_time(request):

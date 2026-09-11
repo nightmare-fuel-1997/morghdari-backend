@@ -37,12 +37,38 @@ from django.db import transaction
 from django.db.models import Sum
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
+from drf_spectacular.utils import OpenApiExample, OpenApiParameter, extend_schema
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.accounts.permissions import _claims
+from apps.alerts.serializers import (
+    DASHBOARD_UPDATE_REQUEST_EXAMPLE,
+    FEED_INTAKE_UPSERT_REQUEST_EXAMPLE,
+    FEED_INTAKE_UPSERT_RESPONSE_EXAMPLE,
+    RESOLVED_DASHBOARD_RESPONSE_EXAMPLE,
+    ROLE_DASHBOARD_RESPONSE_EXAMPLE,
+    SALOON_KPIS_RESPONSE_EXAMPLE,
+    WATER_INTAKE_UPSERT_REQUEST_EXAMPLE,
+    WATER_INTAKE_UPSERT_RESPONSE_EXAMPLE,
+    WEIGHT_SAMPLE_CREATE_EXAMPLE,
+    WEIGHT_SAMPLE_RESPONSE_EXAMPLE,
+    DashboardConfigUpdateRequestSerializer,
+    FeedIntakeEntrySerializer,
+    FeedIntakeUpsertRequestSerializer,
+    FeedIntakeUpsertResponseSerializer,
+    ResolvedDashboardConfigSerializer,
+    RoleDashboardConfigSerializer,
+    SaloonKpisResponseSerializer,
+    WaterIntakeEntrySerializer,
+    WaterIntakeUpsertRequestSerializer,
+    WaterIntakeUpsertResponseSerializer,
+    WeightSampleCreateSerializer,
+    WeightSampleSerializer,
+)
+from apps.common.schemas import TAG_ALERTS, error_responses
 from apps.alerts.models import (
     AlertInstance,
     DashboardConfig,
@@ -164,6 +190,57 @@ def _sample_out(row: FlockWeightSample) -> dict:
 # ---------------------------------------------------------------------------
 # GET/POST /saloons/{saloon_id}/flocks/{flock_id}/weight-samples/
 # ---------------------------------------------------------------------------
+@extend_schema(
+    methods=["GET"],
+    tags=[TAG_ALERTS],
+    operation_id="list_weight_samples",
+    summary="List weight samples for a flock",
+    description="""Newest-first bare list (no envelope); samples recorded by the org's
+staff, `source=manual` in v1 (`device` reserved for weigh stations).
+
+`flock_id` must belong to the org **and** the saloon — a mismatch is a 404
+(never an oracle for another saloon's flock).""",
+    parameters=[
+        OpenApiParameter(
+            "saloon_id", int, OpenApiParameter.PATH, description="Saloon id (caller's org)."
+        ),
+        OpenApiParameter(
+            "flock_id", int, OpenApiParameter.PATH, description="Flock cycle id inside that saloon."
+        ),
+    ],
+    request=None,
+    responses={
+        200: WeightSampleSerializer(many=True),
+        **error_responses(401, 404),
+    },
+    examples=[WEIGHT_SAMPLE_RESPONSE_EXAMPLE],
+)
+@extend_schema(
+    methods=["POST"],
+    tags=[TAG_ALERTS],
+    operation_id="create_weight_sample",
+    summary="Log a weight sample",
+    description="""Manual production entry — requires **engineer+** for the saloon
+(D22 downstream rule: manual entry belongs to the Farm Engineer).
+
+`sample_size` (≥1) and `avg_weight_g` are required; `sampled_at` defaults to
+now, naive input is read as Asia/Tehran. The new sample becomes the FCR
+input, so a weight sample can flip `fcr` from null to a number in `/kpis/`.""",
+    parameters=[
+        OpenApiParameter(
+            "saloon_id", int, OpenApiParameter.PATH, description="Saloon id (caller's org)."
+        ),
+        OpenApiParameter(
+            "flock_id", int, OpenApiParameter.PATH, description="Flock cycle id inside that saloon."
+        ),
+    ],
+    request=WeightSampleCreateSerializer,
+    responses={
+        201: WeightSampleSerializer,
+        **error_responses(400, 401, 403, 404),
+    },
+    examples=[WEIGHT_SAMPLE_CREATE_EXAMPLE, WEIGHT_SAMPLE_RESPONSE_EXAMPLE],
+)
 @api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated])
 def weight_samples(request, saloon_id: int, flock_id: int):
@@ -234,6 +311,53 @@ def weight_samples(request, saloon_id: int, flock_id: int):
 # ---------------------------------------------------------------------------
 # GET/POST /saloons/{saloon_id}/flocks/{flock_id}/feed-intake/
 # ---------------------------------------------------------------------------
+@extend_schema(
+    methods=["GET"],
+    tags=[TAG_ALERTS],
+    operation_id="list_feed_intake",
+    summary="List daily feed intake for a flock",
+    description="""Chronological bare list, **one row per flock per day**. Rows carry
+`source` (`manual` for entries made here; the device lane later adds
+`device` rows) and the consumed kilograms (`feed_kg`).""",
+    parameters=[
+        OpenApiParameter(
+            "saloon_id", int, OpenApiParameter.PATH, description="Saloon id (caller's org)."
+        ),
+        OpenApiParameter(
+            "flock_id", int, OpenApiParameter.PATH, description="Flock cycle id inside that saloon."
+        ),
+    ],
+    request=None,
+    responses={
+        200: FeedIntakeEntrySerializer(many=True),
+        **error_responses(401, 404),
+    },
+)
+@extend_schema(
+    methods=["POST"],
+    tags=[TAG_ALERTS],
+    operation_id="upsert_feed_intake",
+    summary="Record (or correct) a day's feed intake",
+    description="""Engineer+ for the saloon. ONE row per flock per day: re-posting the
+same `entry_date` **updates** the row and audits the correction
+(`feed_intake_correction` activity log with old/new values, D22). The
+response's `corrected` flag says which branch ran — `false` on insert,
+`true` on the audited UPDATE.""",
+    parameters=[
+        OpenApiParameter(
+            "saloon_id", int, OpenApiParameter.PATH, description="Saloon id (caller's org)."
+        ),
+        OpenApiParameter(
+            "flock_id", int, OpenApiParameter.PATH, description="Flock cycle id inside that saloon."
+        ),
+    ],
+    request=FeedIntakeUpsertRequestSerializer,
+    responses={
+        200: FeedIntakeUpsertResponseSerializer,
+        **error_responses(400, 401, 403, 404),
+    },
+    examples=[FEED_INTAKE_UPSERT_REQUEST_EXAMPLE, FEED_INTAKE_UPSERT_RESPONSE_EXAMPLE],
+)
 @api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated])
 def feed_intake(request, saloon_id: int, flock_id: int):
@@ -333,6 +457,65 @@ def feed_intake(request, saloon_id: int, flock_id: int):
 # ---------------------------------------------------------------------------
 # GET/POST /saloons/{saloon_id}/flocks/{flock_id}/water-intake/   (M6-03, v1.4)
 # ---------------------------------------------------------------------------
+@extend_schema(
+    methods=["GET"],
+    tags=[TAG_ALERTS],
+    operation_id="list_water_intake",
+    summary="List daily water intake for a flock",
+    description="""Chronological bare list, **one row per flock per day**, same shape
+family as the feed listing. Optional `from`/`to` (YYYY-MM-DD) narrow the
+calendar window; an unparseable date is ignored, not a 400 (v1.4 semantics).""",
+    parameters=[
+        OpenApiParameter(
+            "saloon_id", int, OpenApiParameter.PATH, description="Saloon id (caller's org)."
+        ),
+        OpenApiParameter(
+            "flock_id", int, OpenApiParameter.PATH, description="Flock cycle id inside that saloon."
+        ),
+        OpenApiParameter(
+            "from",
+            str,
+            OpenApiParameter.QUERY,
+            required=False,
+            description="Window start, calendar day `YYYY-MM-DD` (inclusive).",
+        ),
+        OpenApiParameter(
+            "to",
+            str,
+            OpenApiParameter.QUERY,
+            required=False,
+            description="Window end, calendar day `YYYY-MM-DD` (inclusive).",
+        ),
+    ],
+    request=None,
+    responses={
+        200: WaterIntakeEntrySerializer(many=True),
+        **error_responses(401, 404),
+    },
+)
+@extend_schema(
+    methods=["POST"],
+    tags=[TAG_ALERTS],
+    operation_id="upsert_water_intake",
+    summary="Record (or correct) a day's water intake",
+    description="""The feed-intake twin: engineer+ for the saloon, ONE row per flock per
+day, corrections are audited UPDATEs (`water_intake_correction`) and the
+response carries `corrected` to say which branch ran.""",
+    parameters=[
+        OpenApiParameter(
+            "saloon_id", int, OpenApiParameter.PATH, description="Saloon id (caller's org)."
+        ),
+        OpenApiParameter(
+            "flock_id", int, OpenApiParameter.PATH, description="Flock cycle id inside that saloon."
+        ),
+    ],
+    request=WaterIntakeUpsertRequestSerializer,
+    responses={
+        200: WaterIntakeUpsertResponseSerializer,
+        **error_responses(400, 401, 403, 404),
+    },
+    examples=[WATER_INTAKE_UPSERT_REQUEST_EXAMPLE, WATER_INTAKE_UPSERT_RESPONSE_EXAMPLE],
+)
 @api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated])
 def water_intake(request, saloon_id: int, flock_id: int):
@@ -429,6 +612,63 @@ def water_intake(request, saloon_id: int, flock_id: int):
 # ---------------------------------------------------------------------------
 # GET /saloons/{saloon_id}/kpis/
 # ---------------------------------------------------------------------------
+@extend_schema(
+    tags=[TAG_ALERTS],
+    operation_id="get_saloon_kpis",
+    summary="Compute saloon KPIs (D22)",
+    description="""Per-request KPI bundle — nothing is materialized in v1. The
+`from`/`to` window applies to the **daily** series (mortality days,
+compliance hours); cumulative metrics stay cumulative by definition.
+
+(`flock_id` wins; otherwise the active flock, else the most recent one.)
+
+Metrics are opt-in and repeatable via `metrics=` (CSV of
+`mortality_pct,compliance_pct,fcr,cycle_summary`, default all four); an
+unknown name is a 400 — a typo must not silently produce an empty chart.
+
+Honesty rule: `fcr` stays **null** until BOTH a weight sample and feed data
+exist for the flock — it is never reported as 0, and `compliance_pct` counts
+only hours that actually have banded readings.""",
+    parameters=[
+        OpenApiParameter(
+            "saloon_id", int, OpenApiParameter.PATH, description="Saloon id (caller's org)."
+        ),
+        OpenApiParameter(
+            "flock_id",
+            int,
+            OpenApiParameter.QUERY,
+            required=False,
+            description="Explicit flock cycle; defaults to the active flock, else the most recent.",
+        ),
+        OpenApiParameter(
+            "metrics",
+            str,
+            OpenApiParameter.QUERY,
+            required=False,
+            description="CSV subset of mortality_pct,compliance_pct,fcr,cycle_summary (default: all).",
+        ),
+        OpenApiParameter(
+            "from",
+            str,
+            OpenApiParameter.QUERY,
+            required=False,
+            description="Daily-series window start, `YYYY-MM-DD` (inclusive).",
+        ),
+        OpenApiParameter(
+            "to",
+            str,
+            OpenApiParameter.QUERY,
+            required=False,
+            description="Daily-series window end, `YYYY-MM-DD` (inclusive).",
+        ),
+    ],
+    request=None,
+    responses={
+        200: SaloonKpisResponseSerializer,
+        **error_responses(400, 401, 404),
+    },
+    examples=[SALOON_KPIS_RESPONSE_EXAMPLE],
+)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def saloon_kpis(request, saloon_id: int):
@@ -579,6 +819,39 @@ def _validate_widgets(raw) -> dict | None:
     return widgets
 
 
+@extend_schema(
+    methods=["GET"],
+    tags=[TAG_ALERTS],
+    operation_id="get_me_dashboard_config",
+    summary="My resolved dashboard configuration",
+    description="""The caller's widget set resolved personal → role default → system
+default, with per-widget provenance in `resolved_from`. The role context is
+the highest-precedence role in the claims; no role at all is a 403.""",
+    request=None,
+    responses={
+        200: ResolvedDashboardConfigSerializer,
+        **error_responses(400, 401, 403),
+    },
+    examples=[RESOLVED_DASHBOARD_RESPONSE_EXAMPLE],
+)
+@extend_schema(
+    methods=["PUT"],
+    tags=[TAG_ALERTS],
+    operation_id="update_me_dashboard_config",
+    summary="Update my dashboard configuration",
+    description="""Writes **only** the caller's own personal row for the current role
+context — never a role default. Partial updates are allowed: keys omitted from
+`widgets` keep their current resolution (the payload is merged onto the row).
+
+Keys must come from the system widget catalog and values must be booleans;
+anything else is a 400 rather than a silently dropped preference.""",
+    request=DashboardConfigUpdateRequestSerializer,
+    responses={
+        200: ResolvedDashboardConfigSerializer,
+        **error_responses(400, 401, 403),
+    },
+    examples=[DASHBOARD_UPDATE_REQUEST_EXAMPLE, RESOLVED_DASHBOARD_RESPONSE_EXAMPLE],
+)
 @api_view(["GET", "PUT"])
 @permission_classes([IsAuthenticated])
 def me_dashboard_config(request):
@@ -614,6 +887,54 @@ def me_dashboard_config(request):
     return Response(_resolved_config(org_id, request.user, role))
 
 
+@extend_schema(
+    methods=["GET"],
+    tags=[TAG_ALERTS],
+    operation_id="get_role_dashboard_config",
+    summary="Role default dashboard configuration",
+    description="""The org's role-default widget row. When no row exists the response is
+the built-in system defaults with `is_system_default: true` — the panel always
+has something real to render. Readable by any org member.""",
+    parameters=[
+        OpenApiParameter(
+            "role",
+            str,
+            OpenApiParameter.PATH,
+            enum=DASHBOARD_ROLE_ENUM,
+            description="Role whose default row is being read.",
+        )
+    ],
+    request=None,
+    responses={
+        200: RoleDashboardConfigSerializer,
+        **error_responses(400, 401),
+    },
+    examples=[ROLE_DASHBOARD_RESPONSE_EXAMPLE],
+)
+@extend_schema(
+    methods=["PUT"],
+    tags=[TAG_ALERTS],
+    operation_id="update_role_dashboard_config",
+    summary="Update a role's default dashboard configuration",
+    description="""Owner/admin surface (D22): replaces the org's role-default widget row.
+Unlike the personal PUT this is a **full** row write — the payload is stored as
+sent. Unknown widget keys or non-boolean values are a 400.""",
+    parameters=[
+        OpenApiParameter(
+            "role",
+            str,
+            OpenApiParameter.PATH,
+            enum=DASHBOARD_ROLE_ENUM,
+            description="Role whose default row is being written.",
+        )
+    ],
+    request=DashboardConfigUpdateRequestSerializer,
+    responses={
+        200: RoleDashboardConfigSerializer,
+        **error_responses(400, 401, 403),
+    },
+    examples=[DASHBOARD_UPDATE_REQUEST_EXAMPLE, ROLE_DASHBOARD_RESPONSE_EXAMPLE],
+)
 @api_view(["GET", "PUT"])
 @permission_classes([IsAuthenticated])
 def role_dashboard_config(request, role: str):

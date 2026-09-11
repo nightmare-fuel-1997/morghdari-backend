@@ -30,6 +30,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction as db_transaction
 from django.db.models import Count
 from django.utils import timezone
+from drf_spectacular.utils import OpenApiExample, OpenApiParameter, extend_schema
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import IsAuthenticated
@@ -46,13 +47,41 @@ from apps.devices.models import (
     GatewaySlot,
     SaloonPhoto,
 )
+from apps.common.schemas import RATE_LIMITED_RESPONSE, TAG_OPS, error_responses
 from apps.farms.models import Saloon
 from apps.monitoring import ops_serializers as ser
 from apps.monitoring import ops_services as svc
 from apps.monitoring.ops_throttles import UserRateThrottle3PerMinute
+from apps.monitoring.ops_serializers import (
+    AuditLogListResponseSerializer,
+    GatewayDetailResponseSerializer,
+    GatewayDiagnosticsSerializer,
+    GatewayListResponseSerializer,
+    PasswordChangeRequestSerializer,
+    PasswordChangeResponseSerializer,
+    PhotoItemSerializer,
+    PhotoListResponseSerializer,
+    PhotoUploadRequestSerializer,
+    SessionItemSerializer,
+    SessionRevokeResponseSerializer,
+    ThresholdItemSerializer,
+    ThresholdListResponseSerializer,
+    ThresholdTemplateListResponseSerializer,
+    ThresholdUpdateRequestSerializer,
+)
 from apps.telemetry.models import FlockCycle
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
+
+# O1/O2/O4/O5/O7 share the spec §1 pagination contract (limit ≤ 500, offset ≥ 0).
+_PAGING_PARAMS = [
+    OpenApiParameter(
+        "limit", int, OpenApiParameter.QUERY, required=False, description="Page size (default 50, max 500)."
+    ),
+    OpenApiParameter(
+        "offset", int, OpenApiParameter.QUERY, required=False, description="Page start (default 0)."
+    ),
+]
 
 
 def _org_claim(request) -> str | None:
@@ -96,6 +125,51 @@ def _iso(dt) -> str | None:
 # ---------------------------------------------------------------------------
 
 
+@extend_schema(
+    tags=[TAG_OPS],
+    operation_id="list_audit_logs",
+    summary="O1 — org audit log (owner, manager)",
+    description="""Newest-first `{results, count}` page of the org's activity log
+(`created_at` ← `AccountActivityLog.timestamp`). Row objects are contract
+shapes; `details` is the free-form action payload.
+
+Filters: `actor_id`, `action`, `farm_id`, `saloon_id`, `from`/`to` (ISO Z).
+A malformed scalar — including a non-numeric id or an unparseable timestamp
+— is a 400 `invalid pagination`, never a silent full-table answer.""",
+    parameters=[
+        *_PAGING_PARAMS,
+        OpenApiParameter("actor_id", int, OpenApiParameter.QUERY, required=False, description="Filter to one acting user."),
+        OpenApiParameter("action", str, OpenApiParameter.QUERY, required=False, description="Exact action code, e.g. THRESHOLD_UPDATED."),
+        OpenApiParameter("farm_id", int, OpenApiParameter.QUERY, required=False, description="Filter to one farm (int PK)."),
+        OpenApiParameter("saloon_id", int, OpenApiParameter.QUERY, required=False, description="Filter to one saloon (int PK)."),
+        OpenApiParameter("from", str, OpenApiParameter.QUERY, required=False, description="ISO Z timestamp window start (timestamp ≥)."),
+        OpenApiParameter("to", str, OpenApiParameter.QUERY, required=False, description="ISO Z timestamp window end (timestamp ≤)."),
+    ],
+    request=None,
+    responses={
+        200: AuditLogListResponseSerializer,
+        **error_responses(400, 401, 403),
+    },
+    examples=[
+        OpenApiExample(
+            "Audit page",
+            response_only=True,
+            value={
+                "results": [
+                    {
+                        "id": "812",
+                        "actor_id": 42,
+                        "username": "engineer_a",
+                        "action": "THRESHOLD_UPDATED",
+                        "details": {"rule_id": 7, "metric": "temp", "min_value": 20.0, "max_value": 26.5},
+                        "created_at": "2026-08-18T09:14:02Z",
+                    }
+                ],
+                "count": 1,
+            },
+        )
+    ],
+)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def audit_logs(request):
@@ -124,6 +198,41 @@ def audit_logs(request):
 # ---------------------------------------------------------------------------
 
 
+@extend_schema(
+    tags=[TAG_OPS],
+    operation_id="list_thresholds",
+    summary="O2 — threshold rules (engineer+)",
+    description="""`{results, count}` page of the caller's org template rules **plus** the
+global built-in catalog (`template.org IS NULL`); a foreign org's template
+rules are invisible here and 404 on O3.
+
+The rule's `min`/`max` are the contract keys; `day_from`/`day_to` bound the
+flock-age window. Filter by `metric_key`; `saloon_id` narrows to the rules of
+the templates matching that saloon's ACTIVE flock breed — a saloon with no
+active flock is an **empty 200** `{"results": [], "count": 0}`.""",
+    parameters=[
+        *_PAGING_PARAMS,
+        OpenApiParameter(
+            "metric_key",
+            str,
+            OpenApiParameter.QUERY,
+            required=False,
+            description="Filter to one metric (source column: metric).",
+        ),
+        OpenApiParameter(
+            "saloon_id",
+            int,
+            OpenApiParameter.QUERY,
+            required=False,
+            description="Narrow to the templates matching that saloon's active flock breed.",
+        ),
+    ],
+    request=None,
+    responses={
+        200: ThresholdListResponseSerializer,
+        **error_responses(400, 401, 403),
+    },
+)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def thresholds(request):
@@ -170,6 +279,38 @@ def thresholds(request):
     )
 
 
+@extend_schema(
+    tags=[TAG_OPS],
+    operation_id="update_threshold",
+    summary="O3 — edit a threshold rule (manager+)",
+    description="""Partial PUT: send `min` and/or `max` (column-name aliases
+`min_value`/`max_value` are accepted too). Rules are **template**-scoped, and
+only the caller's OWN-org templates are writable — global built-in rules stay
+readable via O2 but always 404 here (a shared catalog row must never be
+editable across tenants).
+
+Bounds are metric-keyed (`THRESHOLD_BOUNDS`), the `min < max` rule always
+applies, and an out-of-bounds or non-numeric value is a 400. Every accepted
+edit writes a `THRESHOLD_UPDATED` audit row (visible in O1) in the same
+transaction as the update. Returns the updated rule item.""",
+    parameters=[
+        OpenApiParameter(
+            "rule_id", int, OpenApiParameter.PATH, description="Threshold rule id."
+        )
+    ],
+    request=ThresholdUpdateRequestSerializer,
+    responses={
+        200: ThresholdItemSerializer,
+        **error_responses(400, 401, 403, 404),
+    },
+    examples=[
+        OpenApiExample(
+            "Tighten the temp band",
+            request_only=True,
+            value={"min": 20.0, "max": 26.5},
+        )
+    ],
+)
 @api_view(["PUT"])
 @permission_classes([IsAuthenticated])
 def threshold_update(request, rule_id: int):
@@ -226,6 +367,29 @@ def threshold_update(request, rule_id: int):
 # ---------------------------------------------------------------------------
 
 
+@extend_schema(
+    tags=[TAG_OPS],
+    operation_id="list_threshold_templates",
+    summary="O4 — lifecycle threshold templates (engineer+)",
+    description="""Read-only catalog of `lifecycle_templates` — the templates whose rules O2
+returns. `breed_type` filters the catalog; `is_default` marks the built-in
+row. Read-only by contract: there is no write surface for templates.""",
+    parameters=[
+        *_PAGING_PARAMS,
+        OpenApiParameter(
+            "breed_type",
+            str,
+            OpenApiParameter.QUERY,
+            required=False,
+            description="Filter to one breed type.",
+        ),
+    ],
+    request=None,
+    responses={
+        200: ThresholdTemplateListResponseSerializer,
+        **error_responses(400, 401, 403),
+    },
+)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def threshold_templates(request):
@@ -270,6 +434,52 @@ def _saloon_or_none(request, saloon_id: int):
     return saloon_org if saloon_org and str(saloon_org) == str(org_claim) else None
 
 
+@extend_schema(
+    methods=["GET"],
+    tags=[TAG_OPS],
+    operation_id="list_saloon_photos",
+    summary="O5 — saloon photo gallery (any member)",
+    description="""`{results, count}` page of the saloon's photos, newest first.
+`url` is a serviceable file URL (`file_url`), `taken_at` ← `uploaded_at`
+(ISO Z), and `uploaded_by` is the recording user.
+
+The saloon is resolved **inside** the claim's tenant context, so a foreign or
+unknown id is an identical 404 — never an existence oracle.""",
+    parameters=[
+        OpenApiParameter(
+            "saloon_id", int, OpenApiParameter.PATH, description="Saloon id (caller's org)."
+        ),
+        *_PAGING_PARAMS,
+    ],
+    request=None,
+    responses={
+        200: PhotoListResponseSerializer,
+        **error_responses(400, 401, 403, 404),
+    },
+)
+@extend_schema(
+    methods=["POST"],
+    tags=[TAG_OPS],
+    operation_id="upload_saloon_photo",
+    summary="O6 — upload a saloon photo (engineer+)",
+    description="""Multipart upload: `file` is required (jpg/png, ≤10 MB — content type and
+size are validated server-side), optional `caption` (stored as `description`,
+≤255 chars) and optional `taken_at` (ISO Z; defaults to now when omitted or
+unparseable — an invalid value is NOT a 400 on this field).
+
+Storage backend is a deploy setting (v0.6 = MEDIA_ROOT); the response returns
+a serviceable URL, never a storage path. Foreign/unknown saloon → 404.""",
+    parameters=[
+        OpenApiParameter(
+            "saloon_id", int, OpenApiParameter.PATH, description="Saloon id (caller's org)."
+        )
+    ],
+    request=PhotoUploadRequestSerializer,
+    responses={
+        201: PhotoItemSerializer,
+        **error_responses(400, 401, 403, 404),
+    },
+)
 @api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated])
 def saloon_photos(request, saloon_id: int):
@@ -376,6 +586,28 @@ def _iso_ts(raw):
     return raw
 
 
+@extend_schema(
+    tags=[TAG_OPS],
+    operation_id="list_gateways",
+    summary="O7 — org gateways (manager+)",
+    description="""`{results, count}` page of the org's gateway slots with their saloon-zone
+count. `last_seen_at` comes from the retained diagnostics register (O9's
+store) — Redis down means `null`, an honest missing value, never a fabricated
+timestamp.
+
+`farm_id` (int PK) and `status` filter the list; a malformed `farm_id` is a
+400 `invalid pagination`.""",
+    parameters=[
+        *_PAGING_PARAMS,
+        OpenApiParameter("farm_id", int, OpenApiParameter.QUERY, required=False, description="Filter to one farm (int PK)."),
+        OpenApiParameter("status", str, OpenApiParameter.QUERY, required=False, description="Filter to one provisioning status."),
+    ],
+    request=None,
+    responses={
+        200: GatewayListResponseSerializer,
+        **error_responses(400, 401, 403),
+    },
+)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def gateways(request):
@@ -411,6 +643,25 @@ def _gateway_or_none(request, slot: str):
     ).first()
 
 
+@extend_schema(
+    tags=[TAG_OPS],
+    operation_id="get_gateway_detail",
+    summary="O8 — gateway detail (manager+)",
+    description="""Gateway row plus its saloon zones and the active hardware line
+(never-removed registry entry). `saloon_zones[]` carries `saloon_id`,
+`saloon_name` and `assigned_at`; `active_hardware_id` is null when no line is
+registered. Unknown/foreign slot → 404.""",
+    parameters=[
+        OpenApiParameter(
+            "slot", str, OpenApiParameter.PATH, description="Gateway slot id."
+        )
+    ],
+    request=None,
+    responses={
+        200: GatewayDetailResponseSerializer,
+        **error_responses(401, 403, 404),
+    },
+)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def gateway_detail(request, slot: str):
@@ -444,6 +695,27 @@ def gateway_detail(request, slot: str):
     )
 
 
+@extend_schema(
+    tags=[TAG_OPS],
+    operation_id="get_gateway_diagnostics",
+    summary="O9 — last reported diagnostics (engineer+)",
+    description="""The retained `diag:last:{slot}` hash as the device reported it —
+`reported_at` is the gateway's own `device_ts` string, verbatim, and every
+field is honest-null when the device did not send it.
+
+Unknown/foreign slot, or a gateway that has never reported, is the same 404
+`{"error": "no diagnostics yet"}` / not-found envelope.""",
+    parameters=[
+        OpenApiParameter(
+            "slot", str, OpenApiParameter.PATH, description="Gateway slot id."
+        )
+    ],
+    request=None,
+    responses={
+        200: GatewayDiagnosticsSerializer,
+        **error_responses(401, 403, 404),
+    },
+)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def gateway_diagnostics(request, slot: str):
@@ -463,6 +735,32 @@ def gateway_diagnostics(request, slot: str):
 # ---------------------------------------------------------------------------
 
 
+@extend_schema(
+    tags=[TAG_OPS],
+    operation_id="change_password",
+    summary="O10 — change my password",
+    description="""Requires the current password (`401 wrong current password` when it does
+not match). The new password must differ from the current one, be ≥10 chars,
+stay off the common-password denylist, and pass Django's configured validators
+— each failure is a 400 with a specific message, never a generic rejection.
+
+Success rotates the session register: every active refresh line is revoked
+(the next refresh is refused) while the current access token lives out its
+15 minutes. Throttled on the strict lane — 3/min per user.""",
+    request=PasswordChangeRequestSerializer,
+    responses={
+        200: PasswordChangeResponseSerializer,
+        **error_responses(400, 401),
+        429: RATE_LIMITED_RESPONSE,
+    },
+    examples=[
+        OpenApiExample(
+            "Change password",
+            request_only=True,
+            value={"current_password": "old-secret-1", "new_password": "farm-floor-2026"},
+        )
+    ],
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 @throttle_classes([UserRateThrottle3PerMinute])
@@ -499,6 +797,19 @@ def password_change(request):
 # ---------------------------------------------------------------------------
 
 
+@extend_schema(
+    tags=[TAG_OPS],
+    operation_id="list_my_sessions",
+    summary="O11 — my live sessions",
+    description="""Bare list (no envelope) of the caller's non-revoked refresh lines,
+newest-seen first. `current: true` marks the presenting session (the claim's
+`sid` matches the row's `refresh_jti`).
+
+Scope is always the caller: there is no parameter to read someone else's
+sessions, and a revoked row disappears from this list.""",
+    request=None,
+    responses={200: SessionItemSerializer(many=True), **error_responses(401)},
+)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def sessions(request):
@@ -521,6 +832,27 @@ def sessions(request):
     )
 
 
+@extend_schema(
+    tags=[TAG_OPS],
+    operation_id="revoke_my_session",
+    summary="O12 — revoke one of my sessions",
+    description="""Revokes the refresh line (the next refresh on that `jti` is refused; the
+access token still lives out its 15 minutes).
+
+The session must belong to the caller: a foreign **and** a missing id answer
+an identical 404 — never an existence oracle (spec §4). Success is
+`{"status": "revoked", "id": …}`.""",
+    parameters=[
+        OpenApiParameter(
+            "session_id", int, OpenApiParameter.PATH, description="The caller's session id (O11)."
+        )
+    ],
+    request=None,
+    responses={
+        200: SessionRevokeResponseSerializer,
+        **error_responses(401, 404),
+    },
+)
 @api_view(["DELETE"])
 @permission_classes([IsAuthenticated])
 def session_revoke(request, session_id: int):

@@ -9,11 +9,19 @@ from datetime import timedelta
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone
+from drf_spectacular.utils import OpenApiExample, OpenApiParameter, extend_schema
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
 from apps.accounts.permissions import _claims
+from apps.common.schemas import (
+    CONFLICT_RESPONSE,
+    RATE_LIMITED_RESPONSE,
+    TAG_PROVISIONING,
+    ErrorEnvelopeSerializer,
+    error_responses,
+)
 from apps.devices.models import (
     GatewayHardwareRegistry,
     GatewayRequest,
@@ -23,6 +31,25 @@ from apps.devices.models import (
     SaloonSensorSlot,
 )
 from apps.mqtt_auth.models import MqttAclRule, MqttDeviceCredential
+from apps.provisioning.serializers import (
+    CredentialRotationResponseSerializer,
+    GatewayActionRequestSerializer,
+    GatewayConfigResponseSerializer,
+    GatewayRequestCreateSerializer,
+    GatewayRequestSerializer,
+    GatewayReviewApprovedSerializer,
+    GatewayReviewRequestSerializer,
+    GatewayStatusResponseSerializer,
+    GeoCitySerializer,
+    GeoProvinceSerializer,
+    GeoVillageSerializer,
+    LocationTreeProvinceSerializer,
+    ProvisioningSyncRequestSerializer,
+    ProvisioningSyncResponseSerializer,
+    RotationAckRequestSerializer,
+    RotationAckResponseSerializer,
+    SaloonPositionSerializer,
+)
 from apps.provisioning.services import (
     SyncConflict,
     acquire_sync_lock,
@@ -81,6 +108,16 @@ def _geo_out_village(row):
     return {"id": row.id, "city_id": row.city_id, "name": row.name}
 
 
+@extend_schema(
+    tags=[TAG_PROVISIONING],
+    operation_id="list_provinces",
+    summary="Provinces (global reference data)",
+    description="""The first step of the installer's geography drill-down. Global
+reference data — not org-scoped, no RLS — so every authenticated caller sees
+the same rows. Bare list, alphabetical by name.""",
+    request=None,
+    responses={200: GeoProvinceSerializer(many=True), **error_responses(401)},
+)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def province_list(request):
@@ -90,6 +127,25 @@ def province_list(request):
     return Response([_geo_out_province(p) for p in Province.objects.all().order_by("name")])
 
 
+@extend_schema(
+    tags=[TAG_PROVISIONING],
+    operation_id="list_cities",
+    summary="Cities of one province",
+    description="""Step two of the geography drill-down. `province_id` is REQUIRED: a missing
+or non-numeric value is a 400 `province_id query parameter is required` rather
+than an unfiltered dump of every city. Bare list, alphabetical by name.""",
+    parameters=[
+        OpenApiParameter(
+            "province_id",
+            int,
+            OpenApiParameter.QUERY,
+            required=True,
+            description="Province id from the province list.",
+        )
+    ],
+    request=None,
+    responses={200: GeoCitySerializer(many=True), **error_responses(400, 401)},
+)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def city_list(request):
@@ -104,6 +160,25 @@ def city_list(request):
     return Response([_geo_out_city(c) for c in rows])
 
 
+@extend_schema(
+    tags=[TAG_PROVISIONING],
+    operation_id="list_villages",
+    summary="Villages of one city",
+    description="""Final geography step; villages are optional in the address model, so an
+empty list is a normal answer. `city_id` is REQUIRED — missing or non-numeric
+is a 400 `city_id query parameter is required`.""",
+    parameters=[
+        OpenApiParameter(
+            "city_id",
+            int,
+            OpenApiParameter.QUERY,
+            required=True,
+            description="City id from the city list.",
+        )
+    ],
+    request=None,
+    responses={200: GeoVillageSerializer(many=True), **error_responses(400, 401)},
+)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def village_list(request):
@@ -118,6 +193,21 @@ def village_list(request):
     return Response([_geo_out_village(v) for v in rows])
 
 
+@extend_schema(
+    tags=[TAG_PROVISIONING],
+    operation_id="list_saloon_positions",
+    summary="Sensor positions of a saloon",
+    description="""Installer reference rows (id + label) used when mapping sensor packs to
+physical positions. Scoped to the caller's org claim; a caller without an org
+claim gets an empty list rather than a cross-tenant read.""",
+    parameters=[
+        OpenApiParameter(
+            "saloon_id", int, OpenApiParameter.PATH, description="Saloon id (caller's org)."
+        )
+    ],
+    request=None,
+    responses={200: SaloonPositionSerializer(many=True), **error_responses(401)},
+)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def saloon_positions(request, saloon_id: int):
@@ -133,6 +223,44 @@ def saloon_positions(request, saloon_id: int):
     return Response([], status=200)
 
 
+@extend_schema(
+    tags=[TAG_PROVISIONING],
+    operation_id="get_location_tree",
+    summary="Installer location tree (province → city → villages + farms)",
+    description="""One cached payload for the whole installer drill-down: geography is global
+reference data, and the **only** org-scoped nodes are the farm leaves under
+each city (`farm_id`, `name`) — they carry the caller's `org_id` claim and
+therefore never leak across tenants.
+
+The response is cached for one hour under a per-org key (`location:tree:{org}`),
+so a farm rename cannot bleed into another org's tree; a cache outage degrades
+to a fresh read, never an error. No org claim → 400.""",
+    request=None,
+    responses={
+        200: LocationTreeProvinceSerializer(many=True),
+        **error_responses(400, 401),
+    },
+    examples=[
+        OpenApiExample(
+            "Tree with farm leaves",
+            response_only=True,
+            value=[
+                {
+                    "id": 8,
+                    "name": "Tehran",
+                    "cities": [
+                        {
+                            "id": 31,
+                            "name": "Varamin",
+                            "villages": [{"id": 102, "name": "Qeshlaq"}],
+                            "farms": [{"farm_id": 7, "name": "Golden Egg North"}],
+                        }
+                    ],
+                }
+            ],
+        )
+    ],
+)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def location_tree(request):
@@ -220,6 +348,43 @@ def _request_out(row):
     }
 
 
+@extend_schema(
+    methods=["GET"],
+    tags=[TAG_PROVISIONING],
+    operation_id="list_gateway_requests",
+    summary="List gateway requests",
+    description="""Bare list of the org's gateway requests, oldest first. A platform reviewer
+sees the org named by their claims; a caller with neither a review permission
+nor an org claim gets a 400 rather than an unscoped read.""",
+    request=None,
+    responses={200: GatewayRequestSerializer(many=True), **error_responses(400, 401)},
+)
+@extend_schema(
+    methods=["POST"],
+    tags=[TAG_PROVISIONING],
+    operation_id="create_gateway_request",
+    summary="Submit a gateway request",
+    description="""Farm manager/owner only (403 otherwise). Requests are **capped**
+per org: `max_pending_gateway_requests` (default 4) PENDING rows, and the
+next one is a 400 `pending gateway request cap reached` — the cap exists so an
+org cannot flood the review queue.
+
+The requester is always the JWT user; `details` is stored verbatim as free-form
+context. Approval of the request is what mints the gateway slot and its MQTT
+credential.""",
+    request=GatewayRequestCreateSerializer,
+    responses={
+        201: GatewayRequestSerializer,
+        **error_responses(400, 401, 403),
+    },
+    examples=[
+        OpenApiExample(
+            "Request a gateway",
+            request_only=True,
+            value={"farm_id": 7, "details": {"install_window": "2026-09-12 morning", "contact": "Ali"}},
+        )
+    ],
+)
 @api_view(["POST", "GET"])
 @permission_classes([IsAuthenticated])
 def gateway_requests(request):
@@ -247,6 +412,44 @@ def gateway_requests(request):
     return Response(_request_out(row), status=201)
 
 
+@extend_schema(
+    tags=[TAG_PROVISIONING],
+    operation_id="review_gateway_request",
+    summary="Approve or reject a gateway request",
+    description="""Platform review permission required (superuser, `admin`/`support` staff
+role, or the `gateway_review` platform permission). The row is locked
+(`select_for_update`) for the whole decision, so two reviewers cannot both win.
+
+**REJECT** writes the reason (default `rejected`) and returns the request row.
+**APPROVE** mints a `GatewaySlot` (supplied `slot_id` or a generated `GW-…`),
+a bcrypt MQTT credential, publish-only EMQX allow rules for the gateway's own
+`telemetry`/`status` topics, and registers the broker authn user — then returns
+the request plus `gateway_slot_id`, `username` and the **one-time plaintext
+`password`**. A broker hiccup never fails the review (FNV-soft; the next
+rotation heals it).
+
+Verdicts: 404 unknown request; **409** `request already reviewed` when the row
+is no longer PENDING; 400 for a decision other than APPROVE/REJECT. Approving a
+slot id that already exists is a 409 from the unique constraint.""",
+    parameters=[
+        OpenApiParameter(
+            "request_id", int, OpenApiParameter.PATH, description="Gateway request id."
+        )
+    ],
+    request=GatewayReviewRequestSerializer,
+    responses={
+        200: GatewayReviewApprovedSerializer,
+        409: CONFLICT_RESPONSE,
+        **error_responses(400, 401, 403, 404),
+    },
+    examples=[
+        OpenApiExample(
+            "Approve",
+            request_only=True,
+            value={"decision": "APPROVE", "slot_id": "GW-0041"},
+        )
+    ],
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def review_gateway_request(request, request_id: int):
@@ -317,6 +520,42 @@ def review_gateway_request(request, request_id: int):
     return Response({**_request_out(row), "gateway_slot_id": slot.slot_id, "username": credential.username, "password": password}, status=200)
 
 
+@extend_schema(
+    tags=[TAG_PROVISIONING],
+    operation_id="provisioning_sync",
+    summary="Installer topology sync (moves the gateway to PENDING_APPROVAL)",
+    description="""**Installer role only.** Organization and hardware identity always come from
+server-side rows — the body names a slot in the caller's org, never topology
+of its own invention. A short Redis lock guards against two offline installers
+merging overlapping topology: a held lock is a **409**
+`gateway sync already in progress` with `Retry-After: 3`.
+
+All three lists (`zones`, `sensor_slot_mappings`, `replacements`) are validated
+UP FRONT, so a malformed entry can never leave half-written topology (M5-09):
+an unknown hardware/sensor reference is a 400 and nothing is written.
+`zones` accepts plain saloon ids; assignments are idempotent.
+
+The sync ends by transitioning the slot to **PENDING_APPROVAL** and returns the
+counts it applied.""",
+    request=ProvisioningSyncRequestSerializer,
+    responses={
+        200: ProvisioningSyncResponseSerializer,
+        409: CONFLICT_RESPONSE,
+        **error_responses(400, 401, 403, 404),
+    },
+    examples=[
+        OpenApiExample(
+            "Sync two saloons and one pack",
+            request_only=True,
+            value={
+                "gateway_slot_id": "GW-0041",
+                "zones": [12, 13],
+                "sensor_slot_mappings": [{"pack_id": "PACK-A", "slot_id": "SS-01"}],
+                "replacements": [],
+            },
+        )
+    ],
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def provisioning_sync(request):
@@ -475,6 +714,29 @@ def _owned_slot(slot_id: str, org_id: str):
     return GatewaySlot.objects.filter(pk=slot_id, org_id=org_id).first()
 
 
+@extend_schema(
+    tags=[TAG_PROVISIONING],
+    operation_id="approve_gateway",
+    summary="Approve a PENDING_APPROVAL gateway (PROVISIONED)",
+    description="""Farm manager/owner only, and only for a gateway of the caller's org
+(anything else is the same 404 `gateway not found in caller organization`).
+
+Approval transitions the slot to **PROVISIONED** and drains the telemetry it
+held while pending (FIFO), then syncs the EMQX allow rules. The broker step
+runs AFTER the status commit, so a broker hiccup never rolls the decision
+back — the next sweep converges it. A wrong starting status is a 409.""",
+    parameters=[
+        OpenApiParameter(
+            "gateway_slot_id", str, OpenApiParameter.PATH, description="Gateway slot id (caller's org)."
+        )
+    ],
+    request=None,
+    responses={
+        200: GatewayStatusResponseSerializer,
+        409: CONFLICT_RESPONSE,
+        **error_responses(401, 403, 404),
+    },
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def approve_gateway(request, gateway_slot_id: str):
@@ -497,6 +759,29 @@ def approve_gateway(request, gateway_slot_id: str):
     return Response({"gateway_slot_id": slot.slot_id, "status": slot.provisioning_status})
 
 
+@extend_schema(
+    tags=[TAG_PROVISIONING],
+    operation_id="reject_gateway",
+    summary="Reject a PENDING_APPROVAL gateway",
+    description="""Farm manager/owner only. Moves the slot to **REJECTED**, archives the
+telemetry it held to the DLQ with the given `reason`, and removes its EMQX ACL
+rules. Optional body `reason` (free text) is recorded with the archive.
+
+A gateway that is not PENDING_APPROVAL is a 409 from the state matrix — the
+lifecycle is not a free-form status write.""",
+    parameters=[
+        OpenApiParameter(
+            "gateway_slot_id", str, OpenApiParameter.PATH, description="Gateway slot id (caller's org)."
+        )
+    ],
+    request=GatewayActionRequestSerializer,
+    responses={
+        200: GatewayStatusResponseSerializer,
+        409: CONFLICT_RESPONSE,
+        **error_responses(401, 403, 404),
+    },
+    examples=[OpenApiExample("Reject with reason", request_only=True, value={"reason": "Wiring photos missing"})],
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def reject_gateway(request, gateway_slot_id: str):
@@ -519,6 +804,26 @@ def reject_gateway(request, gateway_slot_id: str):
     return Response({"gateway_slot_id": slot.slot_id, "status": slot.provisioning_status})
 
 
+@extend_schema(
+    tags=[TAG_PROVISIONING],
+    operation_id="suspend_gateway",
+    summary="Suspend a PROVISIONED gateway",
+    description="""Farm manager/owner only. Moves the slot to **SUSPENDED** and revokes its
+EMQX ACL rules: with `no_match = deny`, every publish stops immediately until
+a resume. The broker revocation happens after the commit and converges on the
+next sweep if the broker was unreachable.""",
+    parameters=[
+        OpenApiParameter(
+            "gateway_slot_id", str, OpenApiParameter.PATH, description="Gateway slot id (caller's org)."
+        )
+    ],
+    request=GatewayActionRequestSerializer,
+    responses={
+        200: GatewayStatusResponseSerializer,
+        409: CONFLICT_RESPONSE,
+        **error_responses(401, 403, 404),
+    },
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def suspend_gateway(request, gateway_slot_id: str):
@@ -541,6 +846,25 @@ def suspend_gateway(request, gateway_slot_id: str):
     return Response({"gateway_slot_id": slot.slot_id, "status": slot.provisioning_status})
 
 
+@extend_schema(
+    tags=[TAG_PROVISIONING],
+    operation_id="resume_gateway",
+    summary="Resume a SUSPENDED gateway",
+    description="""Farm manager/owner only. Restores the prior status (**PROVISIONED**) and
+re-syncs the EMQX allow rules, so publishes flow again without a reinstall.
+Only a SUSPENDED gateway can be resumed — anything else is a 409.""",
+    parameters=[
+        OpenApiParameter(
+            "gateway_slot_id", str, OpenApiParameter.PATH, description="Gateway slot id (caller's org)."
+        )
+    ],
+    request=GatewayActionRequestSerializer,
+    responses={
+        200: GatewayStatusResponseSerializer,
+        409: CONFLICT_RESPONSE,
+        **error_responses(401, 403, 404),
+    },
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def resume_gateway(request, gateway_slot_id: str):
@@ -600,6 +924,65 @@ def _basic_device(request):
     return credential
 
 
+@extend_schema(
+    tags=[TAG_PROVISIONING],
+    operation_id="get_gateway_config",
+    summary="Zero-touch provisioning — gateway fetches its configuration",
+    description="""Two accepted identities, resolved **inside** the view because the two
+callers use different auth systems:
+
+① the gateway itself, HTTP Basic (`username = gateway_slot_id`, password =
+its current MQTT credential, validated against the bcrypt hash) — available
+only post-approval, since that is when a credential row exists; or② a farm
+manager/owner with a normal Bearer JWT.
+
+Returns R2 contract-safe config: org/farm identity, MQTT settings, and the
+credential *shape* (`password_hash`, `rotation_pending`). The plaintext
+password is never echoed here — it is issued exactly once at approval or
+rotation. Deliberately no sensor slot ids in the payload.
+
+Verdicts: 401 with neither identity; 403 for a non-manager JWT, or for a
+REJECTED/SUSPENDED gateway (its traffic is denied, so its config is locked
+too); 404 for an unknown slot — and for a valid device identity asking about a
+different gateway (a probe gets the same 404). Rate-limited at the proxy
+(1 r/s per IP).""",
+    parameters=[
+        OpenApiParameter(
+            "gateway_slot_id", str, OpenApiParameter.PATH, description="Gateway slot id."
+        )
+    ],
+    # `auth` lists the alternatives the view accepts; {} documents the
+    # anonymous probe path that answers 401 (never a 500).
+    auth=[{"GatewayBasicAuth": []}, {"BearerAuth": []}, {}],
+    request=None,
+    responses={
+        200: GatewayConfigResponseSerializer,
+        401: ErrorEnvelopeSerializer,
+        403: ErrorEnvelopeSerializer,
+        404: ErrorEnvelopeSerializer,
+        429: RATE_LIMITED_RESPONSE,
+    },
+    examples=[
+        OpenApiExample(
+            "Gateway config",
+            response_only=True,
+            value={
+                "gateway_slot_id": "GW-0041",
+                "org_id": "1f0c3a54-6f2b-4c9d-9d5e-2b7f4a1c8e30",
+                "farm_id": 7,
+                "provisioning_status": "PROVISIONED",
+                "mqtt": {"host": "mqtt.morghdari.com", "port": 8883, "tls": True},
+                "auth": {
+                    "username": "GW-0041",
+                    "password_hash": "$2b$12$…",
+                    "password_issued_once": True,
+                    "rotation_pending": False,
+                },
+                "rate_limit_note": "Throttle MQTT CONNECT + publish rate per gateway at the reverse-proxy layer.",
+            },
+        )
+    ],
+)
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def gateway_config(request, gateway_slot_id: str):
@@ -650,6 +1033,29 @@ def gateway_config(request, gateway_slot_id: str):
 # ---------------------------------------------------------------------------
 
 
+@extend_schema(
+    tags=[TAG_PROVISIONING],
+    operation_id="rotate_gateway_credential",
+    summary="Stage a credential rotation (one-time plaintext)",
+    description="""Farm manager/owner only, and only for a **PROVISIONED** gateway — a
+SUSPENDED/REJECTED/PENDING slot is a 409 with the current status named.
+
+Stages a new password WITHOUT touching the active one: the old credential
+keeps working at the broker until the device proves it received the new one
+(`/rotation-ack/`). The plaintext is returned here exactly once (subsequent
+config fetches see only the hash) and `rotation_pending` flips true.""",
+    parameters=[
+        OpenApiParameter(
+            "gateway_slot_id", str, OpenApiParameter.PATH, description="Gateway slot id (caller's org)."
+        )
+    ],
+    request=None,
+    responses={
+        200: CredentialRotationResponseSerializer,
+        409: CONFLICT_RESPONSE,
+        **error_responses(401, 403, 404),
+    },
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def rotate_credential(request, gateway_slot_id: str):
@@ -680,6 +1086,29 @@ def rotate_credential(request, gateway_slot_id: str):
     }, status=200)
 
 
+@extend_schema(
+    tags=[TAG_PROVISIONING],
+    operation_id="ack_gateway_rotation",
+    summary="Commit a staged rotation (commit-on-ACK)",
+    description="""Farm manager/owner only. Promotes the staged hash to active **only** when
+the presented `new_password` matches it — that match is the proof the device
+actually received the rotation, so a lost delivery can never lock a gateway
+out of its broker.
+
+No staged rotation, or a mismatch, is a 409 `no staged rotation or password
+mismatch`; success returns `rotation_committed: true`.""",
+    parameters=[
+        OpenApiParameter(
+            "gateway_slot_id", str, OpenApiParameter.PATH, description="Gateway slot id (caller's org)."
+        )
+    ],
+    request=RotationAckRequestSerializer,
+    responses={
+        200: RotationAckResponseSerializer,
+        409: CONFLICT_RESPONSE,
+        **error_responses(401, 403, 404),
+    },
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def rotation_ack(request, gateway_slot_id: str):

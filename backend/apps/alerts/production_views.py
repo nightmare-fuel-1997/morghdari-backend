@@ -26,12 +26,22 @@ every queryset (RLS is the Postgres backstop); cross-org ids → 404;
 from datetime import timedelta
 
 from django.utils import timezone
+from drf_spectacular.utils import OpenApiExample, OpenApiParameter, extend_schema
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.accounts.permissions import _claims
 from apps.alerts.models import BiosecurityEvent, FlockFeedIntake, FlockWaterIntake, FlockWeightSample
+from apps.alerts.serializers import (
+    BIOSECURITY_CREATE_REQUEST_EXAMPLE,
+    BIOSECURITY_EVENT_RESPONSE_EXAMPLE,
+    SALOON_CAPABILITIES_RESPONSE_EXAMPLE,
+    BiosecurityEventCreateRequestSerializer,
+    BiosecurityEventSerializer,
+    SaloonCapabilitiesResponseSerializer,
+)
+from apps.common.schemas import TAG_ALERTS, error_responses
 from apps.alerts.services.capability_profile import compute_profile
 from apps.alerts.services.kpi import TEHRAN
 from apps.devices.models import SaloonSensorSlot
@@ -69,6 +79,77 @@ def _bio_event_out(row: BiosecurityEvent) -> dict:
     }
 
 
+@extend_schema(
+    methods=["GET"],
+    tags=[TAG_ALERTS],
+    operation_id="list_biosecurity_events",
+    summary="List a farm's biosecurity log",
+    description="""Avian-flu evidence log (GS-EVIDENCE): every visitor/vehicle entry,
+disinfection, rodent-control and outbreak-prep record for the farm, newest
+first. Farm-level, not saloon-level; rows are RLS-scoped to the caller's org.
+
+Bare list (no envelope). `event_type` filters the enum; `from`/`to` are ISO
+date-times and each must parse (a malformed window is a 400, never an
+ignored filter). Foreign/unknown farm → 404.""",
+    parameters=[
+        OpenApiParameter(
+            "farm_id", int, OpenApiParameter.PATH, description="Farm id (caller's org)."
+        ),
+        OpenApiParameter(
+            "event_type",
+            str,
+            OpenApiParameter.QUERY,
+            required=False,
+            enum=sorted(BIOSECURITY_EVENT_TYPES),
+            description="Restrict to one event type.",
+        ),
+        OpenApiParameter(
+            "from",
+            str,
+            OpenApiParameter.QUERY,
+            required=False,
+            description="ISO date-time window start (occurred_at ≥).",
+        ),
+        OpenApiParameter(
+            "to",
+            str,
+            OpenApiParameter.QUERY,
+            required=False,
+            description="ISO date-time window end (occurred_at ≤).",
+        ),
+    ],
+    request=None,
+    responses={
+        200: BiosecurityEventSerializer(many=True),
+        **error_responses(400, 401, 404),
+    },
+    examples=[BIOSECURITY_EVENT_RESPONSE_EXAMPLE],
+)
+@extend_schema(
+    methods=["POST"],
+    tags=[TAG_ALERTS],
+    operation_id="create_biosecurity_event",
+    summary="Record a biosecurity event",
+    description="""Any org member records (yaml: "any staff role may record") — the
+vet/insurance export later reads these rows, so `details` is free-form
+evidence (e.g. `{origin, purpose, product_used}`).
+
+`event_type` is required and enum-checked here, turning the DB check
+constraint into a friendly 400; `occurred_at` defaults to now (a naive value
+is read as Asia/Tehran); `recorded_by` is always the JWT user, never client
+input. Foreign/unknown farm → 404.""",
+    parameters=[
+        OpenApiParameter(
+            "farm_id", int, OpenApiParameter.PATH, description="Farm id (caller's org)."
+        )
+    ],
+    request=BiosecurityEventCreateRequestSerializer,
+    responses={
+        201: BiosecurityEventSerializer,
+        **error_responses(400, 401, 404),
+    },
+    examples=[BIOSECURITY_CREATE_REQUEST_EXAMPLE, BIOSECURITY_EVENT_RESPONSE_EXAMPLE],
+)
 @api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated])
 def biosecurity_events(request, farm_id: int):
@@ -229,6 +310,30 @@ def _available_logs(saloon: Saloon, org_id) -> dict:
     return available
 
 
+@extend_schema(
+    tags=[TAG_ALERTS],
+    operation_id="get_saloon_capabilities",
+    summary="Saloon capability profile (D23 computed truth)",
+    description="""What this saloon can currently do, computed — never guessed.
+`live_metrics` is the ACTIVE sensor slots' `allowed_metric_keys` ∪ keys seen
+in recent telemetry; each feature carries `available`, the concrete
+`missing_inputs` and an operator `enable_path`.
+
+Unavailable is always explained ("missing weight samples"), never reported as
+"normal" and never as a fabricated zero. The rules live in
+`services.capability_profile.FEATURE_MATRIX`. Foreign/unknown saloon → 404.""",
+    parameters=[
+        OpenApiParameter(
+            "saloon_id", int, OpenApiParameter.PATH, description="Saloon id (caller's org)."
+        )
+    ],
+    request=None,
+    responses={
+        200: SaloonCapabilitiesResponseSerializer,
+        **error_responses(401, 404),
+    },
+    examples=[SALOON_CAPABILITIES_RESPONSE_EXAMPLE],
+)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def saloon_capabilities(request, saloon_id: int):

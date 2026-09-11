@@ -21,17 +21,87 @@ annotate (it cannot live on the unmanaged model, see models.py).
 from django.db.models.expressions import RawSQL
 from django.utils.dateparse import parse_datetime
 
+from drf_spectacular.utils import OpenApiExample, OpenApiParameter, extend_schema
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.accounts.permissions import _claims
+from apps.common.schemas import TAG_TELEMETRY, error_responses
 from apps.farms.models import Farm
 from apps.telemetry.models import SaloonTelemetry
+from apps.telemetry.serializers import (
+    FarmTelemetryResponseSerializer,
+    HourlyAnalyticsResponseSerializer,
+    MetricTypeSerializer,
+    SaloonTelemetryResponseSerializer,
+)
 
 # The paging ceiling — same as the compat history windows (resolve_history_window).
 PAGING_MAX_LIMIT = 1000
+
+# Shared window/paging filters for both telemetry reads (v1.4.4 semantics).
+_TELEMETRY_PARAMS = [
+    OpenApiParameter(
+        "since",
+        str,
+        OpenApiParameter.QUERY,
+        required=False,
+        description="ISO datetime lower bound on device_ts; unparseable values are ignored.",
+    ),
+    OpenApiParameter(
+        "until",
+        str,
+        OpenApiParameter.QUERY,
+        required=False,
+        description="ISO datetime upper bound on device_ts; unparseable values are ignored.",
+    ),
+    OpenApiParameter(
+        "include_buffered",
+        bool,
+        OpenApiParameter.QUERY,
+        required=False,
+        description="Include gateway-buffered (replayed) rows; default false.",
+    ),
+    OpenApiParameter(
+        "slot_id",
+        str,
+        OpenApiParameter.QUERY,
+        required=False,
+        description="Restrict to one gateway slot's readings.",
+    ),
+    OpenApiParameter(
+        "limit",
+        int,
+        OpenApiParameter.QUERY,
+        required=False,
+        description=(
+            "Page size (1–1000). Giving `limit` or `offset` switches the list to "
+            "NEWEST-FIRST, so `limit=1` is the latest reading."
+        ),
+    ),
+    OpenApiParameter(
+        "offset",
+        int,
+        OpenApiParameter.QUERY,
+        required=False,
+        description="Page start offset (≥ 0) within the newest-first ordering.",
+    ),
+]
+
+_READING_EXAMPLE = OpenApiExample(
+    "One reading",
+    response_only=True,
+    value={
+        "server_received_ts": "2026-09-04T19:42:07+00:00",
+        "device_ts": "2026-09-04T19:42:00+00:00",
+        "is_buffered": False,
+        "buffered_delay_mins": None,
+        "slot_id": "3f7c9e2a-1b4d-4e6f-8a2c-5d7f9b3e6a1c",
+        "metrics": {"temp": {"avg": 24.5, "min": 23.9, "max": 25.1}, "nh3": {"avg": 12.0}},
+    },
+)
 
 
 def _org_id(request):
@@ -140,6 +210,33 @@ def _paged_rows(request, queryset):
     return None, rows
 
 
+@extend_schema(
+    tags=[TAG_TELEMETRY],
+    operation_id="list_saloon_telemetry",
+    summary="Saloon telemetry readings",
+    description="""Readings for ONE saloon (contract v1.4.4 shape, byte-stable).
+
+Default ordering is chronological ascending and returns the whole retained
+window; passing `limit` or `offset` switches to **newest-first paging** — the
+Flutter chart calls `?limit=24` and `?limit=1` is exactly the latest reading.
+`limit` must be 1–1000 and `offset` ≥ 0; both are 400 on violation.
+
+`since`/`until` (ISO datetimes) bound `device_ts`; an unparseable value is
+IGNORED, not a 400 (v1.4.4 semantics). Buffered rows are excluded unless
+`include_buffered` is truthy. Rows are org-scoped from the claim.""",
+    parameters=[
+        OpenApiParameter(
+            "saloon_id", int, OpenApiParameter.PATH, description="Saloon id (caller's org)."
+        ),
+        *_TELEMETRY_PARAMS,
+    ],
+    request=None,
+    responses={
+        200: SaloonTelemetryResponseSerializer,
+        **error_responses(400, 401),
+    },
+    examples=[_READING_EXAMPLE],
+)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def saloon_telemetry(request, saloon_id: int):
@@ -164,6 +261,30 @@ def saloon_telemetry(request, saloon_id: int):
 # ---------------------------------------------------------------------------
 # M7-12 (v1.6 native): farm-wide telemetry merge
 # ---------------------------------------------------------------------------
+@extend_schema(
+    tags=[TAG_TELEMETRY],
+    operation_id="list_farm_telemetry",
+    summary="Farm-wide telemetry (M7-12, v1.6 native)",
+    description="""The farm's saloon streams merged into ONE TelemetryReading list; rows
+gain `saloon_id`. Same window filters and newest-first paging rules as the
+per-saloon read.
+
+Acceptance contract: this list equals the **union** of the per-saloon lists
+for the same window. Foreign/unknown farm → 404 (a single-resource read, same
+verdict as the farm overview).""",
+    parameters=[
+        OpenApiParameter(
+            "farm_id", int, OpenApiParameter.PATH, description="Farm id (caller's org)."
+        ),
+        *_TELEMETRY_PARAMS,
+    ],
+    request=None,
+    responses={
+        200: FarmTelemetryResponseSerializer,
+        **error_responses(400, 401, 404),
+    },
+    examples=[_READING_EXAMPLE],
+)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def farm_telemetry(request, farm_id: int):
@@ -206,6 +327,73 @@ def _parse_iso(value: str):
     return parse_datetime(value)
 
 
+@extend_schema(
+    tags=[TAG_TELEMETRY],
+    operation_id="get_saloon_hourly_analytics",
+    summary="Hourly aggregated readings for charts",
+    description="""Chart-ready hourly series from `metric_hourly_aggregates` (built by the
+Celery aggregation task).
+
+`from`, `to` and `metric` are REQUIRED: missing → 400, `from >= to` → 400, and
+a `metric` outside the sensor catalog → 400 (`unknown metric_key`) — a typo is
+a typo, never an empty chart.
+
+With `slot_id` the series is that slot's own buckets; without it the buckets
+are merged saloon-wide (sample-count-weighted average, `high_variance` OR-ed
+per bucket) and `slot_id` echoes `""`. `avg` is null for an empty bucket.""",
+    parameters=[
+        OpenApiParameter(
+            "saloon_id", int, OpenApiParameter.PATH, description="Saloon id (caller's org)."
+        ),
+        OpenApiParameter(
+            "from",
+            str,
+            OpenApiParameter.QUERY,
+            required=True,
+            description="ISO datetime window start (exclusive lower bound on bucket_hr).",
+        ),
+        OpenApiParameter(
+            "to",
+            str,
+            OpenApiParameter.QUERY,
+            required=True,
+            description="ISO datetime window end; must be strictly after `from`.",
+        ),
+        OpenApiParameter(
+            "metric",
+            str,
+            OpenApiParameter.QUERY,
+            required=True,
+            description="Metric key; must exist in the sensor catalog.",
+        ),
+        OpenApiParameter(
+            "slot_id",
+            str,
+            OpenApiParameter.QUERY,
+            required=False,
+            description="One slot's buckets; omitted merges the whole saloon.",
+        ),
+    ],
+    request=None,
+    responses={
+        200: HourlyAnalyticsResponseSerializer,
+        **error_responses(400, 401),
+    },
+    examples=[
+        OpenApiExample(
+            "Hourly temp series",
+            response_only=True,
+            value={
+                "metric": "temp",
+                "slot_id": "",
+                "results": [
+                    {"bucket_hr": "2026-09-04T19:00:00+00:00", "avg": 24.52, "high_variance": False},
+                    {"bucket_hr": "2026-09-04T20:00:00+00:00", "avg": 24.61, "high_variance": True},
+                ],
+            },
+        )
+    ],
+)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def saloon_analytics_hourly(request, saloon_id: int):
@@ -279,6 +467,17 @@ def saloon_analytics_hourly(request, saloon_id: int):
     return Response({"metric": metric, "slot_id": slot_id, "results": results})
 
 
+@extend_schema(
+    tags=[TAG_TELEMETRY],
+    operation_id="list_metric_types",
+    summary="Sensor metric catalog",
+    description="""Global reference data (no org scope, no RLS): the metric keys the
+platform can ingest, with display name, unit and `is_tier1` (Tier-1 drives the
+velocity lane and is never muted). Any authenticated member may read it — it
+is what lets the frontend build dynamic tiles instead of a hard-coded list.""",
+    request=None,
+    responses={200: MetricTypeSerializer(many=True), **error_responses(401)},
+)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def metric_types(request):

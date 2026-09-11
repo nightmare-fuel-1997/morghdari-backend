@@ -12,6 +12,7 @@ no/invalid header ⇒ AuthenticationFailed ⇒ 401.
 توکنِ معتبر خطای ۴۰۱ می‌گیرد.
 """
 
+from drf_spectacular.extensions import OpenApiAuthenticationExtension
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
 # TenantOrgMiddleware (M2-05) parks the ALREADY-VALIDATED token here after its
@@ -28,3 +29,17 @@ class CachedJWTAuthentication(JWTAuthentication):
             # re-check the signature.
             return self.get_user(validated), validated
         return super().authenticate(request)
+
+
+class CachedJWTAuthenticationExtension(OpenApiAuthenticationExtension):
+    """Maps the verify-once JWT class to the canon BearerAuth scheme (docs-only).
+
+    Kills one spectacular warning per view; zero runtime effect — the security
+    scheme name MUST stay "BearerAuth" to match backend/openapi.yaml.
+    """
+
+    target_class = "apps.accounts.authentication.CachedJWTAuthentication"
+    name = "BearerAuth"
+
+    def get_security_definition(self, auto_schema):
+        return {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}

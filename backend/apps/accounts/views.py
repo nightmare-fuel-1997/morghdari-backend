@@ -19,6 +19,12 @@ from uuid import UUID
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone
+from drf_spectacular.utils import (
+    OpenApiExample,
+    OpenApiParameter,
+    OpenApiResponse,
+    extend_schema,
+)
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.exceptions import AuthenticationFailed
 from rest_framework.permissions import IsAuthenticated
@@ -35,7 +41,44 @@ from apps.accounts.services import (
     touch_session,
 )
 from apps.accounts.permissions import _claims
-from apps.accounts.serializers import LoginSerializer, resolve_active_membership
+from apps.accounts.serializers import (
+    LOGIN_REQUEST_EXAMPLE,
+    LOGIN_RESPONSE_EXAMPLE,
+    LoginRequestSerializer,
+    LoginResponseSerializer,
+    LoginSerializer,
+    MEMBER_INVITE_EXAMPLE,
+    MEMBER_OUT_EXAMPLE,
+    MFA_SETUP_RESPONSE_EXAMPLE,
+    MfaRequiredSerializer,
+    SUPPORT_SESSION_REQUEST_EXAMPLE,
+    SUPPORT_SESSION_RESPONSE_EXAMPLE,
+    MemberDeactivateResponseSerializer,
+    MemberInviteRequestSerializer,
+    MemberOutSerializer,
+    MfaConfirmRequestSerializer,
+    MfaConfirmResponseSerializer,
+    MfaSetupResponseSerializer,
+    RefreshRequestSerializer,
+    RefreshResponseSerializer,
+    SupportForceResolveRequestSerializer,
+    SupportForceResolveResponseSerializer,
+    SupportGatewayProvisioningRequestSerializer,
+    SupportGatewayProvisioningResponseSerializer,
+    SupportSessionRequestSerializer,
+    SupportSessionResponseSerializer,
+    SupportTaskDispatchRequestSerializer,
+    SupportTaskDispatchResponseSerializer,
+    resolve_active_membership,
+)
+from apps.common.schemas import (
+    CONFLICT_RESPONSE,
+    TAG_AUTH,
+    TAG_ORG,
+    TAG_SUPPORT,
+    ErrorEnvelopeSerializer,
+    error_responses,
+)
 from apps.auditing.models import AccountActivityLog
 from apps.tenants.context import tenant_context
 from apps.tenants.models import Organization
@@ -50,6 +93,41 @@ User = get_user_model()
 class LoginView(TokenObtainPairView):
     serializer_class = LoginSerializer
 
+    @extend_schema(
+        tags=[TAG_AUTH],
+        operation_id="login",
+        summary="Log in (tenant or platform staff)",
+        description="""Exchanges credentials for the contract's token pair —
+`{access_token, refresh_token, user{…}}`, **not** SimpleJWT's stock
+`{access, refresh}` keys; the response shape is canon (Security §4.1b).
+
+Claims frozen at token birth: `org_id` = the caller's OLDEST active membership,
+`roles` = sorted union of the membership role and the account role scopes, and
+`sid` = this refresh token's `jti` (which is what makes O11 mark the line
+`current`). A tenant user with **zero** active memberships is a 401 and gets no
+token at all.
+
+Platform-staff logins (v1.7.1, §4.5) MUST carry a live `mfa_code` against a
+CONFIRMED enrollment: missing/invalid → **403** `mfa_required` (+ `enrolled`
+to say whether the caller should confirm or run `/auth/mfa/setup/` first).
+superuser break-glass accounts are deliberately NOT gated here — the support
+surface itself rejects them. Rotation is intentionally OFF (access 15 min,
+refresh 7 d).""",
+        auth=[],
+        request=LoginRequestSerializer,
+        responses={
+            200: LoginResponseSerializer,
+            401: OpenApiResponse(
+                response=ErrorEnvelopeSerializer,
+                description="Invalid credentials, or a tenant user with zero active memberships.",
+            ),
+            403: OpenApiResponse(
+                response=MfaRequiredSerializer,
+                description="Platform staff without a verified TOTP code.",
+            ),
+        },
+        examples=[LOGIN_REQUEST_EXAMPLE, LOGIN_RESPONSE_EXAMPLE],
+    )
     def post(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -113,6 +191,29 @@ class RefreshView(TokenRefreshView):
     خروجِ عضو بلافاصله اثر کند و توکنِ جدید بدونِ org_id صادر شود.
     """
 
+    @extend_schema(
+        tags=[TAG_AUTH],
+        operation_id="refresh_token",
+        summary="Refresh the access token",
+        description="""Stock SimpleJWT endpoint with ONE deliberate override: the tenancy
+claims are **re-derived from current DB truth** when the new access is minted,
+so a deactivated member's next refresh yields an org-less token (C-14
+fail-closed-empty) instead of copying the old org for up to 7 days.
+
+The response stays stock — `{access}` only; the login/refresh key asymmetry is
+contractual and must not be "unified". A refresh line revoked via O12 dies
+here with **401** `session revoked`; `sid` on the new access points at exactly
+this refresh line, and `last_seen_at` is bumped (never un-revoking).""",
+        auth=[],
+        request=RefreshRequestSerializer,
+        responses={
+            200: RefreshResponseSerializer,
+            401: OpenApiResponse(
+                response=ErrorEnvelopeSerializer,
+                description="Invalid/expired refresh token, or a session revoked via O12.",
+            ),
+        },
+    )
     def post(self, request, *args, **kwargs):
         response = super().post(request, *args, **kwargs)
         if response.status_code != 200:
@@ -173,6 +274,42 @@ def _require_owner(request):
     return None
 
 
+@extend_schema(
+    methods=["GET"],
+    tags=[TAG_ORG],
+    operation_id="list_org_members",
+    summary="List the org's members",
+    description="""Bare list (no envelope) of every membership row of the caller's org —
+inactive rows included, so the owner can see who was soft-off and reactivate
+them. Any member may read this; the org comes from the validated `org_id`
+claim, never from a query parameter.""",
+    request=None,
+    responses={200: MemberOutSerializer(many=True), **error_responses(401)},
+    examples=[MEMBER_OUT_EXAMPLE],
+)
+@extend_schema(
+    methods=["POST"],
+    tags=[TAG_ORG],
+    operation_id="invite_org_member",
+    summary="Invite (or reactivate) a member — owner only",
+    description="""Owner-exclusive. An unknown `username` is created as a user with an
+**unusable password** (login only ever happens through an explicit credential
+handover — the invite itself never sets one).
+
+If a membership row already exists for that user in this org:
+`is_active: true` → **409**; `is_active: false` → the row is reactivated and
+**200** is returned instead of 201. A fresh membership → **201**.
+
+`role` is restricted to the contract enum; anything else is a 400.""",
+    request=MemberInviteRequestSerializer,
+    responses={
+        200: MemberOutSerializer,
+        201: MemberOutSerializer,
+        409: CONFLICT_RESPONSE,
+        **error_responses(400, 401, 403),
+    },
+    examples=[MEMBER_INVITE_EXAMPLE, MEMBER_OUT_EXAMPLE],
+)
 @api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated])
 def org_members(request):
@@ -222,6 +359,28 @@ def org_members(request):
     return Response(_member_out(member), status=201)
 
 
+@extend_schema(
+    tags=[TAG_ORG],
+    operation_id="deactivate_org_member",
+    summary="Deactivate a member — owner only",
+    description="""Soft-off, never delete. Consequence chain (Security §4.1b, C-14): the
+member's live access tokens die within their 15-minute lifetime, the next
+refresh yields an org-less token, and org-scoped reads fail closed empty.
+
+Verdicts: 403 caller is not the owner; 404 no such member **in the caller's
+org** (a foreign member id is the same 404 — never an oracle). Returns
+`{"is_active": false}`.""",
+    parameters=[
+        OpenApiParameter(
+            "member_id", int, OpenApiParameter.PATH, description="OrgMember row id."
+        )
+    ],
+    request=None,
+    responses={
+        200: MemberDeactivateResponseSerializer,
+        **error_responses(401, 403, 404),
+    },
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def deactivate_member(request, member_id: int):
@@ -246,6 +405,29 @@ def deactivate_member(request, member_id: int):
     return Response({"is_active": False})
 
 
+@extend_schema(
+    tags=[TAG_SUPPORT],
+    operation_id="open_support_session",
+    summary="Open an audited org-context support session",
+    description="""Platform staff **only** — and never a superuser (the break-glass System
+Admin account is deliberately rejected here; a forged `support_session` claim
+on a superuser token must not open this surface).
+
+Policies, in order: (1) staff-not-superuser, else 403; (2) `incident_id` is
+MANDATORY — blank is a 400; (3) `org_id` must be a real organization UUID,
+otherwise 400; (4) a `SUPPORT_ORG_ENTER` audit row is written **before** the
+successful return, so an op can never be skipped by a later error.
+
+The returned token lives 900 seconds and carries `org_id` +
+`support_session: true` + `incident_id`; its holder is an ordinary
+RLS-scoped user of exactly that org — no privilege widens.""",
+    request=SupportSessionRequestSerializer,
+    responses={
+        200: SupportSessionResponseSerializer,
+        **error_responses(400, 401, 403),
+    },
+    examples=[SUPPORT_SESSION_REQUEST_EXAMPLE, SUPPORT_SESSION_RESPONSE_EXAMPLE],
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def support_session(request):
@@ -329,6 +511,24 @@ def _staff_not_superuser(request):
     return None
 
 
+@extend_schema(
+    tags=[TAG_SUPPORT],
+    operation_id="setup_staff_mfa",
+    summary="(Re)issue the staff TOTP enrollment",
+    description="""Staff-not-superuser only. Issues an **unconfirmed** TOTP enrollment and
+returns the secret plus the `otpauth://` URI for the authenticator app.
+
+Until `/auth/mfa/confirm/` verifies a live code, platform-staff login stays
+blocked (`mfa_required`) — enroll-then-login is the intended first-run flow.
+Calling setup again re-issues the secret; a previously confirmed enrollment is
+not silently trusted.""",
+    request=None,
+    responses={
+        200: MfaSetupResponseSerializer,
+        **error_responses(401, 403),
+    },
+    examples=[MFA_SETUP_RESPONSE_EXAMPLE],
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def mfa_setup(request):
@@ -351,6 +551,23 @@ def mfa_setup(request):
     )
 
 
+@extend_schema(
+    tags=[TAG_SUPPORT],
+    operation_id="confirm_staff_mfa",
+    summary="Confirm the staff TOTP enrollment",
+    description="""Verifies the first live code and flips the enrollment row to confirmed,
+which is what unblocks platform-staff login. A missing or wrong code is a
+plain 400 and stays retryable — the surface is not rate-limited into lockout
+by a single typo, but the login path still requires a live code every time.""",
+    request=MfaConfirmRequestSerializer,
+    responses={
+        200: MfaConfirmResponseSerializer,
+        **error_responses(400, 401, 403),
+    },
+    examples=[
+        OpenApiExample("Confirm enrollment", request_only=True, value={"code": "492013"})
+    ],
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def mfa_confirm(request):
@@ -409,6 +626,37 @@ def _audit_support_op(request, org_id, action, incident_id, details):
     )
 
 
+@extend_schema(
+    tags=[TAG_SUPPORT],
+    operation_id="support_gateway_provisioning",
+    summary="Suspend or resume a gateway in the support session",
+    description="""Runbook op inside the audited session org. `action=suspend` flips
+PROVISIONED → SUSPENDED and revokes the gateway's EMQX ACLs (traffic stops);
+`resume` restores the prior status and re-syncs the allows — the same service
+state matrix as the provisioning surface, plus a `SUPPORT_OP_GATEWAY_PROVISIONING`
+audit row carrying the session's incident id.
+
+409 when the state matrix rejects the transition (no partial write); a gateway
+not in the session org is a 404 `gateway not found in the session org`.""",
+    parameters=[
+        OpenApiParameter(
+            "gateway_slot_id", str, OpenApiParameter.PATH, description="Gateway slot id inside the session org."
+        )
+    ],
+    request=SupportGatewayProvisioningRequestSerializer,
+    responses={
+        200: SupportGatewayProvisioningResponseSerializer,
+        409: CONFLICT_RESPONSE,
+        **error_responses(400, 401, 403, 404),
+    },
+    examples=[
+        OpenApiExample(
+            "Suspend the gateway",
+            request_only=True,
+            value={"action": "suspend", "reason": "Stuck publish loop, INC-2041"},
+        )
+    ],
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def support_gateway_provisioning(request, gateway_slot_id: str):
@@ -457,6 +705,35 @@ def support_gateway_provisioning(request, gateway_slot_id: str):
     )
 
 
+@extend_schema(
+    tags=[TAG_SUPPORT],
+    operation_id="support_alert_force_resolve",
+    summary="Force-resolve an alert stuck by a known engine defect",
+    description="""Runbook-only escape hatch: writes `resolved_at` **directly** (normal
+resolution stays hysteresis-driven). `reason` is mandatory — a blank value is
+a 400 — because the audit row must name the defect reference.
+
+Idempotent: an already-resolved alert returns the same 200 shape with
+`idempotent: true` and writes nothing new. Foreign/unknown alert → 404 in the
+session org.""",
+    parameters=[
+        OpenApiParameter(
+            "alert_id", str, OpenApiParameter.PATH, description="Alert uuid inside the session org."
+        )
+    ],
+    request=SupportForceResolveRequestSerializer,
+    responses={
+        200: SupportForceResolveResponseSerializer,
+        **error_responses(400, 401, 403, 404),
+    },
+    examples=[
+        OpenApiExample(
+            "Force resolve",
+            request_only=True,
+            value={"reason": "NH3 velocity latch stuck (defect ENG-118), INC-2041"},
+        )
+    ],
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def support_alert_force_resolve(request, alert_id):
@@ -490,6 +767,41 @@ def support_alert_force_resolve(request, alert_id):
     return Response({"alert_id": str(alert.pk), "resolved": True})
 
 
+@extend_schema(
+    tags=[TAG_SUPPORT],
+    operation_id="support_task_dispatch",
+    summary="Dispatch a whitelisted maintenance task",
+    description="""Only three tasks exist (`drain_pending_approval`,
+`rebuild_threshold_cache`, `rebuild_zone_cache`) — anything else is a 400
+`unknown task`; `reason` is mandatory. `drain_pending_approval` additionally
+requires a `gateway_slot_id` belonging to the session org (404 otherwise).
+
+**202 Accepted**: the work runs on the worker with the session org's scope
+passed explicitly; the response echoes the task and what was dispatched. Every
+dispatch writes a `SUPPORT_OP_TASK_DISPATCH` audit row with the session's
+incident id.""",
+    request=SupportTaskDispatchRequestSerializer,
+    responses={
+        202: SupportTaskDispatchResponseSerializer,
+        **error_responses(400, 401, 403, 404),
+    },
+    examples=[
+        OpenApiExample(
+            "Drain a gateway's parked requests",
+            request_only=True,
+            value={
+                "task": "drain_pending_approval",
+                "gateway_slot_id": "a1b2c3d4-0000-4000-8000-000000000001",
+                "reason": "Installer confirmed the farm, INC-2041",
+            },
+        ),
+        OpenApiExample(
+            "Dispatched",
+            response_only=True,
+            value={"task": "drain_pending_approval", "dispatched": "drain dispatched for a1b2c3d4-…"},
+        ),
+    ],
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def support_task_dispatch(request):

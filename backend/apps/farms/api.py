@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 from django.db import transaction
 from django.db.models import Count, Max
 from django.utils import timezone
+from drf_spectacular.utils import OpenApiExample, OpenApiParameter, extend_schema
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -28,7 +29,17 @@ from rest_framework.response import Response
 
 from apps.accounts.permissions import _claims
 from apps.alerts.models import AlertInstance, SaloonOperationalState
+from apps.common.schemas import TAG_FARMS, error_responses
 from apps.devices.models import GatewaySaloonZone, SaloonSensorSlot
+from apps.farms.serializers import (
+    FarmOverviewSerializer,
+    FlockCycleCreateResponseSerializer,
+    FlockCycleCreateSerializer,
+    FlockCycleSerializer,
+    OperationalStateRequestSerializer,
+    OperationalStateResponseSerializer,
+    SaloonDetailSerializer,
+)
 from apps.farms.models import Farm, Saloon
 from apps.system_config.models import SystemConfiguration
 from apps.telemetry.models import FlockCycle
@@ -185,6 +196,25 @@ def _gateway_out(saloon, zone_rows, statuses: dict) -> tuple:
 # ---------------------------------------------------------------------------
 # GET /saloons/{saloon_id}/
 # ---------------------------------------------------------------------------
+@extend_schema(
+    tags=[TAG_FARMS],
+    operation_id="get_saloon_detail",
+    summary="Saloon detail",
+    description="""The full saloon record: identity, geography, the canonical
+`operational_state` loop position, flock age, gateway binding and the sensor
+slot list.
+
+Nulls are honest: `gateway_slot_id`/`gateway_status` are null for a saloon
+with no zone assignment (or when Redis cannot answer the status key), and
+`flock_age_days` is null without an open flock. Foreign/unknown saloon → 404.""",
+    parameters=[
+        OpenApiParameter(
+            "saloon_id", int, OpenApiParameter.PATH, description="Saloon id (caller's org)."
+        )
+    ],
+    request=None,
+    responses={200: SaloonDetailSerializer, **error_responses(401, 404)},
+)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def saloon_detail(request, saloon_id: int):
@@ -222,6 +252,28 @@ def _saloon_detail_payload(saloon: Saloon) -> dict:
 # ---------------------------------------------------------------------------
 # GET /saloons/  (M7-11 — v1.6 native lists)
 # ---------------------------------------------------------------------------
+@extend_schema(
+    tags=[TAG_FARMS],
+    operation_id="list_saloons",
+    summary="List saloons (v1.6 native list)",
+    description="""Bare list (no envelope) of SaloonDetail objects for the caller's org,
+ordered by farm then saloon.
+
+`?farm_id=` narrows to one farm. A foreign **and** an unknown farm id share one
+verdict — `403 {"error": "forbidden"}` — so the filter can never be used as an
+existence oracle for another org's farms.""",
+    parameters=[
+        OpenApiParameter(
+            "farm_id",
+            int,
+            OpenApiParameter.QUERY,
+            required=False,
+            description="Narrow to one farm; a foreign or unknown id is a 403.",
+        )
+    ],
+    request=None,
+    responses={200: SaloonDetailSerializer(many=True), **error_responses(400, 401, 403)},
+)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def saloon_list(request):
@@ -262,6 +314,24 @@ def saloon_list(request):
 # ---------------------------------------------------------------------------
 # GET /farms/{farm_id}/overview/
 # ---------------------------------------------------------------------------
+@extend_schema(
+    tags=[TAG_FARMS],
+    operation_id="get_farm_overview",
+    summary="Farm overview",
+    description="""The farm header plus one rollup card per saloon: state, flock age,
+gateway status and the active-alert aggregate (`active_alert_count`,
+`highest_active_tier`).
+
+Aggregates are computed in bulk (no N+1) and the alert tier is null when the
+saloon has no unresolved alert. Foreign/unknown farm → 404.""",
+    parameters=[
+        OpenApiParameter(
+            "farm_id", int, OpenApiParameter.PATH, description="Farm id (caller's org)."
+        )
+    ],
+    request=None,
+    responses={200: FarmOverviewSerializer, **error_responses(401, 404)},
+)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def farm_overview(request, farm_id: int):
@@ -325,6 +395,27 @@ def _farm_overview_payload(farm: Farm) -> dict:
 # ---------------------------------------------------------------------------
 # GET /farms/  (M7-11 — v1.6 native lists)
 # ---------------------------------------------------------------------------
+@extend_schema(
+    tags=[TAG_FARMS],
+    operation_id="list_farms",
+    summary="List farms (v1.6 native list)",
+    description="""Bare list (no envelope) of FarmOverview objects for the caller's org.
+
+`?org_id=` is accepted only when it EQUALS the validated claim org; asking for
+another org is a 403 ("you asked for data that is not yours"), never a
+misleading empty list.""",
+    parameters=[
+        OpenApiParameter(
+            "org_id",
+            str,
+            OpenApiParameter.QUERY,
+            required=False,
+            description="Must equal the caller's claim org when present; otherwise 403.",
+        )
+    ],
+    request=None,
+    responses={200: FarmOverviewSerializer(many=True), **error_responses(400, 401, 403)},
+)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def farm_list(request):
@@ -355,6 +446,40 @@ def farm_list(request):
 # ---------------------------------------------------------------------------
 # POST /saloons/{saloon_id}/operational-state/
 # ---------------------------------------------------------------------------
+@extend_schema(
+    tags=[TAG_FARMS],
+    operation_id="transition_operational_state",
+    summary="Transition the saloon's operational state",
+    description="""Moves the saloon one step along the canonical loop
+(`EMPTY_SANITATION → PRE_HEATING → ACTIVE_FLOCK → HARVESTED_VACANT → …`) and
+closes the previous state row in the same transaction. **Engineer+** only.
+
+Verdicts: 400 for an unknown state, a no-op (already in that state) or an
+illegal jump — the loop is strictly one step forward; 403 for a missing role.
+
+The A6 guard: entering `ACTIVE_FLOCK` also requires the latest saloon
+temperature to sit within ±`active_flock_temp_tolerance_c` of the cached
+`preheat_target_c`, otherwise the transition is a 400 with the measured
+distance in the message. With no cached target, no reading, or Redis down the
+guard degrades to *allow* — never to a 500.""",
+    parameters=[
+        OpenApiParameter(
+            "saloon_id", int, OpenApiParameter.PATH, description="Saloon id (caller's org)."
+        )
+    ],
+    request=OperationalStateRequestSerializer,
+    responses={
+        200: OperationalStateResponseSerializer,
+        **error_responses(400, 401, 403, 404),
+    },
+    examples=[
+        OpenApiExample(
+            "Start pre-heating",
+            request_only=True,
+            value={"state": "PRE_HEATING", "reason": "New flock arrives tomorrow"},
+        )
+    ],
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def operational_state(request, saloon_id: int):
@@ -471,6 +596,58 @@ def _warn_on_temp_violation(saloon_id: int, tolerance: float):
 # ---------------------------------------------------------------------------
 # GET/POST /saloons/{saloon_id}/flocks/
 # ---------------------------------------------------------------------------
+@extend_schema(
+    methods=["GET"],
+    tags=[TAG_FARMS],
+    operation_id="list_flock_cycles",
+    summary="List flock cycles",
+    description="""Bare list of the saloon's flock cycles, newest start first. Dates are the
+**Tehran calendar days** the farm meant (`YYYY-MM-DD`), not UTC instants;
+`end_date` is null while the flock is open. Foreign/unknown saloon → 404.""",
+    parameters=[
+        OpenApiParameter(
+            "saloon_id", int, OpenApiParameter.PATH, description="Saloon id (caller's org)."
+        )
+    ],
+    request=None,
+    responses={200: FlockCycleSerializer(many=True), **error_responses(400, 401, 404)},
+)
+@extend_schema(
+    methods=["POST"],
+    tags=[TAG_FARMS],
+    operation_id="create_flock_cycle",
+    summary="Register a flock cycle",
+    description="""Opens a new flock for the saloon (**engineer+**). `breed_type`,
+`start_date` and `placement_count` (≥1 — it is the mortality-% denominator)
+are required; `day_old_weight_g` is optional FCR input. The new row keeps
+`end_date` null, i.e. it becomes the active flock.
+
+Creating a second flock while one is open is a 400 — a saloon has at most one
+active flock. Registering a flock re-arms the saloon's threshold bands
+immediately (post_save cache hook).""",
+    parameters=[
+        OpenApiParameter(
+            "saloon_id", int, OpenApiParameter.PATH, description="Saloon id (caller's org)."
+        )
+    ],
+    request=FlockCycleCreateSerializer,
+    responses={
+        201: FlockCycleCreateResponseSerializer,
+        **error_responses(400, 401, 403, 404),
+    },
+    examples=[
+        OpenApiExample(
+            "Register a flock",
+            request_only=True,
+            value={
+                "breed_type": "ross308",
+                "start_date": "2026-09-01",
+                "placement_count": 5000,
+                "day_old_weight_g": 42.0,
+            },
+        )
+    ],
+)
 @api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated])
 def flock_cycles(request, saloon_id: int):

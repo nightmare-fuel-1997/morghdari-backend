@@ -21,7 +21,7 @@ def test_openapi_schema_serves_valid_document(client):
     assert res.status_code == 200
     doc = res.json()
     assert doc["openapi"].startswith("3.")
-    assert doc["info"]["title"] == "Morghdari API"
+    assert doc["info"]["title"] == "Morghdari Poultry Monitoring API"
     # v0.1 has no authenticated API surface yet: paths must be an (empty) object,
     # never missing — a missing key would mean spectacular failed silently.
     assert isinstance(doc.get("paths"), dict)
