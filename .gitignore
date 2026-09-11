@@ -34,15 +34,34 @@ node_modules/
 .idea/
 Thumbs.db
 .DS_Store
+*~
+*.swp
+*.swo
+*.orig
+*.rej
+
+# NOTE: backend/openapi.generated.yaml is INTENTIONALLY tracked - it is the
+# documented generated mirror, enforced by tests/test_openapi_schema.py.
+# Do NOT add it (or *.generated.yaml) to this file.
 
 # --- Freebuff agent workspace (local tooling only) ---
 .freebuff/
+
+# --- Agent workspaces (local tooling only, never committed) ---
+.superpowers/
+docs/superpowers/
+
+# --- Knowledge-graph build output (regenerable via graphify; the shared
+# --- graph lives in backend_docs - never commit the local build tree) ---
+graphify-out/
 
 # --- Built demo bundle (source of truth: demo-ui-src/) ---
 demo-ui/dist/
 
 # --- Test / coverage artifacts ---
 .coverage
+.coverage.*
+.hypothesis/
 coverage.json
 coverage.xml
 htmlcov/
