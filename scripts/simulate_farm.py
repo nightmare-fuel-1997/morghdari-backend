@@ -6,8 +6,8 @@ publishing REAL schema-2.0 payloads over the REAL MQTT path (demo branches).
 اسکیما-۲٫۰ را از مسیر واقعی MQTT به داشبورد زنده می‌فرستند.
 
 What it does:
-  1. Reads the topology manifest written by
-     `python backend/manage.py demo_farm_seed --manifest-out farm.json`.
+  1. Reads the topology manifest the operator supplies (farm/saloon ids from
+     the Django admin or API) via `--manifest`.
   2. Spawns ONE paho MQTT client PER SENSOR PACK (each a fake "device"), each
      publishing its own schema-2.0 reading to the REAL broker every
      `--interval` seconds (default 5). device_ts advances in REAL 60-second
@@ -98,8 +98,8 @@ REPLAY_WINDOWS = {
     1: [(240, 250, "A")],
 }
 # THI heat-stress windows: temp +7 AND humidity +18 together. With T≈33.5, RH
-# ≈76 the NRC index crosses the seeded thi_max=79 through the normal breach
-# path (rule added by demo_farm_seed). Saloon 2 pack A.
+# ≈76 the NRC index crosses the thi_max=79 threshold through the normal breach
+# path. Saloon 2 pack A.
 THI_WINDOWS = {
     2: [(170, 185, "A", 7.0, 18.0)],
 }
@@ -506,7 +506,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--manifest", required=True,
-        help="Path to the manifest JSON from `manage.py demo_farm_seed --manifest-out`",
+        help="Path to the topology manifest JSON (farm/saloon ids the sim publishes for)",
     )
     parser.add_argument(
         "--interval", type=float, default=5.0,

@@ -1,33 +1,38 @@
 #!/usr/bin/env bash
-# start_demo_stack.sh — one-command LIVE-demo stack launcher (Windows Git Bash).
+# start_dev_stack.sh — one-command local dev stack launcher (Windows Git Bash).
 #
 # Brings up, in order:
 #   1. EMQX broker (Docker, MQTT :1883 + dashboard :18083) — reused if already running
-#   2. Demo farm seed (idempotent) + fresh manifest
-#   2.5 EMQX authn + topic ACLs (scripts/emqx_provision.py — per-farm sim users,
-#       subscribe-only subscriber, no_match=deny)
-#   3. Django backend on :8000 (the demo-ui React app is served from /demo/)
-#   4. scripts/simulate_farm.py — fake devices publishing over the REAL MQTT path
+#   2. EMQX authn + topic ACLs (scripts/emqx_provision.py — per-farm sim users,
+#      subscribe-only subscriber, no_match=deny)              [needs --manifest]
+#   3. Django backend on :8000 (API docs at /api/docs/)
+#   4. scripts/simulate_farm.py — fake devices over the REAL MQTT path
+#                                                              [needs --manifest]
 #   5. celery worker + beat — drains the MQTT streams into Postgres
 #   6. MQTT subscriber (demo-subscriber-01, demo-sub/devpass) — stream ingress
 #
-# Usage:
-#   bash scripts/start_demo_stack.sh            # start everything
-#   bash scripts/start_demo_stack.sh --calm     # simulator without breach scenarios
-#   bash scripts/start_demo_stack.sh --stop     # stop all above (EMQX kept)
+# No seeder ships in this repo any more: the farm/saloon topology is created by
+# the operator (Django admin or API) and handed to broker provisioning + the
+# simulator as a manifest. Without --manifest the stack still starts (broker +
+# backend + celery + subscriber) and skips steps 2 and 4.
 #
-# Logs: backend/demo-server.log, backend/demo-sim.log,
-#       backend/celery-worker.log, backend/celery-beat.log, backend/demo-subscriber.log
+# Usage:
+#   bash scripts/start_dev_stack.sh --manifest backend/farm_manifest.json
+#   bash scripts/start_dev_stack.sh --manifest <path> --calm   # calm simulator
+#   bash scripts/start_dev_stack.sh --stop     # stop all above (EMQX kept)
+#
+# Logs: backend/dev-server.log, backend/dev-sim.log,
+#       backend/celery-worker.log, backend/celery-beat.log, backend/dev-subscriber.log
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKEND="$ROOT/backend"
 PY="$BACKEND/.venv/Scripts/python.exe"
 DB_URL="postgres://morghdari_dev:dev_password_only@localhost:5432/morghdari_dev"
-MANIFEST="$BACKEND/farm_manifest.json"
+MANIFEST=""
 EMQX_CONTAINER="poultry_the_main_by_ai-emqx-1"
 
-log() { printf '[demo-stack] %s\n' "$*"; }
+log() { printf '[dev-stack] %s\n' "$*"; }
 
 # ── stop path ────────────────────────────────────────────────────────────────
 # NOTE on pid files: every launch block writes `echo $! > "$BACKEND/...pid"`
@@ -60,13 +65,23 @@ if [ "${1:-}" = "--stop" ]; then
   stop_component ' -A config worker' 'celery worker'
   stop_component ' -A config beat' 'celery beat'
   stop_component 'morghdari.subscriber' 'MQTT subscriber'
-  rm -f "$BACKEND"/demo-stack-*.pid
+  rm -f "$BACKEND"/dev-stack-*.pid
   log "backend + simulator + subscriber + celery worker/beat stopped (EMQX container kept — 'docker stop $EMQX_CONTAINER' to remove)"
   exit 0
 fi
 
 SIM_ARGS=()
-[ "${1:-}" = "--calm" ] && SIM_ARGS+=(--scenario calm)
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --manifest) MANIFEST="${2:-}"; shift 2 ;;
+    --calm) SIM_ARGS+=(--scenario calm); shift ;;
+    *) log "unknown argument: $1 (see the header for usage)"; exit 2 ;;
+  esac
+done
+if [ -n "$MANIFEST" ] && [ ! -f "$MANIFEST" ]; then
+  log "ERROR: manifest not found: $MANIFEST"
+  exit 2
+fi
 
 # ── 1. EMQX broker ──────────────────────────────────────────────────────────
 # Run with the FULL config inline (image emqx:5.5 — the compose file's tag):
@@ -117,30 +132,36 @@ for i in $(seq 1 30); do
   sleep 1
 done
 
-# ── 2. seed demo farm (idempotent) + fresh manifest ─────────────────────────
-log "seeding demo farm (idempotent)"
-(cd "$BACKEND" && DATABASE_URL="$DB_URL" PYTHONUNBUFFERED=1 \
-  "$PY" manage.py demo_farm_seed --manifest-out "$(basename "$MANIFEST")")
-log "restarting simulator (fresh scenario clock; backend data NOT deleted)"
+# ── 2/4. data source: manifest required ────────────────────────────────────
+if [ -n "$MANIFEST" ]; then
+  log "using manifest $MANIFEST (broker provisioning + simulator)"
+else
+  log "no --manifest given: skipping EMQX sim-user provisioning and the simulator"
+fi
 
 # ── 2.5 EMQX authn + topic ACLs ────────────────────────────────────────────
 # Per-farm simulator users (may publish ONLY their own farm's topics) plus
 # the subscribe-only subscriber user — idempotent, and run on EVERY start so
-# a recreated container is re-secured automatically.
-log "provisioning EMQX authn + topic ACLs (per-farm sim users, subscriber)"
-(cd "$BACKEND" && "$PY" "$ROOT/scripts/emqx_provision.py" --manifest "$MANIFEST")
+# a recreated container is re-secured automatically. Needs a manifest to know
+# which farms exist, so it is skipped when none is supplied.
+if [ -n "$MANIFEST" ]; then
+  log "provisioning EMQX authn + topic ACLs (per-farm sim users, subscriber)"
+  (cd "$BACKEND" && "$PY" "$ROOT/scripts/emqx_provision.py" --manifest "$MANIFEST")
+else
+  log "skipping EMQX provisioning (no --manifest)"
+fi
 
 # ── 3. Django backend on :8000 ───────────────────────────────────────────────
 if curl -s -o /dev/null --max-time 2 http://127.0.0.1:8000/api/docs/; then
   log "backend already answering on :8000 (if it predates your changes, restart with --stop)"
 else
-  log "starting Django backend on :8000 (log: backend/demo-server.log)"
+  log "starting Django backend on :8000 (log: backend/dev-server.log)"
   (cd "$BACKEND" && DATABASE_URL="$DB_URL" PYTHONUNBUFFERED=1 \
-    nohup "$PY" manage.py runserver 0.0.0.0:8000 > demo-server.log 2>&1 &
-  echo $! > "$BACKEND/demo-stack-backend.pid")
+    nohup "$PY" manage.py runserver 0.0.0.0:8000 > dev-server.log 2>&1 &
+  echo $! > "$BACKEND/dev-stack-backend.pid")
   for i in $(seq 1 30); do
     curl -s -o /dev/null --max-time 2 http://127.0.0.1:8000/api/docs/ && break
-    [ "$i" = 30 ] && { log "ERROR: backend did not come up — see backend/demo-server.log"; exit 1; }
+    [ "$i" = 30 ] && { log "ERROR: backend did not come up — see backend/dev-server.log"; exit 1; }
     sleep 1
   done
 fi
@@ -160,56 +181,58 @@ for k in r.scan_iter('dedup:*', count=500):
 print('cleared %d stale dedup keys' % n)
 ")
 
-# ── 4. farm simulator (the data source) ─────────────────────────────────────
-if [ -f "$BACKEND/demo-stack-sim.pid" ] && kill -0 "$(cat "$BACKEND/demo-stack-sim.pid")" 2>/dev/null; then
-  log "simulator already running (pid $(cat "$BACKEND/demo-stack-sim.pid"))"
+# ── 4. farm simulator (the data source; needs a manifest) ───────────────────
+if [ -z "$MANIFEST" ]; then
+  log "simulator skipped (no --manifest)"
+elif [ -f "$BACKEND/dev-stack-sim.pid" ] && kill -0 "$(cat "$BACKEND/dev-stack-sim.pid")" 2>/dev/null; then
+  log "simulator already running (pid $(cat "$BACKEND/dev-stack-sim.pid"))"
 else
-  log "starting farm simulator (interval 5s; log: backend/demo-sim.log)"
+  log "starting farm simulator (interval 5s; log: backend/dev-sim.log)"
   (cd "$BACKEND" && PYTHONUNBUFFERED=1 \
     nohup "$PY" "$ROOT/scripts/simulate_farm.py" --manifest "$MANIFEST" --interval 5 \
     --mqtt-username-prefix demo-sim --mqtt-password devpass \
-    "${SIM_ARGS[@]}" > demo-sim.log 2>&1 &
-  echo $! > "$BACKEND/demo-stack-sim.pid")
+    "${SIM_ARGS[@]}" > dev-sim.log 2>&1 &
+  echo $! > "$BACKEND/dev-stack-sim.pid")
 fi
 
 # ── 5. celery worker (executes the drain tasks the beat kicks) ─────────────
-if [ -f "$BACKEND/demo-stack-worker.pid" ] && kill -0 "$(cat "$BACKEND/demo-stack-worker.pid")" 2>/dev/null; then
+if [ -f "$BACKEND/dev-stack-worker.pid" ] && kill -0 "$(cat "$BACKEND/dev-stack-worker.pid")" 2>/dev/null; then
   log "celery worker already running"
 else
   log "starting celery worker (drains streams into Postgres; log: backend/celery-worker.log)"
   (cd "$BACKEND" && DATABASE_URL="$DB_URL" REDIS_URL="redis://:dev_redis_password@localhost:6379" && PYTHONUNBUFFERED=1 \
     nohup "$PY" -m celery -A config worker -l info -P solo -Q telemetry_realtime,telemetry_historical > celery-worker.log 2>&1 &
-  echo $! > "$BACKEND/demo-stack-worker.pid")
+  echo $! > "$BACKEND/dev-stack-worker.pid")
 fi
 
 # ── 6. celery beat (drain tasks are beat-kicked every 10s) ──────────────────
-if [ -f "$BACKEND/demo-stack-beat.pid" ] && kill -0 "$(cat "$BACKEND/demo-stack-beat.pid")" 2>/dev/null; then
+if [ -f "$BACKEND/dev-stack-beat.pid" ] && kill -0 "$(cat "$BACKEND/dev-stack-beat.pid")" 2>/dev/null; then
   log "celery beat already running"
 else
   log "starting celery beat (drains streams into Postgres every 10s)"
   (cd "$BACKEND" && DATABASE_URL="$DB_URL" REDIS_URL="redis://:dev_redis_password@localhost:6379" &&    nohup "$PY" -m celery -A config beat -l info > celery-beat.log 2>&1 &
-  echo $! > "$BACKEND/demo-stack-beat.pid")
+  echo $! > "$BACKEND/dev-stack-beat.pid")
 fi
 
-# ── 7. MQTT subscriber (stream ingress; stable client id + demo creds) ─────
-# Canonical env from demo_live.bat: demo-subscriber-01 / demo-sub / devpass.
+# ── 7. MQTT subscriber (stream ingress; stable client id + dev creds) ───────
+# Canonical dev env: demo-subscriber-01 / demo-sub / devpass.
 # demo-sub is the subscribe-only user provisioned by emqx_provision.py. The
 # stable client id is REQUIRED (persistent session — broker-side queue);
 # launching without it or with missing credentials caused the duplicate
 # subscribers and CONNACK failures this block exists to prevent.
-if [ -f "$BACKEND/demo-stack-subscriber.pid" ] && kill -0 "$(cat "$BACKEND/demo-stack-subscriber.pid")" 2>/dev/null; then
+if [ -f "$BACKEND/dev-stack-subscriber.pid" ] && kill -0 "$(cat "$BACKEND/dev-stack-subscriber.pid")" 2>/dev/null; then
   log "MQTT subscriber already running"
 else
-  log "starting MQTT subscriber (demo-subscriber-01; log: backend/demo-subscriber.log)"
+  log "starting MQTT subscriber (demo-subscriber-01; log: backend/dev-subscriber.log)"
   (cd "$BACKEND" && DATABASE_URL="$DB_URL" REDIS_URL="redis://:dev_redis_password@localhost:6379" \
     SUBSCRIBER_CLIENT_ID="demo-subscriber-01" MQTT_USERNAME="demo-sub" MQTT_PASSWORD="devpass" PYTHONUNBUFFERED=1 \
-    nohup "$PY" -m morghdari.subscriber > demo-subscriber.log 2>&1 &
-  echo $! > "$BACKEND/demo-stack-subscriber.pid")
+    nohup "$PY" -m morghdari.subscriber > dev-subscriber.log 2>&1 &
+  echo $! > "$BACKEND/dev-stack-subscriber.pid")
 fi
 
 log "stack is up:"
-log "  dashboard  http://127.0.0.1:8000/demo/          (login demo-owner / demo-pass-123)"
-log "  console    http://127.0.0.1:8000/demo/console/  (engineering console)"
+log "  api docs   http://127.0.0.1:8000/api/docs/      (Swagger UI)"
+log "  admin      http://127.0.0.1:8000/admin/"
 log "  EMQX       http://127.0.0.1:18083/              (broker dashboard)"
-log "  subscriber demo-subscriber-01 (demo-sub/devpass) log: backend/demo-subscriber.log"
-log "  stop with: bash scripts/start_demo_stack.sh --stop"
+log "  subscriber demo-subscriber-01 (demo-sub/devpass) log: backend/dev-subscriber.log"
+log "  stop with: bash scripts/start_dev_stack.sh --stop"

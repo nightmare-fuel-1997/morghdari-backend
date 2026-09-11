@@ -46,11 +46,6 @@ MIRROR = Path(__file__).resolve().parent.parent / "openapi.generated.yaml"
 #   /api/schema, /api/docs, /api/redoc — the docs endpoints themselves
 KEPT_PREFIXES = ("/api/v1/", "/api/compat/v1/", "/api/schema", "/api/docs", "/api/redoc")
 
-# Ops/notes endpoints that are served but deliberately undocumented (DEBUG-gated
-# demo console) are @extend_schema(exclude=True), so they never reach here.
-_HIDDEN_PREFIXES = ("/demo/",)
-
-
 def _generate():
     """(schema, errors, warnings) for the current urlconf — no DB access needed."""
     from drf_spectacular.generators import SchemaGenerator
@@ -100,11 +95,7 @@ def test_only_canonical_prefixes_are_documented():
     paths = list((schema or {}).get("paths", {}))
     assert paths, "no paths in the generated schema"
 
-    stray = [
-        path
-        for path in paths
-        if not path.startswith(KEPT_PREFIXES) and not path.startswith(_HIDDEN_PREFIXES)
-    ]
+    stray = [path for path in paths if not path.startswith(KEPT_PREFIXES)]
     assert not stray, (
         "the legacy `/api/...` compat twins must be dropped by "
         f"apps.common.schema_hooks.drop_legacy_compat_aliases, found: {stray}"

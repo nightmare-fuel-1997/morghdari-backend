@@ -13,7 +13,7 @@ honest, idempotently, through the EMQX management API:
   - authorization = built-in-DB source only (the file source is removed),
     no_match = deny, so anything not explicitly allowed is dropped
 
-It runs on every `start_demo_stack.sh` start, so a recreated container is
+It runs on every `start_dev_stack.sh` start, so a recreated container is
 re-secured automatically. Management API access uses the bootstrap API key
 from scripts/emqx-api-keys.txt (EMQX 5.5's /api/v5 requires API keys; the
 dashboard bootstrap users only cover the UI).
@@ -267,7 +267,8 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--manifest", required=True,
-                        help="farm_manifest.json from `manage.py demo_farm_seed --manifest-out`")
+                        help="farm topology manifest the operator supplies "
+                             "(ids of the farms/saloons the sim users are scoped to)")
     parser.add_argument("--base-url", default="http://127.0.0.1:18083")
     parser.add_argument("--api-user", default="demo-admin",
                         help="management-API key (scripts/emqx-api-keys.txt)")

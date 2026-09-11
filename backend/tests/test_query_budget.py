@@ -1,32 +1,23 @@
-"""/demo/api/farm/ — query-budget regression tests.
+"""/api/v1/farms/{id}/overview/ — query-budget regression tests.
 
-The boss board polls this endpoint every 5 seconds, so per-poll SQL and Redis
-round-trips are a budget, not a detail. These tests lock in the batched-lookup
-contract (django-patterns pass, 2026-09-01):
+The native farm overview (contract v1.6, M7-11) is polled by the frontend, so
+per-poll SQL is a budget, not a detail. These tests lock in the batched-lookup
+contract (django-patterns pass, 2026-09-01; retargeted from the deleted demo
+board endpoint, 2026-09-11):
 
   * an absolute ceiling on SQL statements per poll;
   * a flat-scaling check — adding saloons must not add per-saloon queries
-    (this is the N+1 that used to cost ~+2 statements per saloon); and
-  * a Redis round-trip shape check — two mget pipelines per poll, zero
-    per-key get/exists calls.
+    (this is the N+1 that used to cost ~+2 statements per saloon): the farm
+    overview used to call the per-saloon operational-state lookup inside its
+    card loop, which this guard caught when it moved here.
 
 Tests are documentation: they encode HOW MUCH one poll is allowed to cost.
-فارسی: هزینهٔ هر پولِ ۵ ثانیه‌ای بودجه است، نه جزئیات — این تست‌ها سقفش را
-قفل می‌کنند.
+فارسی: هزینهٔ هر پول بودجه است، نه جزئیات — این تست‌ها سقفش را قفل می‌کنند.
 """
 
-import os
 import uuid
 
 import pytest
-import redis as redis_lib
-
-# GATE: /demo/api/* exists only when DEBUG or this env var is set.
-os.environ.setdefault("MORGHDARI_DEMO_UI", "1")
-
-from tests.conftest import redis_base_url  # noqa: E402
-
-REDIS_URL = redis_base_url() + "/11"  # scratch DB (same isolation as test_demo_farm)
 
 from datetime import datetime, timedelta, timezone as dt_tz  # noqa: E402
 
@@ -49,36 +40,12 @@ from apps.tenants.models import Organization  # noqa: E402
 
 PASSWORD = "strong-pass-123"
 
-# Measured 2026-09-01 against the 2-saloon test world: 13 statements per
-# poll (3-farm dev universe also measured 13 — the cost is flat; tenant
-# setup + the batched lookups dominate, not org size). Ceiling = measured +
-# one regression element: any per-saloon/per-slot loop is +1..2 statements
-# per element and blows this immediately. The flat-scaling test below is the
-# sharper guard.
-SQL_BUDGET_PER_POLL = 17
-
-
-@pytest.fixture(autouse=True)
-def _fresh_redis(monkeypatch):
-    """Wipe the isolated logical DB and bind consumers to it."""
-    client = redis_lib.Redis.from_url(REDIS_URL, decode_responses=True)
-    client.flushdb()
-    monkeypatch.setattr("apps.telemetry.consumers._redis_client", client)
-    yield
-
-
-class _CountingRedisClient:
-    """Counting proxy over a real redis client: records how many times the
-    view touches the network per key-accessor (mget/get/exists)."""
-
-    def __init__(self, inner):
-        object.__setattr__(self, "_inner", inner)
-        object.__setattr__(self, "calls", {"mget": 0, "get": 0, "exists": 0})
-
-    def __getattr__(self, name):
-        if name in self.calls:
-            self.calls[name] += 1
-        return getattr(self._inner, name)
+# Measured 2026-09-11 (Postgres/Timescale CI, 2-saloon : 2-slot world): 10
+# statements per poll — farm, saloons, open flocks, gateway zones, alert
+# aggregates, operational states and locations, all bulk. Ceiling = measured
+# + 1, so ANY added per-poll statement is visible; a per-saloon loop is +1
+# per element and cannot hide. The flat-scaling test below is the second lock.
+SQL_BUDGET_PER_POLL = 11
 
 
 def _make_world(saloon_count=0, slots_per_saloon=2):
@@ -143,9 +110,13 @@ def _authed_client(token):
     return client
 
 
+def _overview_url(world):
+    return reverse("farms:farm-overview", args=[world["farm"].pk])
+
+
 @pytest.mark.use_migrations
 @pytest.mark.django_db(transaction=True)
-def test_farm_topology_sql_stays_within_budget(timescale_db):
+def test_farm_overview_sql_stays_within_budget(timescale_db):
     """One poll may not exceed SQL_BUDGET_PER_POLL statements. A per-saloon
     or per-slot query regression (~+1..2 statements per element) blows this."""
     world = _make_world(saloon_count=2, slots_per_saloon=2)
@@ -153,10 +124,10 @@ def test_farm_topology_sql_stays_within_budget(timescale_db):
     client = _authed_client(token)
 
     with CaptureQueriesContext(connection) as ctx:
-        response = client.get(reverse("demo-farm"))
+        response = client.get(_overview_url(world))
     assert response.status_code == 200
     assert len(ctx) <= SQL_BUDGET_PER_POLL, (
-        f"/demo/api/farm/ cost {len(ctx)} SQL statements "
+        f"/api/v1/farms/<id>/overview/ cost {len(ctx)} SQL statements "
         f"(budget {SQL_BUDGET_PER_POLL}) — a per-saloon/per-slot loop has "
         f"regressed.\n{ctx.captured_queries}"
     )
@@ -164,9 +135,9 @@ def test_farm_topology_sql_stays_within_budget(timescale_db):
 
 @pytest.mark.use_migrations
 @pytest.mark.django_db(transaction=True)
-def test_farm_topology_queries_do_not_scale_with_saloon_count(timescale_db):
-    """The flat line: growing the org 2 → 4 saloons must not add a single
-    statement. With batched lookups the cost is independent of org size; the
+def test_farm_overview_queries_do_not_scale_with_saloon_count(timescale_db):
+    """The flat line: growing the farm 2 → 4 saloons must not add a single
+    statement. With batched lookups the cost is independent of farm size; the
     old per-saloon loop added ~2 statements per saloon, and this test exists
     to catch it coming back."""
     world = _make_world(saloon_count=2, slots_per_saloon=2)
@@ -174,35 +145,15 @@ def test_farm_topology_queries_do_not_scale_with_saloon_count(timescale_db):
     client = _authed_client(token)
 
     with CaptureQueriesContext(connection) as ctx_small:
-        assert client.get(reverse("demo-farm")).status_code == 200
+        assert client.get(_overview_url(world)).status_code == 200
 
     _add_saloons(world, 2, slots_per_saloon=2)  # same org doubles in size
 
     with CaptureQueriesContext(connection) as ctx_grown:
-        assert client.get(reverse("demo-farm")).status_code == 200
+        assert client.get(_overview_url(world)).status_code == 200
 
     assert len(ctx_grown) <= len(ctx_small), (
-        f"poll cost grew with org size: {len(ctx_small)} → {len(ctx_grown)} "
+        f"poll cost grew with farm size: {len(ctx_small)} → {len(ctx_grown)} "
         f"statements for 2 → 4 saloons — a per-saloon query loop has "
         f"regressed.\nsmall={ctx_small.captured_queries}\ngrown={ctx_grown.captured_queries}"
     )
-
-
-@pytest.mark.use_migrations
-@pytest.mark.django_db(transaction=True)
-def test_farm_topology_redis_round_trips_are_pipelined(timescale_db, monkeypatch):
-    """Liveness + breach state must arrive in exactly TWO round-trips (the
-    status mget and the breach-key mget). Any per-slot exists or per-key get
-    regression is visible here as count drift."""
-    inner = redis_lib.Redis.from_url(REDIS_URL, decode_responses=True)
-    counting = _CountingRedisClient(inner)
-    monkeypatch.setattr("apps.telemetry.consumers._redis_client", counting)
-
-    world = _make_world(saloon_count=2, slots_per_saloon=2)
-    token = _login(world["user"].username)
-    response = _authed_client(token).get(reverse("demo-farm"))
-
-    assert response.status_code == 200
-    assert counting.calls["mget"] == 2, counting.calls
-    assert counting.calls["exists"] == 0, counting.calls
-    assert counting.calls["get"] == 0, counting.calls

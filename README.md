@@ -16,7 +16,6 @@
 |---|---|
 | `backend/` | Django project + subscriber service (one image, four commands) |
 | `initdb/` | Postgres bootstrap SQL (extensions, roles, RLS policies) |
-| `owner-console/` | **Owner-only visual console** — static HTML/JS, never shipped, not part of any API contract. The real frontend is a separate team's product. |
 | `versions/` | Build curriculum per version (TASKS / TUTORIAL / WALKTHROUGH / README) — read-only reference |
 | `scripts/` | Gateway simulator and helpers |
 | `PROGRESS.md` | Live task checklist (mirrors versions/vX/TASKS.md) |

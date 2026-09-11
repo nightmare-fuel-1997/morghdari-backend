@@ -46,7 +46,7 @@ services:
       - "18083:18083"  # Dashboard / Management API
     environment:
       EMQX_DASHBOARD__DEFAULT_PASSWORD: "dev_password"
-      # Same broker profile as scripts/start_demo_stack.sh run_emqx: built-in-DB
+      # Same broker profile as scripts/start_dev_stack.sh run_emqx: built-in-DB
       # authn, deny-by-default authorization, management-API key bootstrap
       # (EMQX 5.5 /api/v5 requires API keys; scripts/emqx_provision.py and the
       # M5-06/07/08 sync services need it). NO_MATCH=deny mirrors production —

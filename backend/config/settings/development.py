@@ -27,7 +27,3 @@ if importlib.util.find_spec("debug_toolbar"):
     INTERNAL_IPS = ["127.0.0.1"]
     MIDDLEWARE.insert(0, "debug_toolbar.middleware.DebugToolbarMiddleware")  # noqa: F405
     INSTALLED_APPS += ["debug_toolbar", "django_extensions"]  # noqa: F405
-
-# NOTE on CORS for owner-console: deliberately NOT wired yet. When the console
-# starts calling real APIs (v0.3+), either add django-cors-headers here or serve
-# the console through Django — decided at that version, not pre-solved now.

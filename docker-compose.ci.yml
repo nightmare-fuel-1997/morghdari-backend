@@ -65,7 +65,7 @@ services:
 
   # Real EMQX for the `live-verify` job — M5-07 authn/authz/revoke and M5-08
   # rotation are broker semantics that mocked tests cannot prove. Same broker
-  # profile as docker-compose.dev.yml / start_demo_stack.sh run_emqx:
+  # profile as docker-compose.dev.yml / start_dev_stack.sh run_emqx:
   # built-in-DB authn, deny-by-default authorization, management-API key
   # bootstrap (EMQX 5.5 /api/v5 requires API keys; emqx_provision.py and the
   # live verifier need it). NO data volume: each run gets a FRESH broker, so
@@ -88,7 +88,7 @@ services:
       timeout: 5s
       retries: 10
 
-  # Real-broker acceptance job: seeds the broker exactly like the demo stack
+  # Real-broker acceptance job: seeds the broker exactly like the dev stack
   # (emqx_provision.py — bcrypt authn chain, per-farm sim users + subscriber,
   # built-in-DB authz source, no_match=deny) then runs scripts/live_verify_emqx.py
   # (10 checks over real MQTT + the management API). Non-zero exit fails CI.

@@ -359,6 +359,20 @@ def _farm_overview_payload(farm: Farm) -> dict:
     }
     zone_rows = list(GatewaySaloonZone.objects.filter(saloon_id__in=saloon_ids))
     statuses = _gateway_statuses(zone_rows)
+
+    # Operational state in bulk — the per-saloon lookup (query_budget: this
+    # payload is polled) added one statement per saloon. Ordering matches
+    # _operational_state's single-row lookup: latest entered_at, id tie-break;
+    # first hit per saloon wins.
+    # فارسی: وضعیت عملیاتیِ همهٔ سالن‌ها با یک پرس‌وجو، نه یکی برای هر سالن.
+    state_by_saloon: dict[int, str] = {}
+    for saloon_id, state in (
+        SaloonOperationalState.objects.filter(saloon_id__in=saloon_ids, exited_at__isnull=True)
+        .order_by("saloon_id", "-entered_at", "-id")
+        .values_list("saloon_id", "state")
+    ):
+        state_by_saloon.setdefault(saloon_id, state)
+
     active = AlertInstance.objects.filter(saloon_id__in=saloon_ids, resolved_at__isnull=True)
     alert_stats = {
         row["saloon_id"]: row
@@ -376,7 +390,7 @@ def _farm_overview_payload(farm: Farm) -> dict:
         cards.append({
             "saloon_id": str(saloon.pk),
             "name": saloon.name,
-            "operational_state": _operational_state(saloon.pk),
+            "operational_state": state_by_saloon.get(saloon.pk, "EMPTY_SANITATION"),
             "flock_age_days": _flock_age_days(flock.start_date, now) if flock else None,
             "gateway_status": gateway_status,
             "gateway_slot_id": gateway_slot_id,
