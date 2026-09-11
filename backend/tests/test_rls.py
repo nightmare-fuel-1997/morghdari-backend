@@ -18,8 +18,10 @@ scripts/check_rls_parity.py guards that the policy TABLE LIST can never drift.
 
 import pytest
 from django.db import connection, transaction
+from rest_framework.exceptions import AuthenticationFailed
 
-from apps.accounts.models import OrgMember, User
+from apps.accounts.models import AccountRoleScope, OrgMember, User
+from apps.accounts.serializers import resolve_active_membership
 from apps.farms.models import Farm, Saloon
 from apps.geography.models import City, Province
 from apps.tenants.context import tenant_context
@@ -131,6 +133,51 @@ def test_no_guc_leak_between_transactions(seeded_rls_db):
         with transaction.atomic(), tenant_context(b["org"].org_id):
             assert _fetchone("SELECT count(*) FROM saloons WHERE name LIKE 'saloon-%a'") == 0
             assert _fetchone("SELECT count(*) FROM saloons") == 2
+    finally:
+        with connection.cursor() as cursor:
+            cursor.execute("RESET ROLE")
+
+
+def test_login_resolution_under_enforced_rls(seeded_rls_db):
+    """2026-09-11 rehearsal finding (live repro): POST /auth/login/ validated
+    the password, then died with 401 "no active org membership" —
+    tenant_isolation hides EVERY org_members row from a request that has no
+    org claim yet, and login is exactly that request. The
+    org_members_self_lookup SELECT policy + the resolver's
+    app.current_user_id GUC make own-row resolution work while writes stay
+    org-only and cross-org isolation stays intact."""
+    province = Province.objects.create(name="prov-loginrls")
+    city = City.objects.create(province=province, name="city-loginrls")
+    org = Organization.objects.create(name="org-loginrls")
+    user = User.objects.create_user("loginrls-owner", password="x")
+    OrgMember.objects.create(org=org, user=user, role="owner")
+    AccountRoleScope.objects.create(user=user, org=org, role="doctor")
+    _build_org("other")  # a second org exists — must stay invisible
+    with connection.cursor() as cursor:
+        cursor.execute("SET ROLE morghdari_app")
+    try:
+        # The exact login/refresh claim path, as the app role, no org context.
+        member, roles = resolve_active_membership(user)
+        assert member is not None
+        assert str(member.org_id) == str(org.org_id)
+        assert roles == ["doctor", "owner"]  # sorted union, scopes included
+        # The login view reads member.org.name AFTER resolve returns (GUCs
+        # dead): this must hit the related-object cache from inside the
+        # window, never an RLS-invisible re-query.
+        assert member.org.name == "org-loginrls"
+        # The cross-org membership is NOT visible via the self branch.
+        assert _fetchone("SELECT count(*) FROM org_members") == 0
+    finally:
+        with connection.cursor() as cursor:
+            cursor.execute("RESET ROLE")
+    # Deactivate as the bootstrap superuser, then prove fail-closed (C-14):
+    # even the self branch must not resurrect a deactivated membership.
+    OrgMember.objects.filter(user=user).update(is_active=False)
+    with connection.cursor() as cursor:
+        cursor.execute("SET ROLE morghdari_app")
+    try:
+        with pytest.raises(AuthenticationFailed):
+            resolve_active_membership(user)
     finally:
         with connection.cursor() as cursor:
             cursor.execute("RESET ROLE")

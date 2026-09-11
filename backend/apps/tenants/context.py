@@ -38,3 +38,22 @@ def tenant_context(org_id: UUID | str):
     with connection.cursor() as cursor:
         cursor.execute("SELECT set_config('app.current_org_id', %s, true)", [str(org_id)])
     yield
+
+
+@contextmanager
+def user_context(user_id):
+    """Set app.current_user_id for the remainder of the CURRENT transaction.
+
+    The login-time twin of tenant_context(): before a user has org claims
+    there is no org to scope to, yet the membership resolver must still see
+    the caller's OWN org_members row (backed by the additive
+    org_members_self_lookup SELECT policy — tenants/0004). Same lifecycle
+    rules as tenant_context: parameterized, tx-scoped, dies with COMMIT —
+    never session scope, never f-stringed.
+    """
+    if connection.vendor == "sqlite":
+        yield
+        return
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT set_config('app.current_user_id', %s, true)", [str(user_id)])
+    yield

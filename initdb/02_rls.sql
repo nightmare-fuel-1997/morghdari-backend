@@ -107,3 +107,22 @@ BEGIN
   END IF;
 END
 $$;
+
+-- 2026-09-11 (rehearsal finding): a login/refresh request carries NO org
+-- claim yet, so tenant_isolation hid EVERY org_members row from morghdari_app
+-- and login always died with "no active org membership". The exemption is
+-- deliberately minimal: SELECT-only, morghdari_app-only, own-row-only
+-- ("user" = app.current_user_id, set by resolve_active_membership from the
+-- already-authenticated principal — never client input, tx-scoped). Writes
+-- stay governed by tenant_isolation. Twin of
+-- tenants/0004_orgmember_self_lookup.py.
+DO $$
+BEGIN
+  IF to_regclass('public.org_members') IS NOT NULL THEN
+    DROP POLICY IF EXISTS org_members_self_lookup ON org_members;
+    CREATE POLICY org_members_self_lookup ON org_members
+        FOR SELECT TO morghdari_app
+        USING ("user" = NULLIF(current_setting('app.current_user_id', true), '')::integer);
+  END IF;
+END
+$$;

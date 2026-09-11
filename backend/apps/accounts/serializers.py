@@ -19,12 +19,14 @@ it here without a new written decision.
 نقش‌ها؛ عضویت فعال صفر یعنی خطای ۴۰۱ و بدون توکن.
 """
 
+from django.db import transaction
 from drf_spectacular.utils import OpenApiExample
 from rest_framework import serializers
 from rest_framework.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from apps.accounts.models import AccountRoleScope, OrgMember
+from apps.tenants.context import tenant_context, user_context
 
 
 class LoginSerializer(TokenObtainPairSerializer):
@@ -55,27 +57,46 @@ def resolve_active_membership(user):
     AuthenticationFailed on a tenant user with zero active memberships so both
     token issuance and the profile envelope fail the same way — one rule, two
     consumers.
+
+    RLS posture (2026-09-11 rehearsal finding): a login/refresh request
+    carries NO org claim yet, so the FORCE'd tenant_isolation policy hides
+    EVERY org_members row from the app role and resolution always failed
+    ("no active org membership") on prod-equivalent stacks. The resolver
+    therefore runs inside ONE transaction with two tx-scoped GUCs —
+      app.current_user_id → own membership row (org_members_self_lookup),
+      app.current_org_id  → that org's role scopes + org row (tenant_isolation)
+    — and nothing more: writes stay org-only (the new policy is SELECT-only)
+    and cross-org isolation is untouched. member.org is dereferenced INSIDE
+    the window so callers' member.org.name reads the cached related object,
+    never an RLS-invisible re-query.
+
     فارسی: تنها منبع حقیقت هویتِ توکن؛ کارکنان پلتفرم توکنِ بدونِ سازمان می‌گیرند
-    (محورِ جدا، D15)، و عضویت فعالِ صفر برای کاربر عادی یعنی خطای ۴۰۱.
+    (محورِ جدا، D15)، و عضویت فعالِ صفر برای کاربر عادی یعنی خطای ۴۰۱. در استقرارِ
+    واقعی، همین تابع دو GUC درون یک تراکنش تنظیم می‌کند تا ردیفِ عضویتِ خودِ
+    کاربر در زمانِ لاگین دیده شود و نه بیشتر.
     """
     if user.is_platform_staff:
         return None, []
-    member = (
-        OrgMember.objects.filter(user=user, is_active=True)
-        .order_by("joined_at", "id")  # deterministic pick: OLDEST active membership wins
-        .first()
-    )
-    if member is None:
-        # Zero active memberships → 401 at the view layer; never a token with
-        # an empty org claim (that would silently read zero rows and mask a
-        # provisioning bug as an empty farm).
-        raise AuthenticationFailed("no active org membership")
-    extra_roles = set(
-        AccountRoleScope.objects.filter(user=user, org=member.org).values_list("role", flat=True)
-    )
+    with transaction.atomic(), user_context(user.id):
+        member = (
+            OrgMember.objects.filter(user=user, is_active=True)
+            .order_by("joined_at", "id")  # deterministic pick: OLDEST active membership wins
+            .first()
+        )
+        if member is None:
+            # Zero active memberships → 401 at the view layer; never a token with
+            # an empty org claim (that would silently read zero rows and mask a
+            # provisioning bug as an empty farm).
+            raise AuthenticationFailed("no active org membership")
+        with tenant_context(member.org_id):
+            _ = member.org  # FK dereference cached while the org row is visible
+            extra_roles = set(
+                AccountRoleScope.objects.filter(user=user, org=member.org).values_list("role", flat=True)
+            )
     return member, sorted({member.role} | extra_roles)
 
 
+# ---------------------------------------------------------------------------
 # Docs-only DRF mirrors for @extend_schema (never used at runtime).
 # Each mirrors the dict the view builds (_member_out / the support envelopes)
 # and backend/openapi.yaml examples, so the generated schema cannot drift from
