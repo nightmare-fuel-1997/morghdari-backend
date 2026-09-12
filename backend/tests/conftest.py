@@ -330,13 +330,23 @@ def _materialize_use_migrations_schema(request) -> None:
             "SELECT to_regclass('public.daily_report_extras') IS NOT NULL"
         ).fetchone()[0]:
             _execute_sql(cursor, _reports_ddl(reports_dir / "0002_daily_report_extras.py"))
+        # v0.9 M9-10: batch-1 aggregate tables (monitoring/0002, same _sql()
+        # function shape as the reports migrations above).
+        if not cursor.execute(
+            "SELECT to_regclass('public.metric_daily_aggregates') IS NOT NULL"
+        ).fetchone()[0]:
+            _execute_sql(
+                cursor,
+                _reports_ddl(BACKEND_DIR / "apps" / "monitoring" / "migrations" / "0002_daily_aggregates.py"),
+            )
 
 
 def _reports_ddl(path: Path) -> str:
     """Load a reports migration and return its DDL. Reports migrations expose
     `_sql()` (a function — connection.vendor is read at CALL time), unlike
     telemetry/0002 which ships a module-level `SQL` constant; the loader in
-    _sql_from_migration only handles the latter."""
+    _sql_from_migration only handles the latter. monitoring/0002 (batch-1
+    aggregates) exposes the same `_sql()` function shape — reuse this loader."""
     spec = importlib.util.spec_from_file_location(path.stem, path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

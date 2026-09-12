@@ -81,8 +81,7 @@ def _admin_alias() -> str:
 
 
 @shared_task(name="monitoring.build_org_usage")
-def build_org_usage(day=None) -> int:
-    """Nightly per-org rollup → org_daily_usage (upsert) + cost gauge.
+def build_org_usage(day=None) -> int:    """Nightly per-org rollup → org_daily_usage (upsert) + cost gauge.
 
     Sources (data-aggregates-v1.md `aggregates.build_org_usage`):
       * msg_count  — row count in the org's day window from saloon_telemetry
@@ -173,3 +172,43 @@ def build_org_usage(day=None) -> int:
             pass
 
     return upserts
+
+
+# ---------------------------------------------------------------------------
+# Batch-1 daily aggregates (v0.9 M9-10, docs/data-aggregates-v1.md §4).
+# Thin bodies over services_aggregates (house layering); spec task names
+# (aggregates.*) kept verbatim so the doc, beat table and code agree.
+# Cadence per spec: 00:30 / 00:40 / 00:50 / 01:00 Asia/Tehran (base.py).
+# ---------------------------------------------------------------------------
+
+
+@shared_task(name="aggregates.build_metric_daily")
+def build_metric_daily(day=None) -> int:
+    """Nightly metric_daily_aggregates rollup (upsert per day)."""
+    from apps.monitoring.services_aggregates import build_metric_daily as _build
+
+    return _build(day)
+
+
+@shared_task(name="aggregates.build_flock_snapshots")
+def build_flock_snapshots(day=None) -> int:
+    """Nightly flock_daily_snapshots rollup (upsert per day)."""
+    from apps.monitoring.services_aggregates import build_flock_snapshots as _build
+
+    return _build(day)
+
+
+@shared_task(name="aggregates.build_alert_stats")
+def build_alert_stats(day=None) -> int:
+    """Nightly alert_daily_stats rollup (upsert per day)."""
+    from apps.monitoring.services_aggregates import build_alert_stats as _build
+
+    return _build(day)
+
+
+@shared_task(name="aggregates.build_gateway_uptime")
+def build_gateway_uptime(day=None) -> int:
+    """Nightly gateway_daily_uptime rollup (upsert per day)."""
+    from apps.monitoring.services_aggregates import build_gateway_uptime as _build
+
+    return _build(day)

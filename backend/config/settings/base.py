@@ -412,6 +412,29 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": __import__("celery.schedules", fromlist=["crontab"]).crontab(hour=1, minute=10),  # Asia/Tehran via CELERY_TIMEZONE
         "options": {"queue": "celery"},
     },
+    # v0.9 M9-10 (data-aggregates-v1 §4): batch-1 daily rollups, 00:30–01:00
+    # Asia/Tehran, AFTER the midnight threshold cron (00:00) they read bands
+    # from. Default queue: once a day each, no latency contract.
+    "aggregates-build-metric-daily": {
+        "task": "aggregates.build_metric_daily",
+        "schedule": __import__("celery.schedules", fromlist=["crontab"]).crontab(hour=0, minute=30),
+        "options": {"queue": "celery"},
+    },
+    "aggregates-build-flock-snapshots": {
+        "task": "aggregates.build_flock_snapshots",
+        "schedule": __import__("celery.schedules", fromlist=["crontab"]).crontab(hour=0, minute=40),
+        "options": {"queue": "celery"},
+    },
+    "aggregates-build-alert-stats": {
+        "task": "aggregates.build_alert_stats",
+        "schedule": __import__("celery.schedules", fromlist=["crontab"]).crontab(hour=0, minute=50),
+        "options": {"queue": "celery"},
+    },
+    "aggregates-build-gateway-uptime": {
+        "task": "aggregates.build_gateway_uptime",
+        "schedule": __import__("celery.schedules", fromlist=["crontab"]).crontab(hour=1, minute=0),
+        "options": {"queue": "celery"},
+    },
 }
 # Historical lane is throttled IN THE WORKER from system_configuration (Saas §4);
 # Celery-level rates are intentionally NOT set here to avoid two sources of truth.
