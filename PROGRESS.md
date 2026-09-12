@@ -1,5 +1,35 @@
 # Progress — v0.7 Production Birth on the Laptop
 
+## Contract v1.7.1 — threshold-template write surface (O13–O16) — 2026-09-12 (in flight)
+
+- **Contract**: `backend/openapi.yaml` 1.7.0 → **1.7.1** — +4 paths (`POST /threshold-templates/`,
+  `PUT /threshold-templates/{id}/`, `POST /threshold-templates/{id}/publish/`,
+  `GET`+`PUT /saloons/{id}/threshold-template/`) and 3 components (`ThresholdTemplate`,
+  `ThresholdTemplateDetail`, `ThresholdTemplateRule`, `ThresholdTemplateRuleInput`,
+  `SaloonTemplateAssignment`); `SPECTACULAR_SETTINGS` version/description follow it and
+  `backend/openapi.generated.yaml` was regenerated with the README command.
+- **Gates (local, sqlite, 2026-09-12)**: contract gate GREEN — `test_openapi_contract.py`
+  4 passed; docs gates GREEN — `test_openapi_schema.py` + `test_docs.py` alongside it
+  (12 passed); `test_m6_11_template_writes.py` **51 passed in ~3 s** (autouse cache stub,
+  so the module genuinely needs no Redis); `tests/test_m6_10_ops.py -k TestO4Templates`
+  2 passed; `manage.py makemigrations --check` → "No changes detected".
+- **Full CI gate GREEN (2026-09-12, Postgres/Timescale + Redis)**: **551 passed, 3 skipped
+  @ 89.92%**, exit 0 (`docker compose -f docker-compose.ci.yml -p morghdari_ci run --rm
+  test`, image rebuilt, `down -v` first so the reused test DB could not hide a
+  column-adding migration); module coverage gate GREEN.
+- **Migrate gate GREEN**: RESULT: DEPLOYABLE — makemigrations --check CLEAN, forward +
+  idempotent re-run, every app unwinds to zero (the 3 new migrations — alerts 0005,
+  farms 0002, tenants 0005 — apply and reverse cleanly).
+- **Not covered by a gate**: `scripts/check_rls_parity.py` reports pre-existing drift
+  (initdb/02_rls.sql + tenants/0002 list 36 tables; `database.md` has 47 org-scoped ones —
+  the §4n reports/panels/subscriptions tables from the v0.6–v0.7 waves were never added to
+  either ARRAY). It is NOT wired into CI and this wave did not change it (the diff there is
+  the SELECT-only built-in-catalog policy, not a table). Worth a small follow-up gate.
+- **Tree state**: the wave is UNCOMMITTED (code + tests + contract + docs); the parked
+  sibling-writer files (`monitoring/0001`, `tenants/0002`, `reports/0001`) were left
+  untouched, as was the untracked `docs/api-topology-write-v1.md` (a v0.8/v1.10.0 topology
+  spec that is not part of this wave).
+
 ## M7-10 DoD sweep — 2026-09-10 (v0.7 CLOSED)
 
 - **CHANGELOG**: `[v0.7]` section written (risk killed / Added M7-01..M7-17 / live-drill fixes / verification / deployment notes); release drafts re-pointed at shipped state (`v1.6-compat-draft` scope-reduced, `v1.7-ops-draft` ratified, `api-reports-merge-v1` delivered, `api-compat-flutter-v1` scope-noted).

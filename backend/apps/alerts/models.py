@@ -15,16 +15,56 @@ from django.db.models.functions import Now
 
 
 class LifecycleTemplate(models.Model):
-    """Threshold templates. org_id NULL = global/built-in template (doc)."""
+    """Threshold templates. org_id NULL = global/built-in template (doc).
+
+    v1.7.1 (2026-09-12) — the template WRITE surface. Shape of the contract:
+    engineers author farm-scoped DRAFTS; a manager PUBLISHES one (owner/manager
+    only) and an owner/manager ASSIGNS it to saloons (farms.Saloon.
+    threshold_template). A draft is invisible to alarm resolution by
+    construction — `status` is what stops an engineer's experiment from
+    re-tuning a live saloon, which is the whole reason the write surface could
+    be opened at all.
+    """
+
+    DRAFT = "DRAFT"
+    PUBLISHED = "PUBLISHED"
+    STATUS_CHOICES = [(DRAFT, "Draft"), (PUBLISHED, "Published")]
 
     template_id = models.AutoField(primary_key=True)
     org = models.ForeignKey("tenants.Organization", on_delete=models.RESTRICT, null=True, blank=True, related_name="+")
     breed_type = models.CharField(max_length=50, null=True, blank=True)
     name = models.CharField(max_length=100, null=True, blank=True)
+    # Default PUBLISHED: rows that predate this column (and the built-in
+    # catalog) keep arming alarms exactly as before.
+    status = models.CharField(max_length=10, default="PUBLISHED", choices=STATUS_CHOICES)
+    # The farm a draft belongs to (NULL = org-wide). Scope anchor: an engineer
+    # may author/edit drafts only inside farms granted via account_role_scopes,
+    # and an engineer with NO scope row has NO template write at all
+    # (fail-closed — scopes-only-narrow would otherwise mean whole-org).
+    farm = models.ForeignKey("farms.Farm", on_delete=models.RESTRICT, null=True, blank=True, related_name="+")
+    created_by = models.ForeignKey("accounts.User", on_delete=models.RESTRICT, null=True, blank=True, related_name="+")
+    published_at = models.DateTimeField(null=True, blank=True)
     is_default = models.BooleanField(default=False, null=True)
 
     class Meta:
         db_table = "lifecycle_templates"
+        constraints = [
+            # Ambiguity guards (2026-09-12): the resolver's org+breed step and
+            # its is_default step must each have AT MOST ONE candidate, or
+            # "which template arms this saloon" becomes DB-order dependent.
+            # Org-scoped and PUBLISHED-only, so the built-in (org NULL) catalog
+            # and every draft stay unconstrained.
+            models.UniqueConstraint(
+                fields=["org", "breed_type"],
+                condition=Q(status="PUBLISHED", org__isnull=False, breed_type__isnull=False),
+                name="uq_lifecycle_templates_org_breed",
+            ),
+            models.UniqueConstraint(
+                fields=["org"],
+                condition=Q(status="PUBLISHED", is_default=True, org__isnull=False),
+                name="uq_lifecycle_templates_org_default",
+            ),
+        ]
 
 
 class LifecycleThresholdRule(models.Model):

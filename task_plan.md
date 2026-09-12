@@ -99,6 +99,18 @@ reserved for growth), and the **reports-merge implementation moves into v0.7**
 | Error | Attempt | Resolution |
 |---|---:|---|
 
+## Post-v0.7 addendum — contract v1.7.1 threshold-template writes (2026-09-12)
+**Status:** code + contract done, full gates pending.
+
+- The owner lifted the seeded-only template rule (O13–O16): drafts by engineer+ inside
+  granted farms (fail-closed), publish/assign by owner/manager, only PUBLISHED rows arm
+  alarms, and resolution now starts with the saloon's explicit assignment.
+- `openapi.yaml` ratified 1.7.0 → 1.7.1 (+4 paths, 3 new components); mirror regenerated.
+  Local: contract + docs gates GREEN, `test_m6_11_template_writes.py` 51 passed,
+  `makemigrations --check` clean.
+- Open: the CI gate (Postgres/Timescale + Redis), module coverage gate and migrate-gate
+  for the 3 new migrations (Docker down at sweep time) — see `PROGRESS.md`.
+
 ## Next Step
 v0.8 planning on owner go. v0.7 is CLOSED: all M7-01..M7-17 + M7-10 ✅, full gate
 513 passed, 3 skipped @ 88.09% on PG/Timescale + Redis, contract gate implemented ==

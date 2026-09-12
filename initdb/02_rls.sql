@@ -126,3 +126,23 @@ BEGIN
   END IF;
 END
 $$;
+
+-- v1.7.1 (2026-09-12, found while building the template write surface): the
+-- tenant_isolation comparison `org_id = current_setting('app.current_org_id')`
+-- can never be true for a NULL org_id, so the org-NULL BUILT-IN catalog was
+-- invisible under enforced RLS while superuser (dev/CI) saw it plainly. Harmless
+-- while templates were seeded-only; load-bearing now that the resolution chain
+-- ends at the global default and O4 must show the built-in rows. Minimal
+-- exemption: SELECT-only, morghdari_app-only, org_id IS NULL rows only —
+-- tenant-owned rows of other orgs stay invisible and no write path is granted.
+-- Twin of tenants/0005_lifecycle_templates_global_read.py.
+DO $$
+BEGIN
+  IF to_regclass('public.lifecycle_templates') IS NOT NULL THEN
+    DROP POLICY IF EXISTS lifecycle_templates_global_read ON lifecycle_templates;
+    CREATE POLICY lifecycle_templates_global_read ON lifecycle_templates
+        FOR SELECT TO morghdari_app
+        USING (org_id IS NULL);
+  END IF;
+END
+$$;

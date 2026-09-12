@@ -169,6 +169,96 @@ def threshold_range_error(metric: str, payload: dict) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# O13–O16 — template write-surface guards (v1.7.1)
+# ---------------------------------------------------------------------------
+
+# Metrics a template band may name: the O3-bounded sensor metrics PLUS the D23
+# derived THI index (the engine computes it from co-present temp+humidity, and
+# the built-in catalog names it — it must stay authorable).
+TEMPLATE_METRICS = tuple(THRESHOLD_BOUNDS) + ("thi",)
+MAX_TEMPLATE_RULES = 60  # 6 metrics × 10 day-bands is already generous
+MAX_TEMPLATE_DAY = 400  # day_to column is a SmallInteger; flocks are ≤ ~60d
+MAX_TEMPLATE_NAME = 100  # mirrors the column
+MAX_BREED_TYPE = 50  # mirrors the column
+
+
+def _int_or_none(raw):
+    """Strict int coercion — a float-ish day range ('1.5') is a 400, not a
+    silent truncation (the band a farmer reads must be the band stored)."""
+    if isinstance(raw, bool) or raw is None:
+        return None
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def template_rules_error(rules) -> str | None:
+    """O13/O14 band-list validation: an error string, or None when clean.
+
+    Guards, in the order a human wants to hear them:
+
+    1. **shape** — a non-empty list of objects, within the size caps;
+    2. **per rule** — known metric, integer day window inside [0, MAX],
+       numeric min/max passing the O3 sanity bounds (a template must not be
+       able to carry a value the single-rule editor would reject), min < max;
+    3. **NH3 stays armed** — a template that names `nh3` must bound it above.
+       Decision 10 ("NH3 alarm must never be silenced") already forbids mutes
+       from suppressing NH3; a template with an nh3 band and no max would be
+       the same silence through the back door, so it is rejected here;
+    4. **no overlapping day windows per metric** — the engine picks the rules
+       whose window covers the flock's age, so two rules covering one day make
+       "which max applies" a row-order accident. Overlap is the one authoring
+       mistake that looks fine in a form and is fatal in production.
+    """
+    if not isinstance(rules, list) or not rules:
+        return "rules must be a non-empty list"
+    if len(rules) > MAX_TEMPLATE_RULES:
+        return f"too many rules (max {MAX_TEMPLATE_RULES})"
+
+    spans: dict[str, list[tuple[int, int, int]]] = {}
+    unbounded_nh3 = False
+    for index, raw in enumerate(rules, start=1):
+        if not isinstance(raw, dict):
+            return f"rule {index}: must be an object"
+        metric = raw.get("metric_key", raw.get("metric"))
+        if metric not in TEMPLATE_METRICS:
+            return f"rule {index}: unknown metric_key"
+        day_from = _int_or_none(raw.get("day_from"))
+        day_to = _int_or_none(raw.get("day_to"))
+        if (
+            day_from is None
+            or day_to is None
+            or day_from < 0
+            or day_to > MAX_TEMPLATE_DAY
+            or day_from > day_to
+        ):
+            return f"rule {index}: invalid day range"
+        payload = {
+            "min_value": raw.get("min", raw.get("min_value")),
+            "max_value": raw.get("max", raw.get("max_value")),
+        }
+        error = threshold_range_error(metric, payload)
+        if error:
+            return f"rule {index}: {error}"
+        if metric == "nh3" and payload["max_value"] is None:
+            unbounded_nh3 = True
+        spans.setdefault(metric, []).append((day_from, day_to, index))
+
+    if unbounded_nh3:
+        return "nh3 band must carry a max (NH3 can never be silenced)"
+
+    for metric, windows in spans.items():
+        windows.sort()
+        for (_pf, prev_to, prev_index), (next_from, _nt, next_index) in zip(
+            windows, windows[1:]
+        ):
+            if next_from <= prev_to:
+                return f"rules {prev_index} and {next_index} overlap for metric {metric}"
+    return None
+
+
+# ---------------------------------------------------------------------------
 # O6 — photo file validation
 # ---------------------------------------------------------------------------
 

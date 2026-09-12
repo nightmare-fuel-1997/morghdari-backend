@@ -1,9 +1,9 @@
 openapi: 3.0.3
 info:
   title: Morghdari Poultry Monitoring API
-  version: 1.7.0
+  version: 1.7.1
   description: |-
-    REST API for the Morghdari multi-tenant poultry monitoring platform. Contract v1.7.0 (ops wave + merged daily-report schemas).
+    REST API for the Morghdari multi-tenant poultry monitoring platform. Contract v1.7.1 (ops wave + merged daily-report schemas + the threshold-template write surface O13–O16).
 
     Authentication: Bearer JWT (15-min access token, 7-day refresh token; rotation is intentionally OFF — deactivated members fail closed via org-claim re-derivation). Gateway devices use HTTP Basic (username = gateway_slot_id) on the config endpoint only.
 
@@ -5031,13 +5031,139 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: Unauthenticated — missing, expired, or malformed Bearer token.
+  /api/v1/saloons/{saloon_id}/threshold-template/:
+    get:
+      operationId: get_saloon_threshold_template
+      description: |-
+        `assigned_template_id` is the explicit assignment (null = inheriting) and
+        `source` names the resolution step that actually won:
+        `assigned` | `org_breed` | `org_default` | `global_default` | `none`.
+
+        Readable by any member of the owning org. A foreign or unknown saloon is an
+        identical 404.
+      summary: O16 — a saloon's template assignment and its effective template
+      parameters:
+      - in: path
+        name: saloon_id
+        schema:
+          type: integer
+        description: Saloon id (caller's org).
+        required: true
+      tags:
+      - Ops
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SaloonTemplateResponse'
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Not found — id/slug unknown OR outside the caller's org (never
+            distinguished).
+    put:
+      operationId: assign_saloon_threshold_template
+      description: |-
+        `{"template_id": 7}` assigns; `{"template_id": null}` CLEARS the assignment and
+        returns the saloon to the breed/default chain. The template must be own-org and
+        **published** — a draft cannot be assigned (400), and a foreign or org-NULL
+        built-in template is a 404, never an existence oracle.
+
+        The saloon is re-cached immediately, so the new bands are armed without
+        waiting for the midnight sweep. Writes a `SALOON_TEMPLATE_ASSIGNED` (or
+        `_CLEARED`) audit row in the same transaction and answers the O16 GET shape.
+      summary: O16 — assign a template to a saloon (owner, manager)
+      parameters:
+      - in: path
+        name: saloon_id
+        schema:
+          type: integer
+        description: Saloon id (caller's org).
+        required: true
+      tags:
+      - Ops
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SaloonTemplateAssignRequestRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/SaloonTemplateAssignRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/SaloonTemplateAssignRequestRequest'
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SaloonTemplateResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Validation error — malformed input, bad enum, or out-of-range
+            value.
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Not found — id/slug unknown OR outside the caller's org (never
+            distinguished).
   /api/v1/threshold-templates/:
     get:
       operationId: list_threshold_templates
       description: |-
-        Read-only catalog of `lifecycle_templates` — the templates whose rules O2
-        returns. `breed_type` filters the catalog; `is_default` marks the built-in
-        row. Read-only by contract: there is no write surface for templates.
+        The caller's catalog of `lifecycle_templates` — the templates whose rules O2
+        returns. Scoped to the caller's OWN org PLUS the org-NULL built-in rows: a
+        foreign org's template is invisible here (and 404s on O13–O15), never a
+        cross-tenant leak.
+
+        `breed_type` filters the catalog and `status` filters `DRAFT` vs `PUBLISHED`
+        (v1.7.1) — **only a PUBLISHED template arms alarms**, so a client that wants
+        "what is live" must say `status=PUBLISHED`. `is_default` marks the org's
+        default row and the built-in one.
+
+        Read-only *for templates* even after v1.7.1: authoring a draft is O13, and
+        editing/publishing/assigning are O14–O16.
       summary: O4 — lifecycle threshold templates (engineer+)
       parameters:
       - in: query
@@ -5055,6 +5181,11 @@ paths:
         schema:
           type: integer
         description: Page start (default 0).
+      - in: query
+        name: status
+        schema:
+          type: string
+        description: DRAFT | PUBLISHED (only PUBLISHED arms alarms).
       tags:
       - Ops
       security:
@@ -5086,6 +5217,225 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: Forbidden — valid token but the role claim lacks this surface.
+    post:
+      operationId: create_threshold_template
+      description: |-
+        Creates a **DRAFT** template with its day-ranged band list. A draft never
+        arms a saloon — resolution considers PUBLISHED templates only (O15) — so an
+        engineer can author one without touching a live band.
+
+        **Scope (fail-closed).** owner/manager may author anywhere in their org and
+        may omit `farm_id` (an org-wide draft). An **engineer** must stay inside the
+        farms granted via `account_role_scopes`; if exactly one farm is in scope
+        `farm_id` may be omitted, and if several are in scope it is required. An
+        engineer with **no** scope row has no template write at all → 403.
+
+        Bands are validated: known metric, integer day window in [0, 400], numeric
+        min/max inside the O3 sanity bounds, `min < max`, an `nh3` band must carry a
+        max (NH3 can never be silenced), and two bands of the same metric may not
+        overlap (overlap would make "which max applies" a row-order accident).
+
+        Writes a `THRESHOLD_TEMPLATE_CREATED` audit row in the same transaction.
+      summary: O13 — author a threshold-template draft (engineer+, farm-scoped)
+      tags:
+      - Ops
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ThresholdTemplateCreateRequestRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ThresholdTemplateCreateRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ThresholdTemplateCreateRequestRequest'
+        required: true
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThresholdTemplateDetail'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Validation error — malformed input, bad enum, or out-of-range
+            value.
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Not found — id/slug unknown OR outside the caller's org (never
+            distinguished).
+  /api/v1/threshold-templates/{template_id}/:
+    put:
+      operationId: update_threshold_template
+      description: |-
+        Partial edit of a **DRAFT**. `rules`, when present, REPLACES the whole band
+        list (the set is validated for overlap, so a partial band edit could produce a
+        combination no request contained). Validation is O13's, verbatim.
+
+        A **PUBLISHED** template is immutable here → 409: its bands are tuned through
+        `PUT /thresholds/{rule_id}/`, which audits each change and re-caches
+        immediately. A foreign or org-NULL (built-in) template → 404. An engineer may
+        only edit drafts of farms in their grant (org-wide drafts are org-level).
+
+        Writes a `THRESHOLD_TEMPLATE_UPDATED` audit row in the same transaction.
+      summary: O14 — edit a template draft (engineer+, farm-scoped)
+      parameters:
+      - in: path
+        name: template_id
+        schema:
+          type: integer
+        description: Draft template id.
+        required: true
+      tags:
+      - Ops
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ThresholdTemplateUpdateRequestRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ThresholdTemplateUpdateRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ThresholdTemplateUpdateRequestRequest'
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThresholdTemplateDetail'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Validation error — malformed input, bad enum, or out-of-range
+            value.
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Not found — id/slug unknown OR outside the caller's org (never
+            distinguished).
+        '409':
+          description: Template is already published (bands are tuned through O3).
+  /api/v1/threshold-templates/{template_id}/publish/:
+    post:
+      operationId: publish_threshold_template
+      description: |-
+        Makes a draft LIVE: from this moment `effective_template` may resolve it,
+        so the affected saloons are re-cached in the same request (the publish fires
+        the alerts cache sweep — the same fast path a rule edit takes).
+
+        Optional `is_default: true` also promotes it to the org's default in one call,
+        demoting the incumbent. Publishing a template whose breed already has a
+        published org template, or promoting to default while another published
+        default exists, is a 409 — the uniqueness guards are DB constraints, not
+        gentlemen's agreements.
+
+        404 for a foreign or org-NULL (built-in) template — the shared catalog is
+        writable by NO ONE, exactly like O3. 409 for an already-published template.
+        Writes a `THRESHOLD_TEMPLATE_PUBLISHED` audit row in the same transaction.
+      summary: O15 — publish a template draft (owner, manager)
+      parameters:
+      - in: path
+        name: template_id
+        schema:
+          type: integer
+        description: Draft template id.
+        required: true
+      tags:
+      - Ops
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ThresholdTemplatePublishRequestRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ThresholdTemplatePublishRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ThresholdTemplatePublishRequestRequest'
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThresholdTemplateDetail'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Validation error — malformed input, bad enum, or out-of-range
+            value.
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Not found — id/slug unknown OR outside the caller's org (never
+            distinguished).
+        '409':
+          description: Already published, or the breed/default slot is taken.
   /api/v1/thresholds/:
     get:
       operationId: list_thresholds
@@ -8130,6 +8480,33 @@ components:
       required:
       - results
       - saloon_id
+    SaloonTemplateAssignRequestRequest:
+      type: object
+      description: |-
+        O16 PUT body — `template_id: null` clears the assignment and returns
+        the saloon to the breed/default chain.
+      properties:
+        template_id:
+          type: integer
+          nullable: true
+    SaloonTemplateResponse:
+      type: object
+      description: O16 row — explicit assignment beside the effective resolution.
+      properties:
+        saloon_id:
+          type: integer
+        assigned_template_id:
+          type: integer
+          nullable: true
+        effective_template_id:
+          type: integer
+          nullable: true
+        source:
+          type: string
+          description: assigned | org_breed | org_default | global_default | none.
+      required:
+      - saloon_id
+      - source
     SensorSlot:
       type: object
       description: One SaloonSensorSlot row as the detail payload renders it.
@@ -8403,9 +8780,64 @@ components:
       required:
       - count
       - results
-    ThresholdTemplateItem:
+    ThresholdRuleInputRequest:
       type: object
-      description: O4 row — read-only lifecycle_templates catalog.
+      description: |-
+        One band of an O13/O14 body — `metric_key` + inclusive day window +
+        optional min/max (alias of min_value/max_value, like O3).
+      properties:
+        metric_key:
+          type: string
+          minLength: 1
+          description: temp | humidity | lux | nh3 | co2 | thi.
+        day_from:
+          type: integer
+          maximum: 400
+          minimum: 0
+        day_to:
+          type: integer
+          maximum: 400
+          minimum: 0
+        min:
+          type: number
+          format: double
+          nullable: true
+        max:
+          type: number
+          format: double
+          nullable: true
+      required:
+      - day_from
+      - day_to
+      - metric_key
+    ThresholdTemplateCreateRequestRequest:
+      type: object
+      description: |-
+        O13 POST body — a DRAFT. `farm_id` scopes the draft to one farm; an
+        engineer MUST stay inside the farms granted to them.
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        breed_type:
+          type: string
+          nullable: true
+          minLength: 1
+          maxLength: 50
+        farm_id:
+          type: integer
+          nullable: true
+        rules:
+          type: array
+          items:
+            $ref: '#/components/schemas/ThresholdRuleInputRequest'
+      required:
+      - name
+      - rules
+    ThresholdTemplateDetail:
+      type: object
+      description: O13/O14/O15 row — the template plus its bands.
       properties:
         template_id:
           type: integer
@@ -8420,7 +8852,59 @@ components:
           nullable: true
         is_default:
           type: boolean
+        status:
+          type: string
+        farm_id:
+          type: integer
+          nullable: true
+        created_by:
+          type: integer
+          nullable: true
+        published_at:
+          type: string
+          nullable: true
+        rules:
+          type: array
+          items:
+            $ref: '#/components/schemas/ThresholdItem'
       required:
+      - rules
+      - status
+      - template_id
+    ThresholdTemplateItem:
+      type: object
+      description: |-
+        O4 row — lifecycle_templates catalog (v1.7.1 adds the write-surface
+        columns; `status` is what tells a draft from a live template).
+      properties:
+        template_id:
+          type: integer
+        org_id:
+          type: integer
+          nullable: true
+        breed_type:
+          type: string
+          nullable: true
+        name:
+          type: string
+          nullable: true
+        is_default:
+          type: boolean
+        status:
+          type: string
+          description: DRAFT | PUBLISHED (only PUBLISHED arms alarms).
+        farm_id:
+          type: integer
+          nullable: true
+          description: Owning farm of a draft (null = org-wide).
+        created_by:
+          type: integer
+          nullable: true
+        published_at:
+          type: string
+          nullable: true
+      required:
+      - status
       - template_id
     ThresholdTemplateListResponse:
       type: object
@@ -8434,6 +8918,33 @@ components:
       required:
       - count
       - results
+    ThresholdTemplatePublishRequestRequest:
+      type: object
+      description: |-
+        O15 optional body — `is_default` promotes the template to the org's
+        default in the same call (409 when another published default exists).
+      properties:
+        is_default:
+          type: boolean
+    ThresholdTemplateUpdateRequestRequest:
+      type: object
+      description: |-
+        O14 partial PUT body — `rules`, when present, REPLACES the whole band
+        list (the set is the unit of meaning: bands are validated for overlap).
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        breed_type:
+          type: string
+          nullable: true
+          minLength: 1
+          maxLength: 50
+        rules:
+          type: array
+          items:
+            $ref: '#/components/schemas/ThresholdRuleInputRequest'
     ThresholdUpdateRequestRequest:
       type: object
       description: O3 PUT body — contract {min, max} keys (partial PUT allowed).

@@ -199,6 +199,29 @@ Shipped inside v0.6 (M6-10) ahead of the 1.7.0 tag: pagination convention,
 O1–O12, `user_sessions`, `diag:last:{slot}`, yaml ratification. Promoted to
 `[v0.6]` above.
 
+## [Unreleased → 1.7.1] — threshold-template write surface (O13–O16)
+
+Owner decision 2026-09-12: the seeded-only template rule is lifted, so a manager
+can tune bands per breed without a deploy and an engineer can prepare next
+season's plan while the current flock is still armed.
+
+- `POST /threshold-templates/` (O13): an engineer authors DRAFTS strictly inside
+the farms granted via `account_role_scopes` — fail-closed, no scope row means no
+write. Bands are validated (known metric, day window in [0, 400], O3 sanity
+bounds, `nh3` never unbounded, no overlapping windows per metric).
+- `PUT /threshold-templates/{id}/` (O14): edit a draft; `rules` replaces the band
+list as a set; a PUBLISHED template is `409` (its bands are tuned through O3).
+- `POST /threshold-templates/{id}/publish/` (O15): owner/manager only, fires the
+alerts cache sweep; `409` when the breed or org-default slot is taken — the
+guards are DB constraints, not conventions.
+- `GET`/`PUT /saloons/{id}/threshold-template/` (O16): explicit assignment
+(`null` clears) beside the effective resolution, re-caching that saloon.
+- **A draft never arms a saloon**: resolution considers PUBLISHED rows only, so
+the write surface cannot move a live band behind a manager's back.
+- Contract yaml ratified 1.7.0 → **1.7.1** (+4 paths, 3 new components); the
+mirror was regenerated in the same wave. See `docs/api-ops-v1.md` (v1.7.1
+addendum).
+
 ## [v0.5] — 2026-09-02 — provisioning + zero-touch trust boundary (M5)
 
 Unapproved hardware can never inject data: gateway identity, telemetry routing

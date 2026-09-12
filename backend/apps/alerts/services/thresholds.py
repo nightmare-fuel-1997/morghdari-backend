@@ -7,6 +7,10 @@ CANON encoding (Walkthrough lines 648–671 — implemented verbatim):
   threshold_transition_grace_sec) written ONLY when the old hash existed AND
   differs — D9 "only-on-change"
 - midnight cron loops open flocks; post_save signals fast-path single saloons
+- template resolution is the FIVE-step chain documented on
+  ``effective_template`` (assignment → org+breed → org default → global default
+  → none) and it considers PUBLISHED rows only — a draft (v1.7.1) can never arm
+  a saloon, which is exactly why opening the template write surface was safe
 
 Flock-age days are computed in Asia/Tehran local time (Iran is fixed
 UTC+03:30, no DST since 2022) so a flock placed at 23:50 UTC still counts as
@@ -22,6 +26,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from apps.alerts.models import (
+    LifecycleTemplate,
     LifecycleThresholdRule,
     SaloonOperationalState,
 )
@@ -119,7 +124,7 @@ def build_hash_for_saloon(saloon, clock: Clock | None = None) -> dict | None:
 
     open_flock = _open_flock(saloon.id)
     if open_flock is not None:
-        return _hash_for_flock(open_flock, now_dt)
+        return _hash_for_flock(open_flock, now_dt, saloon=saloon)
 
     any_flock = _latest_flock(saloon.id)
     if any_flock is None:
@@ -134,9 +139,9 @@ def build_hash_for_saloon(saloon, clock: Clock | None = None) -> dict | None:
     return {"operational_state": "HARVESTED_VACANT", **flags}
 
 
-def _hash_for_flock(flock: FlockCycle, now_dt) -> dict:
+def _hash_for_flock(flock: FlockCycle, now_dt, saloon=None) -> dict:
     age_days = flock_age_days(flock.start_date, now_dt)
-    template = _resolve_template(flock)
+    template, _source = effective_template(flock, saloon)
     rules = []
     if template is not None:
         rules = list(
@@ -163,18 +168,83 @@ def _hash_for_flock(flock: FlockCycle, now_dt) -> dict:
     return mapping
 
 
-def _resolve_template(flock: FlockCycle):
-    """Resolution chain: org+breed match → org default → global default."""
-    from apps.alerts.models import LifecycleTemplate
+# Resolution sources, in chain order. The string is CONTRACT (it is what the
+# saloon-assignment endpoint reports as `source`), so it is defined once here.
+SOURCE_ASSIGNED = "assigned"
+SOURCE_ORG_BREED = "org_breed"
+SOURCE_ORG_DEFAULT = "org_default"
+SOURCE_GLOBAL_DEFAULT = "global_default"
+SOURCE_NONE = "none"
 
-    qs = LifecycleTemplate.objects.all()
-    breed = getattr(flock, "breed_type", None)
-    matched = (
-        qs.filter(org_id=flock.org_id, breed_type=breed).first()
-        or qs.filter(org_id=flock.org_id, is_default=True).first()
-        or qs.filter(org__isnull=True, is_default=True).first()
+
+def _assigned_template_id(flock, saloon):
+    """The saloon's EXPLICIT assignment, or None. Uses the loaded saloon when
+    the caller has one (the re-cache path always does) and otherwise reads just
+    that one column — callers like KPI compliance only hold the flock."""
+    if saloon is not None:
+        return getattr(saloon, "threshold_template_id", None)
+    saloon_id = getattr(flock, "saloon_id", None)
+    if saloon_id is None:
+        return None
+    return (
+        Saloon.objects.filter(pk=saloon_id)
+        .values_list("threshold_template_id", flat=True)
+        .first()
     )
-    return matched
+
+
+def effective_template(flock, saloon=None) -> tuple[LifecycleTemplate | None, str]:
+    """THE resolution chain — returns ``(template | None, source)``.
+
+    assignment → org+breed → org default → global default → none.
+
+    Two invariants are load-bearing:
+
+    * **Only PUBLISHED rows arm anything.** A DRAFT never resolves, which is
+      precisely what makes it safe for an engineer to author one — the band a
+      live saloon is evaluated against cannot change behind a manager's back.
+    * **Deterministic.** The ordering is explicit (`-is_default, template_id`),
+      so a choice is never left to DB row order. DB-level uniqueness guards
+      (alerts/0005) make a tie a data error rather than a coin toss.
+
+    An assignment whose template is foreign, unpublished or deleted falls
+    through to the chain instead of arming nothing: a broken assignment must
+    degrade to the previous behaviour, never to silence.
+    """
+    org_id = getattr(flock, "org_id", None) or getattr(saloon, "org_id", None)
+    breed = getattr(flock, "breed_type", None)
+    order = ("-is_default", "template_id")
+    published = LifecycleTemplate.objects.filter(status=LifecycleTemplate.PUBLISHED)
+
+    assigned_id = _assigned_template_id(flock, saloon)
+    if assigned_id is not None:
+        row = published.filter(template_id=assigned_id, org_id=org_id).first()
+        if row is not None:
+            return row, SOURCE_ASSIGNED
+        logger.warning(
+            "saloon %s assignment %s is not a published own-org template — "
+            "falling through to the breed/default chain",
+            getattr(saloon, "pk", None) or getattr(flock, "saloon_id", None),
+            assigned_id,
+        )
+
+    if breed:
+        row = published.filter(org_id=org_id, breed_type=breed).order_by(*order).first()
+        if row is not None:
+            return row, SOURCE_ORG_BREED
+    row = published.filter(org_id=org_id, is_default=True).order_by(*order).first()
+    if row is not None:
+        return row, SOURCE_ORG_DEFAULT
+    row = published.filter(org__isnull=True, is_default=True).order_by(*order).first()
+    if row is not None:
+        return row, SOURCE_GLOBAL_DEFAULT
+    return None, SOURCE_NONE
+
+
+def _resolve_template(flock: FlockCycle, saloon=None):
+    """Template only — the shape KPI/capabilities callers already expect
+    (they pass the flock; the chain is the same code path either way)."""
+    return effective_template(flock, saloon)[0]
 
 
 def recache_saloon(saloon_id: int, clock: Clock | None = None) -> str:

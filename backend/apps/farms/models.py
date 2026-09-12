@@ -26,6 +26,20 @@ class Farm(models.Model):
 class Saloon(models.Model):
     id = models.AutoField(primary_key=True)
     farm = models.ForeignKey("farms.Farm", on_delete=models.RESTRICT, null=True, related_name="+")
+    # v1.7.1 (2026-09-12): EXPLICIT saloon → template assignment — the manager's
+    # "this house, this template" lever, and the FIRST link of the resolution
+    # chain (assignment → org+breed published → org default → global default;
+    # apps.alerts.services.thresholds.effective_template). NULL = inherit the
+    # breed/default chain, which is exactly how every saloon behaved before this
+    # column existed. RESTRICT + no delete surface: a template is deprecated,
+    # never deleted out from under the saloons (and history) pointing at it.
+    threshold_template = models.ForeignKey(
+        "alerts.LifecycleTemplate",
+        on_delete=models.RESTRICT,
+        null=True,
+        blank=True,
+        related_name="assigned_saloons",
+    )
     # AU-RLS 2026-08-16: denormalized for RLS.
     org = models.ForeignKey("tenants.Organization", on_delete=models.RESTRICT, related_name="+")
     name = models.CharField(max_length=255)

@@ -41,14 +41,50 @@ def threshold_item(rule) -> dict:
     }
 
 
+def _iso_z(dt):
+    """ISO-8601 with a Z suffix — the shape every contract timestamp uses."""
+    return dt.isoformat().replace("+00:00", "Z") if dt else None
+
+
 def template_item(t) -> dict:
-    """O4 row — the read-only lifecycle_templates catalog."""
+    """O4 row — the lifecycle_templates catalog.
+
+    v1.7.1 adds the write-surface columns (`status`, `farm_id`, `created_by`,
+    `published_at`): a client MUST be able to tell a draft from a live template,
+    since only published rows arm alarms. Additive — the v1.5.0-vintage keys
+    keep their exact names and order.
+    """
     return {
         "template_id": t.template_id,
         "org_id": t.org_id,
         "breed_type": t.breed_type,
         "name": t.name,
         "is_default": bool(t.is_default),
+        "status": t.status,
+        "farm_id": t.farm_id,
+        "created_by": t.created_by_id,
+        "published_at": _iso_z(t.published_at),
+    }
+
+
+def template_detail_item(t, rules) -> dict:
+    """O13/O14/O15 row — the template plus its day-ranged bands. `rules` is
+    passed in explicitly: the FK is `related_name="+"` (no reverse manager by
+    design), so the caller queries them once instead of this builder guessing."""
+    item = template_item(t)
+    item["rules"] = [threshold_item(r) for r in rules]
+    return item
+
+
+def saloon_template_item(saloon, effective, source) -> dict:
+    """O16 row — the saloon's EXPLICIT assignment beside what it currently
+    resolves to, so an ops screen can show "inheriting the breed chain" as
+    plainly as "assigned to template 7"."""
+    return {
+        "saloon_id": saloon.pk,
+        "assigned_template_id": saloon.threshold_template_id,
+        "effective_template_id": effective.template_id if effective is not None else None,
+        "source": source,
     }
 
 
@@ -135,18 +171,95 @@ class ThresholdUpdateRequestSerializer(serializers.Serializer):
 
 
 class ThresholdTemplateItemSerializer(serializers.Serializer):
-    """O4 row — read-only lifecycle_templates catalog."""
+    """O4 row — lifecycle_templates catalog (v1.7.1 adds the write-surface
+    columns; `status` is what tells a draft from a live template)."""
 
     template_id = serializers.IntegerField()
     org_id = serializers.IntegerField(allow_null=True, required=False)
     breed_type = serializers.CharField(allow_null=True, required=False)
     name = serializers.CharField(allow_null=True, required=False)
     is_default = serializers.BooleanField(required=False)
+    status = serializers.CharField(help_text="DRAFT | PUBLISHED (only PUBLISHED arms alarms).")
+    farm_id = serializers.IntegerField(
+        allow_null=True, required=False, help_text="Owning farm of a draft (null = org-wide)."
+    )
+    created_by = serializers.IntegerField(allow_null=True, required=False)
+    published_at = serializers.CharField(allow_null=True, required=False)
 
 
 class ThresholdTemplateListResponseSerializer(serializers.Serializer):
     count = serializers.IntegerField()
     results = ThresholdTemplateItemSerializer(many=True)
+
+
+class ThresholdRuleInputSerializer(serializers.Serializer):
+    """One band of an O13/O14 body — `metric_key` + inclusive day window +
+    optional min/max (alias of min_value/max_value, like O3)."""
+
+    metric_key = serializers.CharField(help_text="temp | humidity | lux | nh3 | co2 | thi.")
+    day_from = serializers.IntegerField(min_value=0, max_value=400)
+    day_to = serializers.IntegerField(min_value=0, max_value=400)
+    min = serializers.FloatField(required=False, allow_null=True)
+    max = serializers.FloatField(required=False, allow_null=True)
+
+
+class ThresholdTemplateDetailSerializer(serializers.Serializer):
+    """O13/O14/O15 row — the template plus its bands."""
+
+    template_id = serializers.IntegerField()
+    org_id = serializers.IntegerField(allow_null=True, required=False)
+    breed_type = serializers.CharField(allow_null=True, required=False)
+    name = serializers.CharField(allow_null=True, required=False)
+    is_default = serializers.BooleanField(required=False)
+    status = serializers.CharField()
+    farm_id = serializers.IntegerField(allow_null=True, required=False)
+    created_by = serializers.IntegerField(allow_null=True, required=False)
+    published_at = serializers.CharField(allow_null=True, required=False)
+    rules = ThresholdItemSerializer(many=True)
+
+
+class ThresholdTemplateCreateRequestSerializer(serializers.Serializer):
+    """O13 POST body — a DRAFT. `farm_id` scopes the draft to one farm; an
+    engineer MUST stay inside the farms granted to them."""
+
+    name = serializers.CharField(max_length=100)
+    breed_type = serializers.CharField(max_length=50, required=False, allow_null=True)
+    farm_id = serializers.IntegerField(required=False, allow_null=True)
+    rules = ThresholdRuleInputSerializer(many=True)
+
+
+class ThresholdTemplateUpdateRequestSerializer(serializers.Serializer):
+    """O14 partial PUT body — `rules`, when present, REPLACES the whole band
+    list (the set is the unit of meaning: bands are validated for overlap)."""
+
+    name = serializers.CharField(max_length=100, required=False)
+    breed_type = serializers.CharField(max_length=50, required=False, allow_null=True)
+    rules = ThresholdRuleInputSerializer(many=True, required=False)
+
+
+class ThresholdTemplatePublishRequestSerializer(serializers.Serializer):
+    """O15 optional body — `is_default` promotes the template to the org's
+    default in the same call (409 when another published default exists)."""
+
+    is_default = serializers.BooleanField(required=False)
+
+
+class SaloonTemplateAssignRequestSerializer(serializers.Serializer):
+    """O16 PUT body — `template_id: null` clears the assignment and returns
+    the saloon to the breed/default chain."""
+
+    template_id = serializers.IntegerField(required=False, allow_null=True)
+
+
+class SaloonTemplateResponseSerializer(serializers.Serializer):
+    """O16 row — explicit assignment beside the effective resolution."""
+
+    saloon_id = serializers.IntegerField()
+    assigned_template_id = serializers.IntegerField(allow_null=True, required=False)
+    effective_template_id = serializers.IntegerField(allow_null=True, required=False)
+    source = serializers.CharField(
+        help_text="assigned | org_breed | org_default | global_default | none."
+    )
 
 
 class PhotoItemSerializer(serializers.Serializer):

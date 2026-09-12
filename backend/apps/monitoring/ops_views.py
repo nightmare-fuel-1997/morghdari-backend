@@ -19,6 +19,13 @@ Endpoints (verbatim contract paths):
   O11 GET  /api/v1/auth/sessions/                  any authenticated user (own)
   O12 DELETE /api/v1/auth/sessions/{id}/           owner of the session
 
+v1.7.1 (2026-09-12) — the template WRITE surface, additive to the wave above:
+  O13 POST   /api/v1/threshold-templates/                 engineer+ (farm-scoped)
+  O14 PUT    /api/v1/threshold-templates/{id}/            engineer+ (farm-scoped)
+  O15 POST   /api/v1/threshold-templates/{id}/publish/    owner, manager
+  O16 GET    /api/v1/saloons/{id}/threshold-template/      any member of the org
+      PUT    /api/v1/saloons/{id}/threshold-template/      owner, manager
+
 فارسی: موجِ عملیاتی — خواندنِ ممیزها، آستانه‌ها، عکس‌ها، گیت‌وی‌ها و نشست‌ها؛
 همه فقط افزوده، بدونِ تغییرِ هیچ مسیرِ قبلی.
 """
@@ -27,17 +34,23 @@ import uuid
 
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import IntegrityError
 from django.db import transaction as db_transaction
 from django.db.models import Count
 from django.utils import timezone
-from drf_spectacular.utils import OpenApiExample, OpenApiParameter, extend_schema
+from drf_spectacular.utils import (
+    OpenApiExample,
+    OpenApiParameter,
+    OpenApiResponse,
+    extend_schema,
+)
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.accounts.models import UserSession
-from apps.accounts.permissions import _claims
+from apps.accounts.permissions import _claims, scoped_farms
 from apps.accounts.services import refresh_is_revoked, touch_session
 from apps.alerts.models import LifecycleTemplate, LifecycleThresholdRule
 from apps.auditing.models import AccountActivityLog
@@ -48,12 +61,19 @@ from apps.devices.models import (
     SaloonPhoto,
 )
 from apps.common.schemas import RATE_LIMITED_RESPONSE, TAG_OPS, error_responses
-from apps.farms.models import Saloon
+from apps.alerts.services.thresholds import effective_template
+from apps.farms.models import Farm, Saloon
 from apps.monitoring import ops_serializers as ser
 from apps.monitoring import ops_services as svc
 from apps.monitoring.ops_throttles import UserRateThrottle3PerMinute
 from apps.monitoring.ops_serializers import (
     AuditLogListResponseSerializer,
+    SaloonTemplateAssignRequestSerializer,
+    SaloonTemplateResponseSerializer,
+    ThresholdTemplateCreateRequestSerializer,
+    ThresholdTemplateDetailSerializer,
+    ThresholdTemplatePublishRequestSerializer,
+    ThresholdTemplateUpdateRequestSerializer,
     GatewayDetailResponseSerializer,
     GatewayDiagnosticsSerializer,
     GatewayListResponseSerializer,
@@ -368,12 +388,22 @@ def threshold_update(request, rule_id: int):
 
 
 @extend_schema(
+    methods=["GET"],
     tags=[TAG_OPS],
     operation_id="list_threshold_templates",
     summary="O4 — lifecycle threshold templates (engineer+)",
-    description="""Read-only catalog of `lifecycle_templates` — the templates whose rules O2
-returns. `breed_type` filters the catalog; `is_default` marks the built-in
-row. Read-only by contract: there is no write surface for templates.""",
+    description="""The caller's catalog of `lifecycle_templates` — the templates whose rules O2
+returns. Scoped to the caller's OWN org PLUS the org-NULL built-in rows: a
+foreign org's template is invisible here (and 404s on O13–O15), never a
+cross-tenant leak.
+
+`breed_type` filters the catalog and `status` filters `DRAFT` vs `PUBLISHED`
+(v1.7.1) — **only a PUBLISHED template arms alarms**, so a client that wants
+"what is live" must say `status=PUBLISHED`. `is_default` marks the org's
+default row and the built-in one.
+
+Read-only *for templates* even after v1.7.1: authoring a draft is O13, and
+editing/publishing/assigning are O14–O16.""",
     parameters=[
         *_PAGING_PARAMS,
         OpenApiParameter(
@@ -383,6 +413,13 @@ row. Read-only by contract: there is no write surface for templates.""",
             required=False,
             description="Filter to one breed type.",
         ),
+        OpenApiParameter(
+            "status",
+            str,
+            OpenApiParameter.QUERY,
+            required=False,
+            description="DRAFT | PUBLISHED (only PUBLISHED arms alarms).",
+        ),
     ],
     request=None,
     responses={
@@ -390,19 +427,68 @@ row. Read-only by contract: there is no write surface for templates.""",
         **error_responses(400, 401, 403),
     },
 )
-@api_view(["GET"])
+@extend_schema(
+    methods=["POST"],
+    tags=[TAG_OPS],
+    operation_id="create_threshold_template",
+    summary="O13 — author a threshold-template draft (engineer+, farm-scoped)",
+    description="""Creates a **DRAFT** template with its day-ranged band list. A draft never
+arms a saloon — resolution considers PUBLISHED templates only (O15) — so an
+engineer can author one without touching a live band.
+
+**Scope (fail-closed).** owner/manager may author anywhere in their org and
+may omit `farm_id` (an org-wide draft). An **engineer** must stay inside the
+farms granted via `account_role_scopes`; if exactly one farm is in scope
+`farm_id` may be omitted, and if several are in scope it is required. An
+engineer with **no** scope row has no template write at all → 403.
+
+Bands are validated: known metric, integer day window in [0, 400], numeric
+min/max inside the O3 sanity bounds, `min < max`, an `nh3` band must carry a
+max (NH3 can never be silenced), and two bands of the same metric may not
+overlap (overlap would make "which max applies" a row-order accident).
+
+Writes a `THRESHOLD_TEMPLATE_CREATED` audit row in the same transaction.""",
+    request=ThresholdTemplateCreateRequestSerializer,
+    responses={
+        201: ThresholdTemplateDetailSerializer,
+        **error_responses(400, 401, 403, 404),
+    },
+)
+@api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated])
 def threshold_templates(request):
+    """O4 (GET — catalog) + O13 (POST — author a draft) on the ONE contractual
+    path, the O5/O6 pattern: a second `path()` for the same route would shadow
+    one of the methods and answer 405."""
+    if request.method == "POST":
+        return _threshold_template_create(request)
+    return _threshold_templates_list(request)
+
+
+def _threshold_templates_list(request):
     if not _roles(request) & {"owner", "manager", "engineer", "doctor"}:
         return _forbidden()
     try:
         limit, offset = svc.parse_pagination(request)
     except svc.InvalidPagination:
         return _bad_request("invalid pagination")
-    qs = LifecycleTemplate.objects.all().order_by("template_id")
+    # Org scope (spec §4: never cross-org data): own-org templates + the
+    # org-NULL built-in catalog. Before v1.7.1 this read `objects.all()`, which
+    # only looked correct because RLS filters it on a real (non-superuser)
+    # connection — on a dev/test superuser it listed FOREIGN orgs' templates.
+    from django.db.models import Q
+
+    qs = (
+        LifecycleTemplate.objects.filter(
+            Q(org_id=str(_org_claim(request))) | Q(org__isnull=True)
+        ).order_by("template_id")
+    )
     breed = request.query_params.get("breed_type")
     if breed:
         qs = qs.filter(breed_type=breed)
+    status_filter = request.query_params.get("status")
+    if status_filter:
+        qs = qs.filter(status=status_filter)
     return Response(
         {
             "results": [ser.template_item(t) for t in qs[offset : offset + limit]],
@@ -865,3 +951,489 @@ def session_revoke(request, session_id: int):
     row.revoked_at = timezone.now()
     row.save(update_fields=["revoked_at"])
     return Response({"status": "revoked", "id": row.id})
+
+
+# ---------------------------------------------------------------------------
+# v1.7.1 — the threshold-template WRITE surface (O13–O16)
+#
+# Shape (owner decision 2026-09-12): an ENGINEER authors farm-scoped DRAFTS, a
+# manager PUBLISHES one and ASSIGNS it to saloons. Two rules carry the security
+# weight, and both are enforced HERE rather than in the model:
+#
+#   * FAIL CLOSED on scope. `scoped_farms()` returns None for a member with NO
+#     scope row, and its own module docstring defines None as "the whole org" —
+#     right for reads, catastrophic for this surface, where it would turn
+#     "farm-scoped engineer" into "every farm in the org". This module inverts
+#     None into the EMPTY set: an unscoped engineer has no template write at
+#     all. (Before v1.7.1 nothing called scoped_farms at all, so the function
+#     was tested-but-unmounted dead code — this is its first real caller.)
+#   * ONLY PUBLISHED templates can be assigned or resolved, and only a manager
+#     publishes. A draft therefore cannot reach a saloon, which is what makes
+#     it safe for an engineer to author one unattended.
+#
+# Every accepted write lands an account_activity_logs row in the SAME
+# transaction as the change it describes (the O3 precedent): "why did nobody
+# get paged last Tuesday" is answerable from that table and nowhere else.
+#
+# فارسی: پیش‌نویس را مهندس و در دامنهٔ مزرعه‌های مجاز می‌سازد، انتشار و تخصیص
+# با مدیر است؛ بی‌دامنه یعنی بی‌اجازه، و فقط قالبِ منتشرشده می‌تواند سالن را مسلح کند.
+# ---------------------------------------------------------------------------
+
+TEMPLATE_AUTHOR_ROLES = {"owner", "manager", "engineer"}
+TEMPLATE_MANAGE_ROLES = {"owner", "manager"}
+
+# account_activity_logs.action codes for this surface.
+ACTION_TEMPLATE_CREATED = "THRESHOLD_TEMPLATE_CREATED"
+ACTION_TEMPLATE_UPDATED = "THRESHOLD_TEMPLATE_UPDATED"
+ACTION_TEMPLATE_PUBLISHED = "THRESHOLD_TEMPLATE_PUBLISHED"
+ACTION_SALOON_ASSIGNED = "SALOON_TEMPLATE_ASSIGNED"
+ACTION_SALOON_CLEARED = "SALOON_TEMPLATE_CLEARED"
+
+
+def _conflict(msg):
+    return Response({"error": msg}, status=status.HTTP_409_CONFLICT)
+
+
+def _authoring_farms(request):
+    """The farms this caller may AUTHOR a template on.
+
+    ``None``  = org-level authority (owner/manager) — never narrowed.
+    a set      = exactly the granted farm ids. An ENGINEER with no scope row
+                 gets the EMPTY set, which is this module's fail-closed rule.
+    """
+    if _roles(request) & TEMPLATE_MANAGE_ROLES:
+        return None
+    scoped = scoped_farms(request.user, _org_claim(request))
+    if scoped is None:
+        return set()
+    return set(scoped.values_list("pk", flat=True))
+
+
+def _authoring_scope_error(request, template):
+    """403 unless the caller may author/edit THIS template (None = allowed)."""
+    limit_to = _authoring_farms(request)
+    if limit_to is None:
+        return None
+    if not limit_to or template.farm_id is None or template.farm_id not in limit_to:
+        # An org-wide draft is org-level business, and another farm's draft is
+        # outside the grant — both are the same refusal (never an oracle).
+        return _forbidden()
+    return None
+
+
+def _authoring_farm_id(request, raw_farm_id):
+    """(farm_id, error_response) — resolves the draft's owning farm.
+
+    Org-level callers may omit it (org-wide draft) or name any own-org farm.
+    An engineer is always inside the grant, and a single-farm engineer does not
+    have to restate it.
+    """
+    limit_to = _authoring_farms(request)
+    if limit_to is None:
+        if raw_farm_id is None:
+            return None, None
+        farm_id = _as_int(raw_farm_id)
+        if farm_id is None:
+            return None, _bad_request("invalid farm_id")
+        if not Farm.objects.filter(pk=farm_id, org_id=str(_org_claim(request))).exists():
+            return None, _not_found("farm not found")
+        return farm_id, None
+    if not limit_to:
+        return None, _forbidden()  # unscoped engineer: no template write at all
+    if raw_farm_id is None:
+        if len(limit_to) > 1:
+            return None, _bad_request("farm_id is required when several farms are in scope")
+        return next(iter(limit_to)), None
+    farm_id = _as_int(raw_farm_id)
+    if farm_id is None:
+        return None, _bad_request("invalid farm_id")
+    if farm_id not in limit_to:
+        return None, _forbidden()
+    return farm_id, None
+
+
+def _as_int(raw):
+    """Strict int coercion (bool and 1.5 are both invalid, not coerced)."""
+    if isinstance(raw, bool) or raw is None:
+        return None
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _own_org_template(request, template_id: int):
+    """Own-org template or None — the org-NULL built-in catalog and every other
+    org's row are indistinguishable 404s here, exactly like O3's write scope."""
+    return LifecycleTemplate.objects.filter(
+        template_id=template_id, org_id=str(_org_claim(request))
+    ).first()
+
+
+def _rules_of(template):
+    return list(
+        LifecycleThresholdRule.objects.filter(template=template).order_by(
+            "metric", "day_from", "id"
+        )
+    )
+
+
+def _replace_rules(template, rules):
+    """Replace a DRAFT's band list wholesale.
+
+    The SET is the unit of meaning: overlap is validated across rules, so a
+    partial edit could leave a combination no single request ever contained.
+    `bulk_create` also (deliberately) skips the rules post_save signal — the
+    draft cannot change any live hash, so there is nothing to re-cache.
+    """
+    LifecycleThresholdRule.objects.filter(template=template).delete()
+    LifecycleThresholdRule.objects.bulk_create(
+        [
+            LifecycleThresholdRule(
+                template=template,
+                day_from=int(raw["day_from"]),
+                day_to=int(raw["day_to"]),
+                metric=raw.get("metric_key", raw.get("metric")),
+                min_value=raw.get("min", raw.get("min_value")),
+                max_value=raw.get("max", raw.get("max_value")),
+            )
+            for raw in rules
+        ]
+    )
+
+
+def _template_audit(request, action, template, **extra):
+    AccountActivityLog.objects.create(
+        actor=request.user,
+        org_id=_org_claim(request),
+        farm_id=template.farm_id,
+        action=action,
+        details={
+            "template_id": template.template_id,
+            "name": template.name,
+            "status": template.status,
+            **extra,
+        },
+    )
+
+
+def _saloon_row(request, saloon_id: int):
+    """Own-org Saloon or None — foreign and unknown are identical (M6-06
+    lesson: the explicit string-normalized comparison is the portable check,
+    RLS stays the backstop)."""
+    org_claim = _org_claim(request)
+    if not org_claim:
+        return None
+    row = Saloon.objects.filter(pk=saloon_id).first()
+    return row if row is not None and str(row.org_id) == str(org_claim) else None
+
+
+def _saloon_flock(saloon):
+    """The flock the saloon's hash is built from (open, else the latest)."""
+    return (
+        FlockCycle.objects.filter(saloon=saloon, end_date__isnull=True)
+        .order_by("-start_date")
+        .first()
+        or FlockCycle.objects.filter(saloon=saloon).order_by("-start_date").first()
+    )
+
+
+def _threshold_template_create(request):
+    """O13 half — reached through the dispatcher above (which owns the schema)."""
+    if not _org_claim(request):
+        return _forbidden()
+    if not _roles(request) & TEMPLATE_AUTHOR_ROLES:
+        return _forbidden()
+    payload = request.data if isinstance(request.data, dict) else {}
+
+    name = str(payload.get("name") or "").strip()
+    if not name or len(name) > svc.MAX_TEMPLATE_NAME:
+        return _bad_request("invalid name")
+    breed = payload.get("breed_type")
+    if breed is not None:
+        breed = str(breed).strip() or None
+        if breed is not None and len(breed) > svc.MAX_BREED_TYPE:
+            return _bad_request("invalid breed_type")
+
+    rules = payload.get("rules")
+    error = svc.template_rules_error(rules)
+    if error:
+        return _bad_request(error)
+
+    farm_id, farm_error = _authoring_farm_id(request, payload.get("farm_id"))
+    if farm_error is not None:
+        return farm_error
+
+    with db_transaction.atomic():
+        template = LifecycleTemplate.objects.create(
+            org_id=_org_claim(request),
+            farm_id=farm_id,
+            name=name,
+            breed_type=breed,
+            status=LifecycleTemplate.DRAFT,
+            created_by=request.user,
+            is_default=False,
+        )
+        _replace_rules(template, rules)
+        _template_audit(request, ACTION_TEMPLATE_CREATED, template, rules=len(rules))
+    return Response(
+        ser.template_detail_item(template, _rules_of(template)),
+        status=status.HTTP_201_CREATED,
+    )
+
+
+@extend_schema(
+    tags=[TAG_OPS],
+    operation_id="update_threshold_template",
+    summary="O14 — edit a template draft (engineer+, farm-scoped)",
+    description="""Partial edit of a **DRAFT**. `rules`, when present, REPLACES the whole band
+list (the set is validated for overlap, so a partial band edit could produce a
+combination no request contained). Validation is O13's, verbatim.
+
+A **PUBLISHED** template is immutable here → 409: its bands are tuned through
+`PUT /thresholds/{rule_id}/`, which audits each change and re-caches
+immediately. A foreign or org-NULL (built-in) template → 404. An engineer may
+only edit drafts of farms in their grant (org-wide drafts are org-level).
+
+Writes a `THRESHOLD_TEMPLATE_UPDATED` audit row in the same transaction.""",
+    parameters=[
+        OpenApiParameter(
+            "template_id", int, OpenApiParameter.PATH, description="Draft template id."
+        )
+    ],
+    request=ThresholdTemplateUpdateRequestSerializer,
+    responses={
+        200: ThresholdTemplateDetailSerializer,
+        **error_responses(400, 401, 403, 404),
+        409: OpenApiResponse(
+            description="Template is already published (bands are tuned through O3)."
+        ),
+    },
+)
+@api_view(["PUT"])
+@permission_classes([IsAuthenticated])
+def threshold_template_update(request, template_id: int):
+    if not _roles(request) & TEMPLATE_AUTHOR_ROLES:
+        return _forbidden()
+    template = _own_org_template(request, template_id)
+    if template is None:
+        return _not_found("template not found")
+    scope_error = _authoring_scope_error(request, template)
+    if scope_error is not None:
+        return scope_error
+    if template.status != LifecycleTemplate.DRAFT:
+        return _conflict("template is published (tune its rules through /thresholds/)")
+
+    payload = request.data if isinstance(request.data, dict) else {}
+    updates = []
+    if "name" in payload:
+        name = str(payload.get("name") or "").strip()
+        if not name or len(name) > svc.MAX_TEMPLATE_NAME:
+            return _bad_request("invalid name")
+        template.name = name
+        updates.append("name")
+    if "breed_type" in payload:
+        breed = payload.get("breed_type")
+        breed = str(breed).strip() or None if breed is not None else None
+        if breed is not None and len(breed) > svc.MAX_BREED_TYPE:
+            return _bad_request("invalid breed_type")
+        template.breed_type = breed
+        updates.append("breed_type")
+    if "rules" in payload:
+        error = svc.template_rules_error(payload.get("rules"))
+        if error:
+            return _bad_request(error)
+
+    with db_transaction.atomic():
+        if updates:
+            template.save(update_fields=updates)
+        if "rules" in payload:
+            _replace_rules(template, payload["rules"])
+        _template_audit(
+            request,
+            ACTION_TEMPLATE_UPDATED,
+            template,
+            changed=sorted(set(payload) & {"name", "breed_type", "rules"}),
+        )
+    return Response(ser.template_detail_item(template, _rules_of(template)))
+
+
+@extend_schema(
+    tags=[TAG_OPS],
+    operation_id="publish_threshold_template",
+    summary="O15 — publish a template draft (owner, manager)",
+    description="""Makes a draft LIVE: from this moment `effective_template` may resolve it,
+so the affected saloons are re-cached in the same request (the publish fires
+the alerts cache sweep — the same fast path a rule edit takes).
+
+Optional `is_default: true` also promotes it to the org's default in one call,
+demoting the incumbent. Publishing a template whose breed already has a
+published org template, or promoting to default while another published
+default exists, is a 409 — the uniqueness guards are DB constraints, not
+gentlemen's agreements.
+
+404 for a foreign or org-NULL (built-in) template — the shared catalog is
+writable by NO ONE, exactly like O3. 409 for an already-published template.
+Writes a `THRESHOLD_TEMPLATE_PUBLISHED` audit row in the same transaction.""",
+    parameters=[
+        OpenApiParameter(
+            "template_id", int, OpenApiParameter.PATH, description="Draft template id."
+        )
+    ],
+    request=ThresholdTemplatePublishRequestSerializer,
+    responses={
+        200: ThresholdTemplateDetailSerializer,
+        **error_responses(400, 401, 403, 404),
+        409: OpenApiResponse(
+            description="Already published, or the breed/default slot is taken."
+        ),
+    },
+)
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def threshold_template_publish(request, template_id: int):
+    if not _roles(request) & TEMPLATE_MANAGE_ROLES:
+        return _forbidden()
+    template = _own_org_template(request, template_id)
+    if template is None:
+        return _not_found("template not found")
+    if template.status == LifecycleTemplate.PUBLISHED:
+        return _conflict("template is already published")
+    rules = _rules_of(template)
+    if not rules:
+        return _bad_request("template has no rules")
+
+    payload = request.data if isinstance(request.data, dict) else {}
+    is_default = bool(payload.get("is_default", False))
+    try:
+        with db_transaction.atomic():
+            if is_default:
+                # Promote in ONE transaction: demote the incumbent, then save.
+                # Order matters — the partial unique index is checked per row.
+                LifecycleTemplate.objects.filter(
+                    org_id=_org_claim(request),
+                    status=LifecycleTemplate.PUBLISHED,
+                    is_default=True,
+                ).exclude(template_id=template.template_id).update(is_default=False)
+            template.status = LifecycleTemplate.PUBLISHED
+            template.published_at = timezone.now()
+            template.is_default = is_default
+            template.save(update_fields=["status", "published_at", "is_default"])
+            _template_audit(
+                request,
+                ACTION_TEMPLATE_PUBLISHED,
+                template,
+                rules=len(rules),
+                is_default=is_default,
+            )
+    except IntegrityError:
+        return _conflict(
+            "another published template already covers this breed or is the org default"
+        )
+    return Response(ser.template_detail_item(template, rules))
+
+
+@extend_schema(
+    methods=["GET"],
+    tags=[TAG_OPS],
+    operation_id="get_saloon_threshold_template",
+    summary="O16 — a saloon's template assignment and its effective template",
+    description="""`assigned_template_id` is the explicit assignment (null = inheriting) and
+`source` names the resolution step that actually won:
+`assigned` | `org_breed` | `org_default` | `global_default` | `none`.
+
+Readable by any member of the owning org. A foreign or unknown saloon is an
+identical 404.""",
+    parameters=[
+        OpenApiParameter(
+            "saloon_id", int, OpenApiParameter.PATH, description="Saloon id (caller's org)."
+        )
+    ],
+    request=None,
+    responses={
+        200: SaloonTemplateResponseSerializer,
+        **error_responses(401, 403, 404),
+    },
+)
+@extend_schema(
+    methods=["PUT"],
+    tags=[TAG_OPS],
+    operation_id="assign_saloon_threshold_template",
+    summary="O16 — assign a template to a saloon (owner, manager)",
+    description="""`{"template_id": 7}` assigns; `{"template_id": null}` CLEARS the assignment and
+returns the saloon to the breed/default chain. The template must be own-org and
+**published** — a draft cannot be assigned (400), and a foreign or org-NULL
+built-in template is a 404, never an existence oracle.
+
+The saloon is re-cached immediately, so the new bands are armed without
+waiting for the midnight sweep. Writes a `SALOON_TEMPLATE_ASSIGNED` (or
+`_CLEARED`) audit row in the same transaction and answers the O16 GET shape.""",
+    parameters=[
+        OpenApiParameter(
+            "saloon_id", int, OpenApiParameter.PATH, description="Saloon id (caller's org)."
+        )
+    ],
+    request=SaloonTemplateAssignRequestSerializer,
+    responses={
+        200: SaloonTemplateResponseSerializer,
+        **error_responses(400, 401, 403, 404),
+    },
+)
+@api_view(["GET", "PUT"])
+@permission_classes([IsAuthenticated])
+def saloon_threshold_template(request, saloon_id: int):
+    """O16 on ONE contractual path; the methods dispatch to the halves below."""
+    if request.method == "GET":
+        return _saloon_template_read(request, saloon_id)
+    return _saloon_template_assign(request, saloon_id)
+
+
+def _saloon_template_read(request, saloon_id: int):
+    if not _org_claim(request):
+        return _forbidden()
+    saloon = _saloon_row(request, saloon_id)
+    if saloon is None:
+        return _not_found("saloon not found")
+    effective, source = effective_template(_saloon_flock(saloon), saloon)
+    return Response(ser.saloon_template_item(saloon, effective, source))
+
+
+def _saloon_template_assign(request, saloon_id: int):
+    if not _roles(request) & TEMPLATE_MANAGE_ROLES:
+        return _forbidden()
+    saloon = _saloon_row(request, saloon_id)
+    if saloon is None:
+        return _not_found("saloon not found")
+
+    payload = request.data if isinstance(request.data, dict) else {}
+    raw = payload.get("template_id")
+    if raw is None:
+        template = None  # explicit clear → back to the breed/default chain
+    else:
+        template_id = _as_int(raw)
+        if template_id is None:
+            return _bad_request("invalid template_id")
+        template = _own_org_template(request, template_id)
+        if template is None:
+            return _not_found("template not found")
+        if template.status != LifecycleTemplate.PUBLISHED:
+            return _bad_request("template is not published")
+
+    with db_transaction.atomic():
+        saloon.threshold_template = template
+        # update_fields= is what the alerts signal keys on (a targeted save
+        # that does not touch the assignment must not rebuild the hash).
+        saloon.save(update_fields=["threshold_template"])
+        AccountActivityLog.objects.create(
+            actor=request.user,
+            org_id=_org_claim(request),
+            farm_id=saloon.farm_id,
+            saloon_id=saloon.pk,
+            action=ACTION_SALOON_ASSIGNED if template is not None else ACTION_SALOON_CLEARED,
+            details={
+                "template_id": template.template_id if template is not None else None,
+                "template_name": template.name if template is not None else None,
+            },
+        )
+    effective, source = effective_template(_saloon_flock(saloon), saloon)
+    return Response(ser.saloon_template_item(saloon, effective, source))

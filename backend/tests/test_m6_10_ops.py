@@ -287,7 +287,20 @@ class TestO4Templates:
         res = _client(_login("ops-engineer")).get(reverse("ops:threshold-templates"))
         assert res.status_code == 200 and res.data["count"] == 2
         row = res.data["results"][0]
-        assert set(row.keys()) == {"template_id", "org_id", "breed_type", "name", "is_default"}
+        # v1.7.1 added the write-surface columns — `status` is what tells a
+        # client whether a row can arm a saloon at all.
+        assert set(row.keys()) == {
+            "template_id",
+            "org_id",
+            "breed_type",
+            "name",
+            "is_default",
+            "status",
+            "farm_id",
+            "created_by",
+            "published_at",
+        }
+        assert row["status"] in {"DRAFT", "PUBLISHED"}
         res = _client(_login("ops-engineer")).get(
             reverse("ops:threshold-templates"), {"breed_type": "legacy"}
         )

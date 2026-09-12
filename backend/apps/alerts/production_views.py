@@ -290,7 +290,9 @@ def _available_logs(saloon: Saloon, org_id) -> dict:
         org_id=org_id, flock=flock
     ).exists()
 
-    template = _resolve_template(flock)
+    # saloon= — an explicit assignment (v1.7.1) outranks the breed chain, and
+    # the capabilities answer must agree with what actually arms the saloon.
+    template = _resolve_template(flock, saloon=saloon)
     if template is not None:
         start_local = flock.start_date.astimezone(TEHRAN).date()
         end_local = (flock.end_date or timezone.now()).astimezone(TEHRAN).date()
