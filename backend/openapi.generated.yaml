@@ -1,9 +1,9 @@
 openapi: 3.0.3
 info:
   title: Morghdari Poultry Monitoring API
-  version: 1.7.4
+  version: 1.7.5
   description: |-
-    REST API for the Morghdari multi-tenant poultry monitoring platform. Contract v1.7.4 (ops wave + merged daily-report schemas + the threshold-template write surface O13–O16 + the follow-through core: tenant topology writes F1–F8, flock close F14, direct mortality entry F15, org alert feed F9, home rollup F10, maintenance-mute windows F11–F13, member role change, the ratified manager-side gateway lifecycle twins, the Hardware Team write path H0–H2, the gateway replacement ceremony H3, and the downlink ACL backfill H4).
+    REST API for the Morghdari multi-tenant poultry monitoring platform. Contract v1.7.5 (ops wave + merged daily-report schemas + the threshold-template write surface O13–O16 + the follow-through core + the Hardware Team write path H0–H4 + alert-subscription mutes B2: org-wide category mutes honored at evaluation lane 2c, Tier-1 velocity structurally unmutable).
 
     Authentication: Bearer JWT (15-min access token, 7-day refresh token; rotation is intentionally OFF — deactivated members fail closed via org-claim re-derivation). Gateway devices use HTTP Basic (username = gateway_slot_id) on the config endpoint only.
 
@@ -402,6 +402,143 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: Validation error — malformed input, bad enum, or out-of-range
             value.
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Not found — id/slug unknown OR outside the caller's org (never
+            distinguished).
+  /api/v1/alert-subscriptions/:
+    get:
+      operationId: list_alert_subscriptions
+      description: |-
+        Org-wide category mutes (GS-ROUTING, v0.9/B2). Any member
+        reads; the red banner renders from this list. `suppressed_today` is the
+        Redis digest per metric (fires the mute swallowed today). Tier-1 velocity
+        can never appear here as a *silenced* lane — velocity bypasses every mute
+        structurally (Decision 10).
+      summary: List muted alert categories with today's suppression counts
+      tags:
+      - Alerts & KPI
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubListResponse'
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+    post:
+      operationId: mute_alert_category
+      description: |-
+        Creates the AlertSubscription row the engine's lane ②c
+        honours: the category stops FIRING threshold alerts (readings still log;
+        velocity/LOS/escalation untouched). Re-muting is idempotent. Writes a
+        SUB_MUTED audit row.
+      summary: Mute an alert category org-wide (manager+)
+      tags:
+      - Alerts & KPI
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubMuteRequestRequest'
+            examples:
+              MuteLux:
+                value:
+                  metric_key: lux
+                  reason: greenhouse glare season
+                summary: Mute lux
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/SubMuteRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/SubMuteRequestRequest'
+        required: true
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubMuteResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Validation error — malformed input, bad enum, or out-of-range
+            value.
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+  /api/v1/alert-subscriptions/{metric_key}/:
+    delete:
+      operationId: unmute_alert_category
+      description: |-
+        Deletes the mute row — the category re-arms immediately
+        (breach state starts fresh; nothing back-fires). Unknown metric is 404.
+        Writes a SUB_UNMUTED audit row.
+      summary: Unmute an alert category (manager+)
+      parameters:
+      - in: path
+        name: metric_key
+        schema:
+          type: string
+        description: Muted category.
+        required: true
+      tags:
+      - Alerts & KPI
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubUnmuteResponse'
+          description: ''
         '401':
           content:
             application/json:
@@ -10866,6 +11003,74 @@ components:
       required:
       - id
       - status
+    SubItem:
+      type: object
+      properties:
+        metric_key:
+          type: string
+        muted_by:
+          type: integer
+          nullable: true
+        muted_at:
+          type: string
+          format: date-time
+          nullable: true
+        suppressed_today:
+          type: integer
+          description: Fires suppressed for this metric today (Redis digest).
+      required:
+      - metric_key
+      - suppressed_today
+    SubListResponse:
+      type: object
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SubItem'
+        count:
+          type: integer
+      required:
+      - count
+      - results
+    SubMuteRequestRequest:
+      type: object
+      description: POST /alert-subscriptions/ body (v0.9/B2, GS-ROUTING).
+      properties:
+        metric_key:
+          type: string
+          minLength: 1
+          description: Category to mute org-wide (catalog key).
+        reason:
+          type: string
+          description: Why this category is muted (audit text).
+      required:
+      - metric_key
+    SubMuteResponse:
+      type: object
+      properties:
+        metric_key:
+          type: string
+        muted:
+          type: boolean
+          description: Always true on mute.
+        idempotent:
+          type: boolean
+          description: Present (true) only when the metric was already muted.
+      required:
+      - metric_key
+      - muted
+    SubUnmuteResponse:
+      type: object
+      properties:
+        metric_key:
+          type: string
+        muted:
+          type: boolean
+          description: Always false after unmute.
+      required:
+      - metric_key
+      - muted
     SupportForceResolveRequestRequest:
       type: object
       properties:

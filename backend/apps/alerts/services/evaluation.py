@@ -7,7 +7,12 @@ passes, fires (or coalesces) an AlertInstance row inside tenant_context.
 Evaluation order (Decision 10 / Walkthrough §4.2):
   ① Velocity emergency → instant Tier 1 (bypasses ALL suppression)
   ② Midnight transition grace → suppresses non-velocity
+  ②b Maintenance mute window → suppresses threshold/duration alerting
+  ②c Subscription mute → suppresses muted CATEGORIES (v0.9/B2 — org-wide
+      AlertSubscription rows; the velocity lane already returned above, so
+      Tier-1 velocity is structurally unmutable; LOS/escalation untouched)
   ③ Threshold comparison + breach accumulation + 900 s duration gate + hysteresis
+  ④ D23 capability-gated derived rules (THI — muted as a category like the rest)
 
 فارسی: ارزیابیِ هشدار بعد از درجِ تله‌متری و قبل از امضا؛ اولویت با سرعت است.
 """
@@ -115,6 +120,14 @@ def evaluate_entry(
         )
         return None
 
+    # ── ②c subscription mute (v0.9 M9-10/B2): org-wide category switch ────
+    # Muted categories never accumulate breach (unmuting starts fresh) and
+    # every suppressed fire feeds the Redis digest. Velocity NEVER reaches
+    # here (lane ① returned); LOS/escalation live outside this function.
+    from apps.alerts.services.subscriptions import muted_metrics, note_sub_muted
+
+    muted = muted_metrics(org_id)
+
     # ── ③ threshold comparison + breach accumulation + duration gate ──────
     duration_sec = _config_int("breach_duration_sec", 900)
     hysteresis = _config_float("hysteresis_buffer_units", 0.5)
@@ -124,6 +137,12 @@ def evaluate_entry(
     fired = None
     for metric_key, metric_values in metrics.items():
         if not isinstance(metric_values, dict):
+            continue
+        if metric_key in muted:
+            note_sub_muted(redis_client, org_id, metric_key)
+            logger.debug(
+                "subscription mute suppresses %s for org %s", metric_key, org_id
+            )
             continue
         max_str = thresholds.get(f"{metric_key}_max")
         if max_str is None:
@@ -160,8 +179,11 @@ def evaluate_entry(
     thi_max_str = thresholds.get("thi_max")
     if thi_max_str is not None and metric_is_live(metrics, "temp") \
             and metric_is_live(metrics, "humidity"):
-        thi = compute_thi(float(metrics["temp"]["avg"]),
-                          float(metrics["humidity"]["avg"]))
+        if "thi" in muted:
+            note_sub_muted(redis_client, org_id, "thi")
+        else:
+            thi = compute_thi(float(metrics["temp"]["avg"]),
+                              float(metrics["humidity"]["avg"]))
         result = track_breach(
             redis_client, saloon_id, "thi", thi,
             float(thi_max_str), hysteresis, duration_sec, clock_now=clock_now,

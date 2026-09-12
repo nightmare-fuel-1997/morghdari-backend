@@ -60,6 +60,7 @@ DECLARE
     'flock_water_intake',
     'biosecurity_events',
     'maintenance_mutes',
+    'alert_subscriptions',  -- v0.9 M9-10/B2: org-wide category mutes (GS-ROUTING)
     'dashboard_configs',
     'provisioning_audit_log',
     'org_offboarding_log',

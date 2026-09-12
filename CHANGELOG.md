@@ -46,6 +46,18 @@ alerting in minutes — each step measured against its RTO.
 - M8-04/05/06 parked as `v0.8-HIL` (hardware-team owned, backend-only close
   per owner 2026-09-12). Tag `v0.8-DR` (push waived — no remote).
 
+## [1.7.5] — 2026-09-12 — Alert-subscription mutes (B2, GS-ROUTING)
+
+Org-wide category mutes: `alert_subscriptions` table (manager+ writes via
+`GET/POST /alert-subscriptions/` + `DELETE /{metric}/`, members read with
+today's suppression digest) honoured at a new evaluation lane ②c — muted
+categories never accumulate breach (unmuting starts fresh) while Tier-1
+velocity bypasses every mute structurally (Decision 10 holds by
+construction, proven in-suite; LOS/escalation untouched). Shipped
+org-scoped, superseding the planned per-user `/me/alert-subscriptions/`
+path. RLS via the initdb tenant table list (house path for managed tenant
+tables).
+
 ## [1.7.4] — 2026-09-12 — Replacement ceremony + downlink backfill (H3–H4)
 
 H3 `POST /platform/support/hardware/gateways/{hw_id}/replace/`: one atomic

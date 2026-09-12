@@ -405,3 +405,29 @@ class DashboardConfig(models.Model):
                 name="idx_dashcfg_personal",
             ),
         ]
+
+
+class AlertSubscription(models.Model):
+    """Org-wide category mute (v0.9 M9-10/B2 — closes GS-ROUTING at pilot urgency).
+
+    One row per muted metric_key per org (manager+ writes, members read).
+    A muted category never FIRES threshold alerts — readings still log and
+    Tier-1 velocity emergencies structurally bypass every mute (Decision 10:
+    the velocity lane returns before the subscription gate is even consulted).
+    LOS watchdog + escalation sweeps are untouched (they act on rows, not
+    categories). Suppression counts live in Redis (services.subscriptions),
+    not here — this table is the switch, the digest is the evidence.
+    """
+
+    id = models.AutoField(primary_key=True)
+    org = models.ForeignKey("tenants.Organization", on_delete=models.RESTRICT, related_name="+")
+    metric_key = models.CharField(max_length=20)
+    muted_by = models.ForeignKey("accounts.User", on_delete=models.RESTRICT, related_name="+")
+    muted_at = models.DateTimeField(db_default=Now())
+    reason = models.TextField(null=True, blank=True)
+
+    class Meta:
+        db_table = "alert_subscriptions"
+        constraints = [
+            models.UniqueConstraint(fields=["org", "metric_key"], name="uq_alert_subscriptions_org_metric"),
+        ]

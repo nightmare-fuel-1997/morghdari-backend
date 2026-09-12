@@ -61,3 +61,39 @@ class MuteRevokeResponseSerializer(serializers.Serializer):
     saloon_id = serializers.CharField(help_text="Stringified saloon PK.")
     ends_at = serializers.DateTimeField(help_text="Shortened to the revocation instant.")
     status = serializers.CharField(help_text='Always "REVOKED".')
+
+
+class SubMuteRequestSerializer(serializers.Serializer):
+    """POST /alert-subscriptions/ body (v0.9/B2, GS-ROUTING)."""
+
+    metric_key = serializers.CharField(help_text="Category to mute org-wide (catalog key).")
+    reason = serializers.CharField(
+        required=False, allow_blank=True, help_text="Why this category is muted (audit text)."
+    )
+
+
+class SubItemSerializer(serializers.Serializer):
+    metric_key = serializers.CharField()
+    muted_by = serializers.IntegerField(allow_null=True, required=False)
+    muted_at = serializers.DateTimeField(allow_null=True, required=False)
+    suppressed_today = serializers.IntegerField(
+        help_text="Fires suppressed for this metric today (Redis digest)."
+    )
+
+
+class SubListResponseSerializer(serializers.Serializer):
+    results = SubItemSerializer(many=True)
+    count = serializers.IntegerField()
+
+
+class SubMuteResponseSerializer(serializers.Serializer):
+    metric_key = serializers.CharField()
+    muted = serializers.BooleanField(help_text="Always true on mute.")
+    idempotent = serializers.BooleanField(
+        required=False, help_text="Present (true) only when the metric was already muted."
+    )
+
+
+class SubUnmuteResponseSerializer(serializers.Serializer):
+    metric_key = serializers.CharField()
+    muted = serializers.BooleanField(help_text="Always false after unmute.")

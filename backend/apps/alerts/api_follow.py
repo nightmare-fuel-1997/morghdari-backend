@@ -46,6 +46,11 @@ from apps.alerts.serializers_follow import (
     MuteListResponseSerializer,
     MuteItemSerializer,
     MuteRevokeResponseSerializer,
+    SubItemSerializer,
+    SubListResponseSerializer,
+    SubMuteRequestSerializer,
+    SubMuteResponseSerializer,
+    SubUnmuteResponseSerializer,
 )
 from apps.alerts.views import _alert_out
 from apps.auditing.models import AccountActivityLog
@@ -534,3 +539,157 @@ def maintenance_mute_revoke(request, mute_id: int):
             "status": "REVOKED",
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# Subscriptions — GET/POST /alert-subscriptions/, DELETE …/{metric}/ (v0.9/B2)
+# ---------------------------------------------------------------------------
+
+ACTION_SUB_MUTED = "SUB_MUTED"
+ACTION_SUB_UNMUTED = "SUB_UNMUTED"
+
+
+def _sub_out(row, suppressed: int = 0) -> dict:
+    return {
+        "metric_key": row.metric_key,
+        "muted_by": row.muted_by_id,
+        "muted_at": row.muted_at.isoformat() if row.muted_at else None,
+        "suppressed_today": suppressed,
+    }
+
+
+@extend_schema(
+    methods=["GET"],
+    tags=[TAG_ALERTS],
+    operation_id="list_alert_subscriptions",
+    summary="List muted alert categories with today's suppression counts",
+    description="""Org-wide category mutes (GS-ROUTING, v0.9/B2). Any member
+reads; the red banner renders from this list. `suppressed_today` is the
+Redis digest per metric (fires the mute swallowed today). Tier-1 velocity
+can never appear here as a *silenced* lane — velocity bypasses every mute
+structurally (Decision 10).""",
+    responses={
+        200: SubListResponseSerializer,
+        **error_responses(401, 403),
+    },
+)
+@extend_schema(
+    methods=["POST"],
+    tags=[TAG_ALERTS],
+    operation_id="mute_alert_category",
+    summary="Mute an alert category org-wide (manager+)",
+    description="""Creates the AlertSubscription row the engine's lane ②c
+honours: the category stops FIRING threshold alerts (readings still log;
+velocity/LOS/escalation untouched). Re-muting is idempotent. Writes a
+SUB_MUTED audit row.""",
+    request=SubMuteRequestSerializer,
+    responses={
+        200: SubMuteResponseSerializer,
+        **error_responses(400, 401, 403),
+    },
+    examples=[
+        OpenApiExample(
+            "Mute lux",
+            request_only=True,
+            value={"metric_key": "lux", "reason": "greenhouse glare season"},
+        )
+    ],
+)
+@api_view(["GET", "POST"])
+@permission_classes([IsAuthenticated])
+def alert_subscriptions(request):
+    """GET /alert-subscriptions/ (any member) + POST (manager+ mute).
+
+    One view for both methods — Django resolves the FIRST matching pattern
+    regardless of method (v1.7.2 lesson), so GET/POST twins must dispatch
+    inside a single view like maintenance_mutes does.
+    """
+    from apps.alerts.models import AlertSubscription
+
+    org_id = _org_id(request)
+    if org_id is None:
+        return _forbidden("org context required")
+    if request.method == "POST":
+        return _subscription_mute(request, org_id)
+
+    from apps.alerts.services.subscriptions import submuted_today, system_redis
+
+    try:
+        counts = submuted_today(system_redis(), org_id)
+    except Exception:  # noqa: BLE001 — digest loss must not break the list
+        counts = {}
+    rows = AlertSubscription.objects.filter(org_id=org_id).order_by("metric_key")
+    return Response(
+        {
+            "results": [_sub_out(r, counts.get(r.metric_key, 0)) for r in rows],
+            "count": rows.count(),
+        }
+    )
+
+
+def _subscription_mute(request, org_id):
+    """POST half of alert_subscriptions (manager+)."""
+    from apps.alerts.models import AlertSubscription
+    from apps.telemetry.models import SensorMetricType
+
+    if not (_roles(request) & MANAGER_ROLES):
+        return _forbidden("manager role required")
+    metric_key = str(request.data.get("metric_key") or "").strip()
+    if not metric_key:
+        return _bad_request("metric_key required")
+    if not SensorMetricType.objects.filter(pk=metric_key).exists():
+        return _bad_request("unknown metric_key")
+    reason = str(request.data.get("reason") or "").strip()
+    row, created = AlertSubscription.objects.get_or_create(
+        org_id=org_id, metric_key=metric_key,
+        defaults={"muted_by": request.user, "reason": reason},
+    )
+    if created:
+        AccountActivityLog.objects.create(
+            actor=request.user,
+            org_id=org_id,
+            action=ACTION_SUB_MUTED,
+            ip_address=request.META.get("REMOTE_ADDR"),
+            details={"metric_key": metric_key, "reason": reason},
+        )
+    return Response({"metric_key": metric_key, "muted": True, **({} if created else {"idempotent": True})})
+
+
+@extend_schema(
+    tags=[TAG_ALERTS],
+    operation_id="unmute_alert_category",
+    summary="Unmute an alert category (manager+)",
+    description="""Deletes the mute row — the category re-arms immediately
+(breach state starts fresh; nothing back-fires). Unknown metric is 404.
+Writes a SUB_UNMUTED audit row.""",
+    parameters=[
+        OpenApiParameter(
+            "metric_key", str, OpenApiParameter.PATH, description="Muted category."
+        )
+    ],
+    responses={
+        200: SubUnmuteResponseSerializer,
+        **error_responses(401, 403, 404),
+    },
+)
+@api_view(["DELETE"])
+@permission_classes([IsAuthenticated])
+def alert_subscription_unmute(request, metric_key: str):
+    """DELETE /alert-subscriptions/{metric_key}/ — unmute (manager+)."""
+    from apps.alerts.models import AlertSubscription
+
+    org_id = _org_id(request)
+    if org_id is None or not (_roles(request) & MANAGER_ROLES):
+        return _forbidden("manager role required")
+    row = AlertSubscription.objects.filter(org_id=org_id, metric_key=metric_key).first()
+    if row is None:
+        return _not_found("metric not muted")
+    row.delete()
+    AccountActivityLog.objects.create(
+        actor=request.user,
+        org_id=org_id,
+        action=ACTION_SUB_UNMUTED,
+        ip_address=request.META.get("REMOTE_ADDR"),
+        details={"metric_key": metric_key},
+    )
+    return Response({"metric_key": metric_key, "muted": False})

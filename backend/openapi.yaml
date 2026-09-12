@@ -1,10 +1,17 @@
 openapi: "3.0.3"
 info:
   title: Morghdari Poultry Monitoring API
-  version: "1.7.4"
+  version: "1.7.5"
   description: |
     REST API for the Morghdari multi-tenant poultry monitoring platform.
     WebSocket protocol is documented separately in the Frontend Integration Spec.
+
+    v1.7.5 (2026-09-12 — alert-subscription mutes, v0.9/B2 GS-ROUTING):
+    org-wide category mutes (manager+ writes, members read) honoured at a new
+    evaluation lane ②c — muted categories never fire threshold alerts while
+    Tier-1 velocity bypasses every mute structurally (Decision 10). Shipped
+    org-scoped, not per-user (the planned /me/alert-subscriptions/ path is
+    superseded — per-user routing arrives with v1.1 notifications).
 
     v1.7.4 (2026-09-12 — H3/H4 close the hardware track): the gateway
     replacement ceremony (retire + fresh one-time credential + broker
@@ -3055,50 +3062,9 @@ paths:
         '200': { description: User overrides saved }
         '403': { description: Caller is not owner/admin for this org }
 
-  /me/alert-subscriptions/:
-    get:
-      tags: [Alerts]
-      summary: My alert category subscriptions (v1.5 — Tracker §4n)
-      security: [{ BearerAuth: [] }]
-      responses:
-        '200':
-          description: Subscription rows
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  type: object
-                  properties:
-                    category: { type: string, enum: [environment, health, hardware, production, system] }
-                    is_muted: { type: boolean }
-    put:
-      tags: [Alerts]
-      summary: Mute/unmute my alert categories (v1.5 — Tracker §4n)
-      description: >
-        DECISION 6=A (owner 2026-09-04, supersedes 6=B): muting suppresses
-        the category but NEVER Tier-1 velocity — NH3/temp velocity always
-        page per Decision 10; every suppression writes an audit digest line.
-      security: [{ BearerAuth: [] }]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [subscriptions]
-              properties:
-                subscriptions:
-                  type: array
-                  items:
-                    type: object
-                    required: [category, is_muted]
-                    properties:
-                      category: { type: string, enum: [environment, health, hardware, production, system] }
-                      is_muted: { type: boolean }
-      responses:
-        '200': { description: Subscriptions saved }
-        '403': { description: Forbidden — user not in the target org }
+  # /me/alert-subscriptions/ REMOVED 2026-09-12 (v0.9/B2): superseded by the
+  # shipped org-scoped shape (/alert-subscriptions/ + /{metric_key}/ below).
+  # Per-user routing arrives with v1.1 notifications; see the v1.7.5 header.
 
   /farms/{farm_id}/events/:
     get:
@@ -4647,3 +4613,62 @@ paths:
         '400': { description: Conflicting alias fields, or checklist incomplete on SUBMITTED }
         '403': { description: Edit window closed or caller lacks edit rights }
         '404': { description: Report not found }
+
+  /alert-subscriptions/:
+    get:
+      tags: [Alerts]
+      summary: List muted alert categories with suppression counts (v0.9/B2)
+      description: >
+        Org-wide category mutes (GS-ROUTING). Any member reads; the red banner
+        renders from this list. suppressed_today is the Redis digest per metric.
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Mute list with digest counts
+        '403':
+          description: Missing org context
+    post:
+      tags: [Alerts]
+      summary: Mute an alert category org-wide, manager+ (v0.9/B2)
+      description: >
+        Creates the row the engine lane 2c honours. Re-muting is idempotent.
+        Tier-1 velocity bypasses every mute structurally (Decision 10).
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [metric_key]
+              properties:
+                metric_key: { type: string, example: lux }
+                reason: { type: string }
+      responses:
+        '200':
+          description: Category muted (or already muted yields idempotent)
+        '400':
+          description: Missing or unknown metric_key
+        '403':
+          description: Caller lacks manager/owner
+
+  /alert-subscriptions/{metric_key}/:
+    delete:
+      tags: [Alerts]
+      summary: Unmute an alert category, manager+ (v0.9/B2)
+      description: >
+        Deletes the mute row -- the category re-arms immediately. Unknown metric
+        is 404.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - name: metric_key
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Category unmuted
+        '403':
+          description: Caller lacks manager/owner
+        '404':
+          description: Metric not muted

@@ -15,7 +15,7 @@
 | # | Scope | Acceptance |
 |---|---|---|
 | M9-08 | Granular panels (Tracker §4n, 2026-09-04): `panel_definitions` + role/user overrides, `reviewer` read-only, default-open, owner admin panel | role/user overrides hold; reviewer cannot approve |
-| M9-09 | Daily reports lifecycle (Tracker §4n): `daily_reports` DRAFT→SUBMITTED→APPROVED/REJECTED + FLAGGED, Tehran-day time-lock, vet catalog (`vet_medication_catalog`, vet-only writes), alert subscriptions (`alert_subscriptions`, Tier-1 velocity never muted) | same-day edit only; NH3 velocity always pages |
+| M9-09 | Daily reports lifecycle (Tracker §4n): `daily_reports` DRAFT→SUBMITTED→APPROVED/REJECTED + FLAGGED, Tehran-day time-lock, vet catalog (`vet_medication_catalog`, vet-only writes), alert subscriptions (`alert_subscriptions`, Tier-1 velocity never muted) | same-day edit only; NH3 velocity always pages | Reports + catalog: ✅ shipped v0.7. Subs: ✅ done 2026-09-12 (org-wide mute table + APIs + engine lane ②c, velocity structurally unmutable in-suite, contract 1.7.5, alerts/0006 + initdb RLS row) |
 | M9-10 | Aggregates batch 1 (Tracker §4p): four daily tables + nightly writers + exact backfill (`metric_daily_aggregates`, `flock_daily_snapshots`, `alert_daily_stats`, `gateway_daily_uptime`) | backfill exact; nightly job green | ✅ done 2026-09-12 (unmanaged models + monitoring/0002 DDL/RLS, 4 idempotent writers reusing KPI math, beat 00:30–01:00 Tehran, backfill command, 7-test module green on sqlite + PG; read-path fallback rewiring explicitly deferred) |
 
 ## Hardware track (locked 2026-09-12, backend-only close — the Hardware Team actor had zero system presence)

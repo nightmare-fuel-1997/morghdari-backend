@@ -41,12 +41,14 @@ CONTRACT = Path(__file__).resolve().parent.parent / "openapi.yaml"
 # excluded until their waves.
 EXCLUDED_PREFIXES = ()
 EXCLUDED_EXACT = {
-    # §4n paths — v0.9 scope (Tracker §4n; VERSIONS.md §v0.9)
+    # §4n paths — v0.9 scope (Tracker §4n; VERSIONS.md §v0.9).
+    # B2 (2026-09-12): /me/alert-subscriptions/ left the set — subscriptions
+    # shipped org-scoped (/alert-subscriptions/ + /{metric}/) instead of
+    # per-user; the yaml documents the shipped shape.
     "/vet-catalog/",
     "/me/panels/",
     "/panels/{role}/",
     "/panels/users/{user_id}/",
-    "/me/alert-subscriptions/",
     "/farms/{farm_id}/events/",
     "/support-tickets/",
 }

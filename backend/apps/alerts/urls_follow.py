@@ -1,4 +1,5 @@
-"""Alerts follow-through routes — contract v1.7.2 (spec §1, F9/F11/F12/F13).
+"""Alerts follow-through routes — contract v1.7.2 (spec §1, F9/F11/F12/F13)
++ v0.9/B2 subscriptions (GS-ROUTING).
 
 Mounted at api/v1/ from config/urls.py and listed in the contract gate's
 `_API_ROOTS`. Every route is a NEW path, so mounting it cannot change any
@@ -21,6 +22,8 @@ from django.urls import path
 
 from apps.alerts.api_follow import (
     alert_feed,
+    alert_subscription_unmute,
+    alert_subscriptions,
     maintenance_mute_revoke,
     maintenance_mutes,
 )
@@ -34,5 +37,13 @@ urlpatterns = [
         "maintenance-mutes/<int:mute_id>/",
         maintenance_mute_revoke,
         name="maintenance-mute-revoke",
+    ),
+    # GET+POST share ONE view (Django resolves the first matching pattern
+    # regardless of method — v1.7.2 lesson, same as maintenance_mutes).
+    path("alert-subscriptions/", alert_subscriptions, name="alert-subscriptions"),
+    path(
+        "alert-subscriptions/<str:metric_key>/",
+        alert_subscription_unmute,
+        name="alert-subscription-unmute",
     ),
 ]
