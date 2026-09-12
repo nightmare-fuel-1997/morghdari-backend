@@ -32,6 +32,7 @@ silently; CI/dev/prod all run Postgres. The model is UNMANAGED so pytest's
 --nomigrations gate never tries to CREATE TABLE on sqlite.
 """
 
+import django.db.models
 from django.db import connection, migrations
 
 
@@ -76,6 +77,27 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        # State registration for the UNMANAGED model (compat/0001 pattern):
+        # records OrgDailyUsage in the migration graph so `makemigrations
+        # --check` (migrate-gate step 1) stays clean — the DDL itself comes
+        # from the RunSQL below and Django emits no SQL for an unmanaged
+        # CreateModel. Without this the gate reds with "model in project but
+        # not in migration state". Added 2026-09-10.
+        migrations.CreateModel(
+            name="OrgDailyUsage",
+            fields=[
+                ("id", django.db.models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
+                ("day", django.db.models.DateField()),
+                ("msg_count", django.db.models.BigIntegerField(default=0)),
+                ("stored_bytes", django.db.models.BigIntegerField(default=0)),
+                ("saloon_count", django.db.models.IntegerField(default=0)),
+                ("gateway_count", django.db.models.IntegerField(default=0)),
+            ],
+            options={
+                "db_table": "org_daily_usage",
+                "managed": False,
+            },
+        ),
         migrations.RunSQL(
             sql=_sql(),
             reverse_sql=migrations.RunSQL.noop,

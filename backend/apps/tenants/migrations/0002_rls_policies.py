@@ -85,7 +85,12 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ('accounts', '0001_initial'),
-        ('alerts', '0003_maintenancemute_and_more'),
+        # alerts/0004, not 0003: the policy universe includes
+        # alert_acknowledgements, whose org_id column (C-10) only exists after
+        # alerts/0004. Pinned at 0003, a scoped `migrate reports` (via
+        # reports/0001 -> tenants/0002) applied the policy before the column
+        # existed — UndefinedColumn. Bumped 2026-09-10; SQL unchanged.
+        ('alerts', '0004_alertacknowledgement_org'),
         ('auditing', '0001_initial'),
         ('devices', '0001_initial'),
         ('farms', '0001_initial'),

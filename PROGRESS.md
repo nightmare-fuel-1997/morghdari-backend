@@ -1,5 +1,45 @@
 # Progress — v0.7 Production Birth on the Laptop
 
+## Migrate-chain reconciliation — 2026-09-12 (branch tip is self-sufficient again)
+
+Three files had been parked uncommitted since the v0.7 tail, which meant a clean
+checkout of the tip could not pass the migrate gate on its own. Both real failures were
+reproduced before fixing, and both were invisible to the gates that had been running:
+
+- **`monitoring/0001` — state registration.** `OrgDailyUsage` is `managed=False`, and its
+  migration carried only the RunSQL that creates it. From a `git archive HEAD` tree,
+  `makemigrations --check` exited 1 asking for a phantom `monitoring/0002_initial.py`
+  ("+ Create model OrgDailyUsage"). Landing the parked `CreateModel` state block (the
+  compat/0001 pattern) turns it CLEAN. No DDL changes — unmanaged — so already-migrated
+  databases are unaffected.
+- **`tenants/0002` — dependency pinned one migration too early.** The policy universe
+  includes `alert_acknowledgements`, whose `org_id` column only appears in `alerts/0004`.
+  On a fresh Postgres, a scoped `python manage.py migrate reports` died with
+  `column "org_id" does not exist` inside the `CREATE POLICY tenant_isolation ON
+  alert_acknowledgements` statement; with the dependency bumped to `alerts/0004` the same
+  command completes. The full `migrate` never hit it — whole-graph ordering happens to
+  place `alerts/0004` first — so this was a scoped-deploy/backfill-only landmine that no
+  gate could see.
+- **`reports/0001` — dropped, not committed.** The parked edit added four unused imports
+  (`deletion`, `settings`, `Q`/`F`) plus a duplicate of the two imports already below them,
+  with no functional content (HEAD's file already carries its four `CreateModel` state
+  registrations). Restored to HEAD so the commit carries no dead code; the exact diff is
+  recorded in the session log if it turns out to have been intentional.
+
+**Stale-image trap (found here, worth remembering):** the first `migrate-gate` run in this
+session reported CLEAN / "69 migrations recorded" / DEPLOYABLE — a truthful report about a
+16-hour-old tree. `docker compose ... run --rm migrate-gate` without `--build` reused the
+`morghdari_ci-migrate-gate:latest` image cached by the previous session (2026-09-11 01:08),
+which predates the v1.7.1 migrations; none of `alerts.0005`/`farms.0002`/`tenants.0005` were
+applied. The canonical `scripts/run_acceptance.sh` hardcodes `--build` (DEPLOYMENT §2 warns
+about exactly this), so the ritual was never wrong — a hand-typed gate command was.
+
+**Verification (this tree, canonical flags):** `migrate-gate` with `--build` → **CLEAN /
+73 migrations recorded / DEPLOYABLE**, all three v1.7.1 migrations applied and every app
+unwinding to zero; full test gate with `--build` → **551 passed, 3 skipped**, module
+coverage gate GREEN; fresh `git archive HEAD` tree → `makemigrations --check` CLEAN and
+scoped `migrate reports` green.
+
 ## Contract v1.7.1 — threshold-template write surface (O13–O16) — 2026-09-12 (in flight)
 
 - **Contract**: `backend/openapi.yaml` 1.7.0 → **1.7.1** — +4 paths (`POST /threshold-templates/`,
@@ -17,9 +57,10 @@
   @ 89.92%**, exit 0 (`docker compose -f docker-compose.ci.yml -p morghdari_ci run --rm
   test`, image rebuilt, `down -v` first so the reused test DB could not hide a
   column-adding migration); module coverage gate GREEN.
-- **Migrate gate GREEN**: RESULT: DEPLOYABLE — makemigrations --check CLEAN, forward +
-  idempotent re-run, every app unwinds to zero (the 3 new migrations — alerts 0005,
-  farms 0002, tenants 0005 — apply and reverse cleanly).
+- **Migrate gate GREEN (re-run with `--build`, see the reconciliation section above — the
+  first run had silently used a stale image)**: RESULT: DEPLOYABLE — makemigrations --check
+  CLEAN, forward + idempotent re-run, **73 migrations recorded**, every app unwinds to zero
+  (the 3 new migrations — alerts 0005, farms 0002, tenants 0005 — apply and reverse cleanly).
 - **Not covered by a gate**: `scripts/check_rls_parity.py` reports pre-existing drift
   (initdb/02_rls.sql + tenants/0002 list 36 tables; `database.md` has 47 org-scoped ones —
   the §4n reports/panels/subscriptions tables from the v0.6–v0.7 waves were never added to
