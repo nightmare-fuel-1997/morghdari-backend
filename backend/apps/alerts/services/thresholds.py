@@ -88,18 +88,21 @@ def flock_age_days(start_date: datetime, now: datetime) -> int:
     start_local = _tehran(start_date)
     now_local = _tehran(now)
     return (now_local - start_local).days
-
-
 def _open_flock(saloon_id: int):
+    # M8-03b (T3 live 2026-09-12): same admin-alias routing as the saloon
+    # listing — flock_cycles is FORCE-RLS'd, so a default-alias read from a
+    # GUC-less worker sees ZERO rows and every saloon goes inert.
     return (
-        FlockCycle.objects.filter(saloon_id=saloon_id, end_date__isnull=True)
+        FlockCycle.objects.using(_alias()).filter(saloon_id=saloon_id,
+        end_date__isnull=True)
         .order_by("-start_date")
         .first()
     )
 
 
 def _latest_flock(saloon_id: int):
-    return FlockCycle.objects.filter(saloon_id=saloon_id).order_by("-start_date").first()
+    # Same M8-03b alias routing as _open_flock (see above).
+    return FlockCycle.objects.using(_alias()).filter(saloon_id=saloon_id).order_by("-start_date").first()
 
 
 def _operational_state(saloon_id: int) -> str:
@@ -247,10 +250,24 @@ def _resolve_template(flock: FlockCycle, saloon=None):
     return effective_template(flock, saloon)[0]
 
 
+def _alias() -> str:
+    """RLS-bypassing read alias for cross-org threshold recache.
+
+    The midnight backstop (recache_all_saloons) crosses orgs BY DESIGN but the
+    worker connection is morghdari_app under FORCE-RLS — a default-alias
+    Saloon.objects.all() sees ZERO rows and the cron silently no-ops (latent
+    since M4). Same sanctioned admin-or-default pattern as
+    monitoring.tasks._admin_alias and the M8-03 rebuild service.
+    """
+    from django.db import connections
+
+    return "admin" if "admin" in connections.databases else "default"
+
+
 def recache_saloon(saloon_id: int, clock: Clock | None = None) -> str:
     """Recompute + write one saloon's hash. Returns 'changed'|'unchanged'|'inert'."""
     client = _redis()
-    saloon = Saloon.objects.get(pk=saloon_id)
+    saloon = Saloon.objects.using(_alias()).get(pk=saloon_id)
     new_hash = build_hash_for_saloon(saloon, clock=clock)
     key = keys.thresholds_hash(saloon_id)
 
@@ -281,7 +298,7 @@ def recache_saloon(saloon_id: int, clock: Clock | None = None) -> str:
 def recache_all_saloons(clock: Clock | None = None) -> int:
     """Midnight backstop: every saloon that has ever had a flock."""
     changed = 0
-    for saloon in Saloon.objects.all().iterator():
+    for saloon in Saloon.objects.using(_alias()).all().iterator():
         if recache_saloon(saloon.pk, clock=clock) == "changed":
             changed += 1
     logger.info("daily threshold sweep: %s hashes changed", changed)

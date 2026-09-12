@@ -27,3 +27,46 @@ services:
   redis:
     ports:
       - "127.0.0.1:6379:6379"
+
+  # M8-01: postgres-walg builds locally on the laptop (no registry). The
+  # WALG/AWS env defaults point wal-g at the MinIO service below, so the T2
+  # drill (PITR) is fully executable without cloud S3 creds.
+  postgres:
+    build: ./docker/postgres-walg
+    environment:
+      WALG_S3_PREFIX: "s3://morghdari-wal/"
+      AWS_ACCESS_KEY_ID: "${MINIO_ROOT_USER:-minioadmin}"
+      AWS_SECRET_ACCESS_KEY: "${MINIO_ROOT_PASSWORD:-minioadmin}"
+      AWS_REGION: "auto"
+      AWS_ENDPOINT: "http://minio:9000"
+      AWS_S3_FORCE_PATH_STYLE: "true"
+      # T2 preflight 2026-09-12: wal-g backup-push/fetch open their own PG
+      # connection as the OS user (postgres) by default — a role that does
+      # not exist (bootstrap superuser is morghdari_admin, passwordless over
+      # the local socket). These libpq defaults make wal-g just work, in the
+      # drill script AND in archive/restore paths. Rehearsal-only.
+      PGUSER: "${POSTGRES_ADMIN_USER}"
+      PGHOST: "/var/run/postgresql"
+      PGDATABASE: "${DATABASE_NAME}"
+
+  # M8-01 — S3-compatible wal-g target for the laptop rehearsal only. NEVER
+  # reaches the VPS; the real stack archives to AWS S3 (WALG_S3_PREFIX etc.).
+  # Image note 2026-09-12 (T2 preflight): Docker Hub minio/minio is gone —
+  # upstream publishes to quay.io now; same pinned release, byte-identical role.
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
+    container_name: morghdari-minio
+    mem_limit: 512m
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER:-minioadmin}"
+      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD:-minioadmin}"
+    volumes:
+      - minio_data:/data
+    ports:
+      - "127.0.0.1:9000:9000"   # S3 API — loopback only (rehearsal)
+      - "127.0.0.1:9001:9001"   # web console — loopback only (rehearsal)
+    restart: always
+
+volumes:
+  minio_data:

@@ -707,9 +707,15 @@ parallel; the ESP32 itself is the hardware team's deliverable).
 - `versions/v0.8/DR-LOG.md` — repo-local mirror of the DR Plan §6 log
 
 ### Status
-- M8-01/02/03 + C5 + harness IMPLEMENTED on `v0.8-m8`; **live drill execution
-  (RTO/RPO rows) pending stack restart**.
+- M8-01/02/03 + C5 + harness IMPLEMENTED on `v0.8-m8`.
 - **Scope cut 2026-09-12 (backend-only close as `v0.8-DR`, owner go):**
   M8-04/M8-05/M8-06 PARKED — no ESP32/firmware hands-on for the backend owner;
   hardware-team owned as `v0.8-HIL` follow-up. Close claims the DR half only
   (2 DR-log rows + `--target sim` proof), NOT the real-radio exit demo.
+- **Live 2026-09-12 (rehearsal): T2 PASS** (target 13:37:57+00, marker absent,
+  parity 11/2/2, RTO ~10 min) **+ T3 PASS** (real volume wipe, rebuild clean,
+  6/6 threshold hashes, HIL P2+P4 end-to-end after the wipe, RTO ~5 min).
+  Drill-found fixes: wal-g image Alpine rebuild, MinIO→quay.io, PG libpq env,
+  backup-fetch LATEST, config_file must repeat listen/preload, flock lookups
+  join the admin-alias routing (M8-03b), drill legs synchronous. Rows:
+  `versions/v0.8/DR-LOG.md`.
