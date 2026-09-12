@@ -1,9 +1,9 @@
 openapi: 3.0.3
 info:
   title: Morghdari Poultry Monitoring API
-  version: 1.7.1
+  version: 1.7.2
   description: |-
-    REST API for the Morghdari multi-tenant poultry monitoring platform. Contract v1.7.1 (ops wave + merged daily-report schemas + the threshold-template write surface O13–O16).
+    REST API for the Morghdari multi-tenant poultry monitoring platform. Contract v1.7.2 (ops wave + merged daily-report schemas + the threshold-template write surface O13–O16 + the follow-through core: tenant topology writes F1–F8, flock close F14, direct mortality entry F15, org alert feed F9, home rollup F10, maintenance-mute windows F11–F13, member role change, and the ratified manager-side gateway lifecycle twins).
 
     Authentication: Bearer JWT (15-min access token, 7-day refresh token; rotation is intentionally OFF — deactivated members fail closed via org-claim re-derivation). Gateway devices use HTTP Basic (username = gateway_slot_id) on the config endpoint only.
 
@@ -421,6 +421,107 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: Not found — id/slug unknown OR outside the caller's org (never
             distinguished).
+  /api/v1/alerts/:
+    get:
+      operationId: list_org_alerts
+      description: |-
+        The missing org feed: every alert of the caller's org, newest first,
+        with `{results, count}` pagination. `GET /saloons/{id}/alerts/` answers one
+        saloon at a time; this answers "what is on fire right now" for the whole farm
+        or the whole org.
+
+        Filters: `farm_id`, `saloon_id`, `status` (`ACTIVE` default / `ALL`), `tier`
+        (1-3 on `highest_tier_reached`), `metric` (metric key). Each is validated — an
+        unknown tier or metric key is a 400, because a typo that silently narrows a
+        feed reads exactly like "nothing is wrong".
+
+        Scope rows narrow the result set like every other read surface (M2-06): a
+        member with `account_role_scopes` rows sees only their saloons.
+      summary: F9 — org-wide alert feed (engineer+)
+      parameters:
+      - in: query
+        name: farm_id
+        schema:
+          type: integer
+        description: Restrict to one farm.
+      - in: query
+        name: limit
+        schema:
+          type: integer
+        description: Page size (default 50, max 500).
+      - in: query
+        name: metric
+        schema:
+          type: string
+        description: Metric key, e.g. temp, nh3, co2.
+      - in: query
+        name: offset
+        schema:
+          type: integer
+        description: Page start (default 0).
+      - in: query
+        name: saloon_id
+        schema:
+          type: integer
+        description: Restrict to one saloon.
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum:
+          - ACTIVE
+          - ALL
+        description: ACTIVE (default) skips resolved rows; ALL returns the history.
+      - in: query
+        name: tier
+        schema:
+          type: integer
+        description: Exact highest escalation tier reached (1-3).
+      tags:
+      - Alerts & KPI
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertFeedResponse'
+              examples:
+                ActiveTier-2AmmoniaAlerts:
+                  value:
+                    results:
+                    - alert_id: 6b1f0cbe-2f2f-4a3d-9d1a-6f0b7c1e5a11
+                      metric_type: nh3
+                      current_status: ACTIVE_TIER_2
+                      current_value: 27.5
+                      source: REALTIME
+                      triggered_at: '2026-09-11T21:02:00Z'
+                      resolved_at: null
+                      highest_tier_reached: 2
+                    count: 1
+                  summary: Active Tier-2 ammonia alerts
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Validation error — malformed input, bad enum, or out-of-range
+            value.
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
   /api/v1/alerts/{alert_id}/acknowledge/:
     post:
       operationId: acknowledge_alert
@@ -1145,6 +1246,199 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: Forbidden — valid token but the role claim lacks this surface.
+    post:
+      operationId: create_farm
+      description: |-
+        Owner-exclusive (the locked `owner creates farms` rule, Tracker §4d
+        R3-ACTOR-MAP). The org comes from the validated claim, never the body.
+
+        Geography is validated for referential honesty: `province_id`/`city_id` are
+        required and must exist, and an optional `village_id` must belong to that city.
+        A new farm starts with zero saloons and its `farm-<id>` compat slug is minted in
+        the SAME transaction, so the Flutter aliases resolve it immediately — waiting
+        for the backfill command would 404 a farm that exists.
+
+        Returns the farm's `FarmOverview` (201) and writes a `FARM_CREATED` audit row.
+      summary: F1 — create a farm (owner)
+      tags:
+      - Farms & Saloons
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FarmCreateRequestRequest'
+            examples:
+              NewFarm:
+                value:
+                  name: Farm A
+                  province_id: 1
+                  city_id: 1
+                summary: New farm
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/FarmCreateRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/FarmCreateRequestRequest'
+        required: true
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FarmOverview'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Validation error — malformed input, bad enum, or out-of-range
+            value.
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+  /api/v1/farms/{farm_id}/:
+    patch:
+      operationId: update_farm
+      description: |-
+        Name-only edit of one farm in the caller's org.
+
+        Geography is deliberately immutable here: moving a farm between provinces
+        re-homes every scope row and every regional rollup, so it is a migration, not a
+        rename. A foreign or unknown id is a 404; a farm outside the caller's scope
+        rows is a 403. Writes a `FARM_UPDATED` audit row in the same transaction and
+        returns the farm's `FarmOverview`.
+      summary: F2 — rename a farm (owner)
+      parameters:
+      - in: path
+        name: farm_id
+        schema:
+          type: integer
+        description: Farm id (caller's org).
+        required: true
+      tags:
+      - Farms & Saloons
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedFarmUpdateRequestRequest'
+            examples:
+              Rename:
+                value:
+                  name: Farm A (north)
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedFarmUpdateRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedFarmUpdateRequestRequest'
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FarmOverview'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Validation error — malformed input, bad enum, or out-of-range
+            value.
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Not found — id/slug unknown OR outside the caller's org (never
+            distinguished).
+    delete:
+      operationId: delete_farm
+      description: |-
+        Hard delete, **only while the farm has no saloons** — the RESTRICT
+        philosophy, never a cascade. A farm that still owns a saloon is a
+        `409 {"error": "farm not empty"}`; one that is still referenced by history
+        (alert instances, command logs) is a 409 with the relation named, never a 500.
+
+        The `legacy_slug_map` rows are left in place: an id is never re-issued, so the
+        alias stays pointed at a farm that no longer exists — deleting it would only
+        make an old alias look like a typo. Writes a `FARM_DELETED` audit row in the
+        same transaction.
+      summary: F3 — delete an empty farm (owner)
+      parameters:
+      - in: path
+        name: farm_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Farms & Saloons
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FarmDeleteResponse'
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Not found — id/slug unknown OR outside the caller's org (never
+            distinguished).
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Conflict — state precondition failed (e.g. concurrent sync
+            lock, wrong flock state).
   /api/v1/farms/{farm_id}/biosecurity-events/:
     get:
       operationId: list_biosecurity_events
@@ -1353,6 +1647,81 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Not found — id/slug unknown OR outside the caller's org (never
+            distinguished).
+  /api/v1/farms/{farm_id}/saloons/:
+    post:
+      operationId: create_saloon
+      description: |-
+        Creates one saloon under a farm of the caller's org; positions start
+        EMPTY by design (F7 adds them one at a time, so an onboarding mistake is one
+        position, not a seeded topology nobody asked for).
+
+        The saloon inherits the farm's org and gets its `device-<id>` compat slug in
+        the same transaction. Foreign/unknown farm → 404; a farm outside the caller's
+        scope rows → 403. Returns the new `SaloonDetail` (201) and writes a
+        `SALOON_CREATED` audit row.
+      summary: F4 — add a saloon to a farm (manager+)
+      parameters:
+      - in: path
+        name: farm_id
+        schema:
+          type: integer
+        description: Farm id (caller's org).
+        required: true
+      tags:
+      - Farms & Saloons
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SaloonCreateRequestRequest'
+            examples:
+              AddSaloon:
+                value:
+                  name: Saloon 3
+                summary: Add saloon
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/SaloonCreateRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/SaloonCreateRequestRequest'
+        required: true
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SaloonDetail'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Validation error — malformed input, bad enum, or out-of-range
+            value.
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
         '404':
           content:
             application/json:
@@ -2221,6 +2590,215 @@ paths:
               schema:
                 $ref: '#/components/schemas/HealthResponse'
           description: Degraded — the database or Redis probe failed.
+  /api/v1/maintenance-mutes/:
+    get:
+      operationId: list_maintenance_mutes
+      description: |-
+        First READ path for `maintenance_mutes`. `?active_only=true`
+        (default) keeps only windows the engine would honour right now
+        (`starts_at ≤ now < ends_at`); `?active_only=false` returns the history.
+        `?saloon_id=` narrows to one saloon.
+
+        Rows are newest-first with `{results, count}`. A foreign saloon filter cannot
+        leak another org's rows: the set is always claim-org scoped, then narrowed by
+        the caller's `account_role_scopes` rows.
+      summary: F11 — list maintenance-mute windows (manager+)
+      parameters:
+      - in: query
+        name: active_only
+        schema:
+          type: boolean
+        description: Default true — only windows active right now.
+      - in: query
+        name: limit
+        schema:
+          type: integer
+        description: Page size (default 50, max 500).
+      - in: query
+        name: offset
+        schema:
+          type: integer
+        description: Page start (default 0).
+      - in: query
+        name: saloon_id
+        schema:
+          type: integer
+        description: Restrict to one saloon.
+      tags:
+      - Alerts & KPI
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MuteListResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Validation error — malformed input, bad enum, or out-of-range
+            value.
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+    post:
+      operationId: create_maintenance_mute
+      description: |-
+        First WRITE path for `maintenance_mutes`. While the window covers
+        "now", threshold-crossing and duration-filter alerts for that saloon are
+        SUPPRESSED — readings still log, and Tier-1 velocity (NH₃/temp) still pages
+        (Decision 10 is enforced in the evaluation path and cannot be reached from
+        here).
+
+        Rules: `ends_at` after `starts_at`, window ≤ 72 h, and no overlap with another
+        window of the same saloon (abutting windows are allowed — back-to-back
+        maintenance is a normal schedule). A window that is already over is refused; one
+        that has started but not ended is accepted (opening a mute mid-job is the normal
+        case). Writes a `MUTE_CREATED` audit row in the same transaction.
+      summary: F12 — open a maintenance-mute window (manager+)
+      tags:
+      - Alerts & KPI
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MuteCreateRequestRequest'
+            examples:
+              FanReplacement:
+                value:
+                  saloon_id: 7
+                  starts_at: '2026-09-12T06:00:00Z'
+                  ends_at: '2026-09-12T12:00:00Z'
+                  reason: Exhaust fan replacement
+                summary: Fan replacement
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/MuteCreateRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/MuteCreateRequestRequest'
+        required: true
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MuteItem'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Validation error — malformed input, bad enum, or out-of-range
+            value.
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Not found — id/slug unknown OR outside the caller's org (never
+            distinguished).
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Conflict — state precondition failed (e.g. concurrent sync
+            lock, wrong flock state).
+  /api/v1/maintenance-mutes/{mute_id}/:
+    delete:
+      operationId: revoke_maintenance_mute
+      description: |-
+        Ends a window early so alerting resumes at once.
+
+        Two honest branches, because `maintenance_mutes` carries a CHECK constraint
+        (`ends_at > starts_at`) that a careless revocation would violate:
+
+        * the window is RUNNING → `ends_at` is shortened to the revocation instant, the
+          row and its history stay;
+        * the window has NOT STARTED → the row is removed (it suppressed nothing, so
+          there is no history to keep and no valid way to move a future window into the
+          past without falsifying its times).
+
+        A window that already ended is a `409 {"error": "mute is not active"}`. Either
+        way a `MUTE_REVOKED` audit row is written — the audit trail is what is never
+        lost.
+      summary: F13 — revoke a mute window (manager+)
+      parameters:
+      - in: path
+        name: mute_id
+        schema:
+          type: integer
+        description: Mute window id (caller's org).
+        required: true
+      tags:
+      - Alerts & KPI
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MuteRevokeResponse'
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Not found — id/slug unknown OR outside the caller's org (never
+            distinguished).
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Conflict — state precondition failed (e.g. concurrent sync
+            lock, wrong flock state).
   /api/v1/me/dashboard-config/:
     get:
       operationId: get_me_dashboard_config
@@ -2529,6 +3107,94 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: Forbidden — valid token but the role claim lacks this surface.
+  /api/v1/org/members/{member_id}/:
+    patch:
+      operationId: update_org_member_role
+      description: |-
+        Owner-exclusive role change (contract v1.7.2). Before this endpoint the
+        only way a membership changed role was to deactivate and re-invite it, and the
+        `reviewer` role the v1.5 reports wave defined could not be granted at all.
+
+        Verdicts: 400 unknown role; 403 caller is not the owner; 404 no such member
+        **in the caller's org** (a foreign member id is the same 404 — never an
+        existence oracle); 409 `member already has this role`, and 409 for a
+        SELF-CHANGE (an owner who demotes themselves can lock the org out of every
+        owner-only surface, and nothing in the API could undo it).
+
+        Role claims are minted from the membership row at login/refresh, so the change
+        lands at the member's next refresh — this endpoint revokes their live refresh
+        lines in the same transaction to force exactly that, leaving the ≤15-minute
+        access-token tail as the accepted, documented risk (C-14 shape). Writes a
+        `MEMBER_ROLE_CHANGED` audit row.
+      summary: Change a member's role — owner only
+      parameters:
+      - in: path
+        name: member_id
+        schema:
+          type: integer
+        description: OrgMember row id.
+        required: true
+      tags:
+      - Org Management
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedMemberRoleUpdateRequestRequest'
+            examples:
+              Read-onlyReportsReviewer:
+                value:
+                  role: reviewer
+                summary: Read-only reports reviewer
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedMemberRoleUpdateRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedMemberRoleUpdateRequestRequest'
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemberOut'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Validation error — malformed input, bad enum, or out-of-range
+            value.
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Not found — id/slug unknown OR outside the caller's org (never
+            distinguished).
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Conflict — state precondition failed (e.g. concurrent sync
+            lock, wrong flock state).
   /api/v1/org/members/{member_id}/deactivate/:
     post:
       operationId: deactivate_org_member
@@ -2579,6 +3245,52 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: Not found — id/slug unknown OR outside the caller's org (never
             distinguished).
+  /api/v1/overview/:
+    get:
+      operationId: get_overview
+      description: |-
+        Every farm of the caller's org with its saloon count, unresolved-alert
+        count and highest active tier, plus org totals — the missing multi-farm home
+        view (`GET /farms/{id}/overview/` answers one farm at a time).
+
+        Aggregates are computed in bulk (no per-farm query) and RLS/scope narrow them:
+        a member with `account_role_scopes` rows sees only their farms and their
+        totals. `highest_tier` is null when nothing is unresolved, never 0 — an empty
+        farm must not read as "tier zero".
+      summary: F10 — org home rollup (any member)
+      tags:
+      - Farms & Saloons
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OverviewResponse'
+              examples:
+                TwoFarms:
+                  value:
+                    farms:
+                    - farm_id: 1
+                      name: Farm A
+                      saloon_count: 3
+                      active_alert_count: 2
+                      highest_tier: 2
+                    totals:
+                      farm_count: 1
+                      saloon_count: 3
+                      active_alert_count: 2
+                      highest_tier: 2
+                  summary: Two farms
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
   /api/v1/platform/support/alerts/{alert_id}/force-resolve/:
     post:
       operationId: support_alert_force_resolve
@@ -3546,6 +4258,137 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: Not found — id/slug unknown OR outside the caller's org (never
             distinguished).
+    patch:
+      operationId: update_saloon
+      description: |-
+        Name-only edit. The operational state keeps its own endpoint (the
+        canonical loop owns it) and the threshold-template assignment keeps O16, so a
+        rename can never move a live alarm band.
+
+        Foreign/unknown saloon → 404; a saloon outside the caller's scope rows → 403.
+        Writes a `SALOON_UPDATED` audit row and returns the `SaloonDetail`.
+      summary: F5 — rename a saloon (manager+)
+      parameters:
+      - in: path
+        name: saloon_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Farms & Saloons
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedSaloonUpdateRequestRequest'
+            examples:
+              Rename:
+                value:
+                  name: Saloon 1 (east)
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedSaloonUpdateRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedSaloonUpdateRequestRequest'
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SaloonDetail'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Validation error — malformed input, bad enum, or out-of-range
+            value.
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Not found — id/slug unknown OR outside the caller's org (never
+            distinguished).
+    delete:
+      operationId: delete_saloon
+      description: |-
+        Hard delete, only while the saloon has **no flock history and no
+        telemetry history** — the schema's rule, which is stricter than the spec's
+        "no active flock": `flock_cycles.saloon` is `ON DELETE RESTRICT`, so a saloon
+        that EVER housed a flock (closed ones included) can never be hard-deleted. Each
+        verdict kills a distinct illusion, and all of them protect the same thing — the
+        saloon id that telemetry, alerts, reports and flock cycles key off.
+
+        Verdicts: 409 `saloon has an active flock` (close it), 409 `saloon has flock
+        history` (the row IS the history, and `farms_saloons` has no soft-delete column),
+        409 `saloon has telemetry history` (it was measured), or 409 naming the
+        still-referencing relation (positions, sensor slots, gateway bindings). The
+        compat slug row is left in place — ids are never re-issued. Writes a
+        `SALOON_DELETED` audit row in the same transaction, and only after the delete
+        actually succeeded.
+      summary: F6 — delete an empty saloon (manager+)
+      parameters:
+      - in: path
+        name: saloon_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Farms & Saloons
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SaloonDeleteResponse'
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Not found — id/slug unknown OR outside the caller's org (never
+            distinguished).
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Conflict — state precondition failed (e.g. concurrent sync
+            lock, wrong flock state).
   /api/v1/saloons/{saloon_id}/alerts/:
     get:
       operationId: list_saloon_alerts
@@ -3908,6 +4751,94 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: Not found — id/slug unknown OR outside the caller's org (never
             distinguished).
+  /api/v1/saloons/{saloon_id}/flocks/{flock_id}/close/:
+    patch:
+      operationId: close_flock_cycle
+      description: |-
+        Sets the cycle's `end_date` — the write this table never had, and
+        the one every downstream reader waits for: the KPI windows, the quality
+        service's per-cycle verdicts and the threshold hash all key off
+        `end_date IS NULL` meaning "active".
+
+        Only the saloon's ACTIVE cycle can be closed (`end_date` already set → 400
+        `no active flock`), and `end_date` may not precede `start_date`. The save fires
+        the existing `flock_cycles.post_save` fast path, which re-arms the saloon's
+        threshold hash immediately — a cycle that ends mid-day must not leave the
+        previous age band armed.
+
+        **Snapshot finalization is NOT part of this endpoint.** The follow-through
+        draft mentioned it; the `flock_daily_snapshots` table and the aggregates module
+        that would write it exist in no wave yet, so promising it here would be a
+        promise the code cannot keep (see the erratum in `docs/api-followthrough-v1.md`
+        F14).
+      summary: F14 — close the active flock cycle (engineer+)
+      parameters:
+      - in: path
+        name: flock_id
+        schema:
+          type: integer
+        description: Flock cycle id (that saloon).
+        required: true
+      - in: path
+        name: saloon_id
+        schema:
+          type: integer
+        description: Saloon id (caller's org).
+        required: true
+      tags:
+      - Farms & Saloons
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedFlockCloseRequestRequest'
+            examples:
+              CloseTheCycle:
+                value:
+                  end_date: '2026-09-12'
+                summary: Close the cycle
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedFlockCloseRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedFlockCloseRequestRequest'
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FlockCloseResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Validation error — malformed input, bad enum, or out-of-range
+            value.
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Not found — id/slug unknown OR outside the caller's org (never
+            distinguished).
   /api/v1/saloons/{saloon_id}/flocks/{flock_id}/feed-intake/:
     get:
       operationId: list_feed_intake
@@ -4018,6 +4949,96 @@ paths:
                     source: manual
                     corrected: false
                   summary: Feed intake upserted
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Validation error — malformed input, bad enum, or out-of-range
+            value.
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Not found — id/slug unknown OR outside the caller's org (never
+            distinguished).
+  /api/v1/saloons/{saloon_id}/flocks/{flock_id}/mortality/:
+    post:
+      operationId: record_mortality
+      description: |-
+        The writer `mortality_records` never had. `GET /saloons/{id}/kpis/`
+        computes `mortality_pct` and the daily series from THIS table, while the daily
+        report stores its own `mortality_count` — before this endpoint nothing in the
+        API could write a mortality row, so the farmer-facing mortality figure could
+        only ever read zero.
+
+        Direct entry sits BESIDE the report counts (the spec's wording), so both
+        sources stay honest: this endpoint never rewrites a report and a report never
+        writes here.
+
+        `occurred_on` is a Tehran calendar day, stored at 00:00 Asia/Tehran (the same
+        day boundary the KPI groups by). It may not be in the future nor precede the
+        cycle's start. `count` is ≥ 1. `cause` is an additive extension of the draft —
+        the column exists and was otherwise unreachable.
+      summary: F15 — record deaths directly (engineer+)
+      parameters:
+      - in: path
+        name: flock_id
+        schema:
+          type: integer
+        description: Flock cycle id (that saloon).
+        required: true
+      - in: path
+        name: saloon_id
+        schema:
+          type: integer
+        description: Saloon id (caller's org).
+        required: true
+      tags:
+      - Farms & Saloons
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MortalityCreateRequestRequest'
+            examples:
+              FifteenDeaths:
+                value:
+                  occurred_on: '2026-09-11'
+                  count: 15
+                  cause: heat_stress
+                  note: Heat spike during the fan outage
+                summary: Fifteen deaths
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/MortalityCreateRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/MortalityCreateRequestRequest'
+        required: true
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MortalityResponse'
           description: ''
         '400':
           content:
@@ -4651,6 +5672,173 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: Not found — id/slug unknown OR outside the caller's org (never
             distinguished).
+  /api/v1/saloons/{saloon_id}/positions/:
+    post:
+      operationId: create_saloon_position
+      description: |-
+        Creates one named position ("North Wall", …) under a saloon of the
+        caller's org. The sensor hierarchy is saloon → position → sensor slot, so this
+        is the step that must exist before a slot can be bound.
+
+        `UNIQUE(saloon_id, label)` stands: a duplicate label is a `409`, pre-checked and
+        backed by the constraint (the catch is what makes a concurrent double-submit
+        behave). Foreign/unknown saloon → 404; outside the caller's scope → 403.
+      summary: F7 — add a physical position to a saloon (manager+)
+      parameters:
+      - in: path
+        name: saloon_id
+        schema:
+          type: integer
+        description: Saloon id (caller's org).
+        required: true
+      tags:
+      - Farms & Saloons
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PositionCreateRequestRequest'
+            examples:
+              AddPosition:
+                value:
+                  label: North Wall
+                summary: Add position
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PositionCreateRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PositionCreateRequestRequest'
+        required: true
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PositionItem'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Validation error — malformed input, bad enum, or out-of-range
+            value.
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Not found — id/slug unknown OR outside the caller's org (never
+            distinguished).
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Conflict — state precondition failed (e.g. concurrent sync
+            lock, wrong flock state).
+  /api/v1/saloons/{saloon_id}/positions/{position_id}/:
+    patch:
+      operationId: update_saloon_position
+      description: |-
+        Renames one position. Sensor bindings follow automatically — the
+        mapping rows reference the position by id, so nothing is re-bound and no
+        telemetry history moves.
+
+        Label-only: the follow-through draft also listed an `is_active` toggle here,
+        but `saloon_positions` has no such column and the core schema is frozen, so the
+        erratum is recorded in the spec instead of an `ALTER` (see
+        `docs/api-followthrough-v1.md` F8). A duplicate label is a 409 like F7.
+      summary: F8 — rename a position (manager+)
+      parameters:
+      - in: path
+        name: position_id
+        schema:
+          type: integer
+        description: Position id (that saloon).
+        required: true
+      - in: path
+        name: saloon_id
+        schema:
+          type: integer
+        description: Saloon id (caller's org).
+        required: true
+      tags:
+      - Farms & Saloons
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedPositionUpdateRequestRequest'
+            examples:
+              Rename:
+                value:
+                  label: North Wall (upper)
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedPositionUpdateRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedPositionUpdateRequestRequest'
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PositionItem'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Validation error — malformed input, bad enum, or out-of-range
+            value.
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Not found — id/slug unknown OR outside the caller's org (never
+            distinguished).
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Conflict — state precondition failed (e.g. concurrent sync
+            lock, wrong flock state).
   /api/v1/saloons/{saloon_id}/reports/:
     get:
       operationId: list_saloon_reports
@@ -5624,6 +6812,22 @@ components:
       - alert_id
       - pause_minutes
       - status
+    AlertFeedResponse:
+      type: object
+      description: GET /alerts/ — the org-wide feed (the missing sibling of the per-saloon
+        read).
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/AlertInstance'
+          description: Alerts newest-first, RLS- and scope-narrowed.
+        count:
+          type: integer
+          description: Total rows matching the filters.
+      required:
+      - count
+      - results
     AlertInstance:
       type: object
       description: One alert row — mirrors views._alert_out exactly.
@@ -6323,6 +7527,41 @@ components:
           description: Human-readable explanation. Omitted on terse 403/404 paths.
       required:
       - error
+    FarmCreateRequestRequest:
+      type: object
+      description: POST /farms/ body — the locked `owner creates farms` rule (Tracker
+        §4d).
+      properties:
+        name:
+          type: string
+          minLength: 1
+          description: Display name; trimmed.
+          maxLength: 255
+        province_id:
+          type: integer
+          description: Existing geography province id.
+        city_id:
+          type: integer
+          description: Existing city id — must belong to `province_id`.
+        village_id:
+          type: integer
+          nullable: true
+          description: Optional village — must belong to `city_id`.
+      required:
+      - city_id
+      - name
+      - province_id
+    FarmDeleteResponse:
+      type: object
+      properties:
+        farm_id:
+          type: integer
+        deleted:
+          type: boolean
+          description: Always true — a 409 carries the refusal.
+      required:
+      - deleted
+      - farm_id
     FarmOverview:
       type: object
       description: FarmOverview — GET /farms/{farm_id}/overview/ and every row of
@@ -6501,6 +7740,26 @@ components:
       - entry_date
       - feed_kg
       - source
+    FlockCloseResponse:
+      type: object
+      properties:
+        flock_id:
+          type: integer
+        saloon_id:
+          type: string
+          description: Stringified saloon PK.
+        end_date:
+          type: string
+          format: date
+          description: Tehran calendar day the cycle closed.
+        status:
+          type: string
+          description: Always "CLOSED".
+      required:
+      - end_date
+      - flock_id
+      - saloon_id
+      - status
     FlockCycle:
       type: object
       description: One row of GET /saloons/{saloon_id}/flocks/ — dates are Tehran
@@ -7377,6 +8636,7 @@ components:
           - doctor
           - worker
           - installer
+          - reviewer
           type: string
           description: |-
             * `owner` - owner
@@ -7385,7 +8645,8 @@ components:
             * `doctor` - doctor
             * `worker` - worker
             * `installer` - installer
-          x-spec-enum-id: aa010c3d8c97f4fc
+            * `reviewer` - reviewer
+          x-spec-enum-id: dda30d0d1de7d8a9
       required:
       - role
       - username
@@ -7495,6 +8756,165 @@ components:
       - confirmed
       - otpauth_uri
       - secret
+    MortalityCreateRequestRequest:
+      type: object
+      description: |-
+        POST /saloons/{id}/flocks/{fid}/mortality/ body (F15).
+
+        Direct entry BESIDE the daily-report counts, not instead of them: this is
+        the writer `mortality_records` never had, and it is the table the KPI's
+        `mortality_pct` / `daily_mortality_pct` series reads. `cause` is an
+        additive extension of the draft (the column exists and was unused).
+      properties:
+        occurred_on:
+          type: string
+          minLength: 1
+          description: '`YYYY-MM-DD` (Tehran day). Not in the future, not before the
+            cycle start.'
+        count:
+          type: integer
+          minimum: 1
+          description: Deaths on that day (≥ 1).
+        note:
+          type: string
+          description: Free-text note (column `notes`).
+        cause:
+          type: string
+          description: Optional cause, e.g. "ammonia_toxicity", "heat_stress", "culling".
+          maxLength: 100
+      required:
+      - count
+      - occurred_on
+    MortalityResponse:
+      type: object
+      properties:
+        mortality_id:
+          type: integer
+        flock_id:
+          type: integer
+        saloon_id:
+          type: string
+          description: Stringified saloon PK.
+        count:
+          type: integer
+        occurred_on:
+          type: string
+          format: date
+          description: Tehran calendar day (stored at 00:00).
+        recorded_by:
+          type: integer
+          description: Recording user id.
+        cause:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+      required:
+      - count
+      - flock_id
+      - mortality_id
+      - occurred_on
+      - recorded_by
+      - saloon_id
+    MuteCreateRequestRequest:
+      type: object
+      description: |-
+        POST /maintenance-mutes/ body (F12).
+
+        `starts_at`/`ends_at` are ISO-8601 (a trailing `Z` is accepted). The window
+        is capped at 72 hours, must end after it starts, must not be entirely in the
+        past, and must not overlap another window of the same saloon.
+      properties:
+        saloon_id:
+          type: integer
+          description: Saloon of the caller's org.
+        starts_at:
+          type: string
+          minLength: 1
+          description: ISO-8601 window start.
+        ends_at:
+          type: string
+          minLength: 1
+          description: ISO-8601 window end (≤ 72 h after start).
+        reason:
+          type: string
+          minLength: 1
+          description: Why the saloon is under maintenance (audit text).
+          maxLength: 200
+      required:
+      - ends_at
+      - reason
+      - saloon_id
+      - starts_at
+    MuteItem:
+      type: object
+      properties:
+        mute_id:
+          type: integer
+        saloon_id:
+          type: string
+          description: Stringified saloon PK (contract shape).
+        farm_id:
+          type: integer
+          nullable: true
+        starts_at:
+          type: string
+          format: date-time
+        ends_at:
+          type: string
+          format: date-time
+        reason:
+          type: string
+        active:
+          type: boolean
+          description: True while starts_at ≤ now < ends_at (the engine's own predicate).
+        created_by:
+          type: integer
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
+      required:
+      - active
+      - ends_at
+      - mute_id
+      - reason
+      - saloon_id
+      - starts_at
+    MuteListResponse:
+      type: object
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/MuteItem'
+        count:
+          type: integer
+      required:
+      - count
+      - results
+    MuteRevokeResponse:
+      type: object
+      properties:
+        mute_id:
+          type: integer
+        saloon_id:
+          type: string
+          description: Stringified saloon PK.
+        ends_at:
+          type: string
+          format: date-time
+          description: Shortened to the revocation instant.
+        status:
+          type: string
+          description: Always "REVOKED".
+      required:
+      - ends_at
+      - mute_id
+      - saloon_id
+      - status
     OperationalStateRequestRequest:
       type: object
       description: POST /saloons/{saloon_id}/operational-state/ body — one step of
@@ -7543,6 +8963,56 @@ components:
       required:
       - operational_state
       - saloon_id
+    OverviewFarm:
+      type: object
+      properties:
+        farm_id:
+          type: integer
+        name:
+          type: string
+        saloon_count:
+          type: integer
+        active_alert_count:
+          type: integer
+          description: Unresolved alerts across the farm's saloons (any tier).
+        highest_tier:
+          type: integer
+          nullable: true
+          description: Null when nothing is unresolved.
+      required:
+      - active_alert_count
+      - farm_id
+      - name
+      - saloon_count
+    OverviewResponse:
+      type: object
+      description: GET /overview/ — the owner home rollup, RLS- and scope-narrowed.
+      properties:
+        farms:
+          type: array
+          items:
+            $ref: '#/components/schemas/OverviewFarm'
+        totals:
+          $ref: '#/components/schemas/OverviewTotals'
+      required:
+      - farms
+      - totals
+    OverviewTotals:
+      type: object
+      properties:
+        farm_count:
+          type: integer
+        saloon_count:
+          type: integer
+        active_alert_count:
+          type: integer
+        highest_tier:
+          type: integer
+          nullable: true
+      required:
+      - active_alert_count
+      - farm_count
+      - saloon_count
     PasswordChangeRequestRequest:
       type: object
       properties:
@@ -7641,6 +9111,68 @@ components:
           description: NORMAL | WARNING | CRITICAL (Persian literals accepted).
         checklist:
           $ref: '#/components/schemas/ChecklistRequest'
+    PatchedFarmUpdateRequestRequest:
+      type: object
+      description: PATCH /farms/{id}/ body — a name-only edit; geography is immutable.
+      properties:
+        name:
+          type: string
+          minLength: 1
+          description: New display name (trimmed).
+          maxLength: 255
+    PatchedFlockCloseRequestRequest:
+      type: object
+      description: PATCH /saloons/{id}/flocks/{fid}/close/ body (F14).
+      properties:
+        end_date:
+          type: string
+          minLength: 1
+          description: '`YYYY-MM-DD` or ISO datetime (naive = Asia/Tehran); ≥ the
+            cycle''s start.'
+    PatchedMemberRoleUpdateRequestRequest:
+      type: object
+      description: |-
+        PATCH /org/members/{member_id}/ body (v1.7.2) — owner-exclusive role change.
+
+        The enum is the contract's org-role list INCLUDING `reviewer`: the v1.5
+        reports wave defined that role (read-only on daily reports) but never added
+        it to the grantable set, so no API could produce one. Granting it here and
+        on invite closes that hole.
+      properties:
+        role:
+          enum:
+          - owner
+          - manager
+          - engineer
+          - doctor
+          - worker
+          - installer
+          - reviewer
+          type: string
+          description: |-
+            * `owner` - owner
+            * `manager` - manager
+            * `engineer` - engineer
+            * `doctor` - doctor
+            * `worker` - worker
+            * `installer` - installer
+            * `reviewer` - reviewer
+          x-spec-enum-id: dda30d0d1de7d8a9
+    PatchedPositionUpdateRequestRequest:
+      type: object
+      description: |-
+        PATCH /saloons/{id}/positions/{pid}/ body.
+
+        Label rename ONLY. The follow-through draft listed an `is_active` toggle
+        here, but `saloon_positions` has no such column and the core schema is
+        frozen (additive-only rule) — the erratum is recorded in
+        `docs/api-followthrough-v1.md` F8 rather than silently accepted. Sensor
+        bindings follow a rename automatically (mapping rows are untouched).
+      properties:
+        label:
+          type: string
+          minLength: 1
+          maxLength: 100
     PatchedReportEditRequest:
       type: object
       description: |-
@@ -7718,6 +9250,20 @@ components:
           description: NORMAL | WARNING | CRITICAL (Persian literals accepted).
         checklist:
           $ref: '#/components/schemas/ChecklistRequest'
+    PatchedSaloonUpdateRequestRequest:
+      type: object
+      description: |-
+        PATCH /saloons/{id}/ body.
+
+        Name-only on purpose: the operational state has its own endpoint (the
+        canonical loop owns it) and the threshold-template assignment has O16 — a
+        rename can therefore never move a live alarm band.
+      properties:
+        name:
+          type: string
+          minLength: 1
+          description: New display name (trimmed).
+          maxLength: 255
     PhotoItem:
       type: object
       description: O5/O6 row — url ← file_url, taken_at ← uploaded_at (ISO Z).
@@ -7767,6 +9313,34 @@ components:
           description: ISO Z; defaults to now when omitted/invalid.
       required:
       - file
+    PositionCreateRequestRequest:
+      type: object
+      description: POST /saloons/{id}/positions/ body — `UNIQUE(saloon,label)` stands.
+      properties:
+        label:
+          type: string
+          minLength: 1
+          description: Physical position label, e.g. "North Wall".
+          maxLength: 100
+      required:
+      - label
+    PositionItem:
+      type: object
+      properties:
+        position_id:
+          type: integer
+        saloon_id:
+          type: string
+          description: Stringified saloon PK (contract shape).
+        label:
+          type: string
+        created_by:
+          type: integer
+          nullable: true
+      required:
+      - label
+      - position_id
+      - saloon_id
     ProvisioningSyncRequestRequest:
       type: object
       description: |-
@@ -8356,6 +9930,29 @@ components:
       required:
       - features
       - live_metrics
+      - saloon_id
+    SaloonCreateRequestRequest:
+      type: object
+      description: POST /farms/{id}/saloons/ body — positions start empty by design.
+      properties:
+        name:
+          type: string
+          minLength: 1
+          description: Display name; trimmed.
+          maxLength: 255
+      required:
+      - name
+    SaloonDeleteResponse:
+      type: object
+      properties:
+        saloon_id:
+          type: string
+          description: Stringified saloon PK.
+        deleted:
+          type: boolean
+          description: Always true — a 409 carries the refusal.
+      required:
+      - deleted
       - saloon_id
     SaloonDetail:
       type: object

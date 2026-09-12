@@ -29,7 +29,7 @@ from rest_framework.response import Response
 
 from apps.accounts.permissions import _claims
 from apps.alerts.models import AlertInstance, SaloonOperationalState
-from apps.common.schemas import TAG_FARMS, error_responses
+from apps.common.schemas import CONFLICT_RESPONSE, TAG_FARMS, error_responses
 from apps.devices.models import GatewaySaloonZone, SaloonSensorSlot
 from apps.farms.serializers import (
     FarmOverviewSerializer,
@@ -41,6 +41,11 @@ from apps.farms.serializers import (
     SaloonDetailSerializer,
 )
 from apps.farms.models import Farm, Saloon
+from apps.farms.serializers_follow import (
+    FarmCreateRequestSerializer,
+    SaloonDeleteResponseSerializer,
+    SaloonUpdateRequestSerializer,
+)
 from apps.system_config.models import SystemConfiguration
 from apps.telemetry.models import FlockCycle
 
@@ -197,6 +202,7 @@ def _gateway_out(saloon, zone_rows, statuses: dict) -> tuple:
 # GET /saloons/{saloon_id}/
 # ---------------------------------------------------------------------------
 @extend_schema(
+    methods=["GET"],
     tags=[TAG_FARMS],
     operation_id="get_saloon_detail",
     summary="Saloon detail",
@@ -215,13 +221,71 @@ with no zone assignment (or when Redis cannot answer the status key), and
     request=None,
     responses={200: SaloonDetailSerializer, **error_responses(401, 404)},
 )
-@api_view(["GET"])
+@extend_schema(
+    methods=["PATCH"],
+    tags=[TAG_FARMS],
+    operation_id="update_saloon",
+    summary="F5 — rename a saloon (manager+)",
+    description="""Name-only edit. The operational state keeps its own endpoint (the
+canonical loop owns it) and the threshold-template assignment keeps O16, so a
+rename can never move a live alarm band.
+
+Foreign/unknown saloon → 404; a saloon outside the caller's scope rows → 403.
+Writes a `SALOON_UPDATED` audit row and returns the `SaloonDetail`.""",
+    request=SaloonUpdateRequestSerializer,
+    responses={
+        200: SaloonDetailSerializer,
+        **error_responses(400, 401, 403, 404),
+    },
+    examples=[OpenApiExample("Rename", request_only=True, value={"name": "Saloon 1 (east)"})],
+)
+@extend_schema(
+    methods=["DELETE"],
+    tags=[TAG_FARMS],
+    operation_id="delete_saloon",
+    summary="F6 — delete an empty saloon (manager+)",
+    description="""Hard delete, only while the saloon has **no flock history and no
+telemetry history** — the schema's rule, which is stricter than the spec's
+"no active flock": `flock_cycles.saloon` is `ON DELETE RESTRICT`, so a saloon
+that EVER housed a flock (closed ones included) can never be hard-deleted. Each
+verdict kills a distinct illusion, and all of them protect the same thing — the
+saloon id that telemetry, alerts, reports and flock cycles key off.
+
+Verdicts: 409 `saloon has an active flock` (close it), 409 `saloon has flock
+history` (the row IS the history, and `farms_saloons` has no soft-delete column),
+409 `saloon has telemetry history` (it was measured), or 409 naming the
+still-referencing relation (positions, sensor slots, gateway bindings). The
+compat slug row is left in place — ids are never re-issued. Writes a
+`SALOON_DELETED` audit row in the same transaction, and only after the delete
+actually succeeded.""",
+    request=None,
+    responses={
+        200: SaloonDeleteResponseSerializer,
+        **error_responses(401, 403, 404),
+        409: CONFLICT_RESPONSE,
+    },
+)
+@api_view(["GET", "PATCH", "DELETE"])
 @permission_classes([IsAuthenticated])
 def saloon_detail(request, saloon_id: int):
+    """GET /saloons/{id}/ plus the F5/F6 writes (ONE pattern, three methods).
+
+    The writes live in api_follow.py but their ROUTE must sit here: Django
+    resolves the first matching pattern regardless of method, so a second
+    pattern for `saloons/<id>/` would shadow this one and 405 the writes.
+    """
     org_id = _org_id(request)
     saloon = _saloon_in_org(saloon_id, org_id) if org_id else None
     if saloon is None:
         return Response({"error": "saloon not found"}, status=status.HTTP_404_NOT_FOUND)
+    if request.method == "PATCH":
+        from apps.farms.api_follow import update_saloon
+
+        return update_saloon(request, saloon_id)
+    if request.method == "DELETE":
+        from apps.farms.api_follow import delete_saloon
+
+        return delete_saloon(request, saloon_id)
     return Response(_saloon_detail_payload(saloon))
 
 
@@ -410,6 +474,7 @@ def _farm_overview_payload(farm: Farm) -> dict:
 # GET /farms/  (M7-11 — v1.6 native lists)
 # ---------------------------------------------------------------------------
 @extend_schema(
+    methods=["GET"],
     tags=[TAG_FARMS],
     operation_id="list_farms",
     summary="List farms (v1.6 native list)",
@@ -430,10 +495,42 @@ misleading empty list.""",
     request=None,
     responses={200: FarmOverviewSerializer(many=True), **error_responses(400, 401, 403)},
 )
-@api_view(["GET"])
+@extend_schema(
+    methods=["POST"],
+    tags=[TAG_FARMS],
+    operation_id="create_farm",
+    summary="F1 — create a farm (owner)",
+    description="""Owner-exclusive (the locked `owner creates farms` rule, Tracker §4d
+R3-ACTOR-MAP). The org comes from the validated claim, never the body.
+
+Geography is validated for referential honesty: `province_id`/`city_id` are
+required and must exist, and an optional `village_id` must belong to that city.
+A new farm starts with zero saloons and its `farm-<id>` compat slug is minted in
+the SAME transaction, so the Flutter aliases resolve it immediately — waiting
+for the backfill command would 404 a farm that exists.
+
+Returns the farm's `FarmOverview` (201) and writes a `FARM_CREATED` audit row.""",
+    request=FarmCreateRequestSerializer,
+    responses={
+        201: FarmOverviewSerializer,
+        **error_responses(400, 401, 403),
+    },
+    examples=[
+        OpenApiExample(
+            "New farm",
+            request_only=True,
+            value={"name": "Farm A", "province_id": 1, "city_id": 1},
+        )
+    ],
+)
+@api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated])
 def farm_list(request):
     """GET /farms/ — FarmOverview[] for the caller's org (v1.6 native lists).
+
+    POST is F1 (owner-only creation). ONE pattern serves both methods on
+    purpose: a second route for the same path would never be reached — Django
+    matches the first pattern and answers 405 (the ops-wave O5/O6 lesson).
 
     ?org_id= is honored only when it EQUALS the validated claim org — a
     mismatch is a 403 (you asked for another org's data), never an empty
@@ -448,6 +545,11 @@ def farm_list(request):
     requested = str(request.query_params.get("org_id", "")).strip()
     if requested and requested != str(org_id):
         return Response({"error": "forbidden"}, status=403)
+
+    if request.method == "POST":
+        from apps.farms.api_follow import create_farm
+
+        return create_farm(request)
 
     farms = (
         Farm.objects.select_related("province", "city", "village")

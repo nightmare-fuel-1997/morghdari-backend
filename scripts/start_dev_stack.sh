@@ -12,9 +12,12 @@
 #   6. MQTT subscriber (demo-subscriber-01, demo-sub/devpass) — stream ingress
 #
 # No seeder ships in this repo any more: the farm/saloon topology is created by
-# the operator (Django admin or API) and handed to broker provisioning + the
-# simulator as a manifest. Without --manifest the stack still starts (broker +
-# backend + celery + subscriber) and skips steps 2 and 4.
+# the operator and handed to broker provisioning + the simulator as a manifest.
+# Since contract v1.7.2 that means the REAL API — `POST /api/v1/farms/` (owner),
+# `POST /api/v1/farms/{id}/saloons/` and `POST /api/v1/saloons/{id}/positions/`
+# (manager+) — not the Django admin, which has no model registrations at all.
+# Without --manifest the stack still starts (broker + backend + celery +
+# subscriber) and skips steps 2 and 4.
 #
 # Usage:
 #   bash scripts/start_dev_stack.sh --manifest backend/farm_manifest.json

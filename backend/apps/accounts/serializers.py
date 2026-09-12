@@ -189,7 +189,21 @@ class MemberInviteRequestSerializer(serializers.Serializer):
 
     username = serializers.CharField(help_text="Existing user is reused; a new one is created with an unusable password.")
     role = serializers.ChoiceField(
-        choices=["owner", "manager", "engineer", "doctor", "worker", "installer"]
+        choices=["owner", "manager", "engineer", "doctor", "worker", "installer", "reviewer"]
+    )
+
+
+class MemberRoleUpdateRequestSerializer(serializers.Serializer):
+    """PATCH /org/members/{member_id}/ body (v1.7.2) — owner-exclusive role change.
+
+    The enum is the contract's org-role list INCLUDING `reviewer`: the v1.5
+    reports wave defined that role (read-only on daily reports) but never added
+    it to the grantable set, so no API could produce one. Granting it here and
+    on invite closes that hole.
+    """
+
+    role = serializers.ChoiceField(
+        choices=["owner", "manager", "engineer", "doctor", "worker", "installer", "reviewer"]
     )
 
 

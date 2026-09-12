@@ -111,6 +111,38 @@ reserved for growth), and the **reports-merge implementation moves into v0.7**
 - Open: the CI gate (Postgres/Timescale + Redis), module coverage gate and migrate-gate
   for the 3 new migrations (Docker down at sweep time) — see `PROGRESS.md`.
 
+## Post-v0.7 addendum — contract v1.7.2 follow-through CORE (F1–F15) (2026-09-12)
+**Status:** DONE — code + contract + tests; full suite GREEN on Postgres/Timescale
++ Redis (568 passed, 3 skipped). Sealed by the M0 close-out commit.
+
+- An audit of the shipped surface (does every subject have CRUD? is every engine
+  dependency writable?) found the gaps this wave closes: no writer for
+  `flock_cycles.end_date` or `mortality_records` (while the KPI read the latter),
+  no surface at all for `maintenance_mutes` (read by the alert engine, writable
+  only from the ORM — the model said "Django Admin" and no registration shipped),
+  no tenant topology writes (farm/saloon/position came only from SQL), no way to
+  change a member's role, and the `reviewer` role the v1.5 reports wave defined
+  was ungrantable.
+- Implemented the documented follow-through CORE (`docs/api-followthrough-v1.md`
+  F1–F15) + `PATCH /org/members/{member_id}/`: topology CRUD with guarded deletes,
+  flock close, direct mortality entry, the org alert feed, the home rollup and the
+  mute windows. **Zero new tables, zero migrations** — the absorbed half of the
+  spec touches frozen tables only.
+- Contract ratified 1.7.1 → **1.7.2** (+20 paths: 16 new + the 4 manager-side
+  gateway twins whose erratum was still pending); mirror regenerated; contract gate
+  re-green with `ERRATUM_PENDING` now EMPTY.
+- Traps found and fixed on the way: Django resolves the FIRST matching pattern
+  regardless of method (so `POST /farms/` and `PATCH|DELETE /saloons/{id}/` extend
+  the existing views instead of shadowing them); a new farm/saloon must mint its
+  `legacy_slug_map` row in the same transaction or the Flutter aliases 404 it; a
+  refused delete must not leave a `*_DELETED` audit row; and — the one only
+  Postgres could show — `flock_cycles.saloon` is `ON DELETE RESTRICT`, so F6's
+  "no active flock" delete rule was unreachable (a closed cycle binds the saloon
+  forever), so the endpoint now reports the schema's real rule.
+- Open: the module-coverage script and the migrate-gate sweep against a rebuilt CI
+  image (Docker Hub unreachable; the suite ran on the prebuilt `morghdari-test:ci`
+  image with the tree mounted) — see `PROGRESS.md`.
+
 ## Next Step
 v0.8 planning on owner go. v0.7 is CLOSED: all M7-01..M7-17 + M7-10 ✅, full gate
 513 passed, 3 skipped @ 88.09% on PG/Timescale + Redis, contract gate implemented ==

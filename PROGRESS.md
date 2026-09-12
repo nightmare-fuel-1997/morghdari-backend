@@ -1,5 +1,67 @@
 # Progress — v0.7 Production Birth on the Laptop
 
+## Contract v1.7.2 — follow-through CORE (F1–F15 + member role change) — 2026-09-12 (code + gates GREEN; sealed by M0 close-out)
+
+- **Why:** an audit of the shipped API ("does every subject have CRUD? is every
+  engine dependency writable?") found four writers the ENGINE needed and no API
+  could produce: `flock_cycles.end_date` (closing a cycle was impossible while the
+  KPI windows, the quality verdicts and the threshold hash all key off it),
+  `mortality_records` (the KPI's `mortality_pct` could only ever read zero),
+  `maintenance_mutes` (read by every alert evaluation, writable only from the ORM
+  — the model claimed "Django Admin" and no registration ever shipped), and the
+  tenant topology itself (farm/saloon/position existed only via SQL). Plus: a
+  member's role could not be changed, and the `reviewer` role the v1.5 reports
+  wave defined was ungrantable (the invite enum rejected it).
+- **Contract:** `backend/openapi.yaml` 1.7.1 → **1.7.2** (+20 paths: F1–F10 and
+  F14/F15, the mute trio F11–F13, `PATCH /org/members/{id}/`, and the four
+  manager-side gateway twins whose **erratum is now ratified** — the contract
+  gate's `ERRATUM_PENDING` set is EMPTY and pinned by a new test).
+  `SPECTACULAR_SETTINGS` version/description follow it; `openapi.generated.yaml`
+  regenerated.
+- **Code:** `apps/farms/api_follow.py` + `urls_follow.py`,
+  `apps/alerts/api_follow.py` + `urls_follow.py`,
+  `apps/accounts/views.py::update_member_role`, guards in
+  `apps/farms/services_follow.py` + `apps/alerts/services_follow.py`, slug
+  convention extracted to `apps/compat/legacy_slugs.py` (the backfill command now
+  calls it). Additive-only: **zero new tables, zero migrations**
+  (`makemigrations --check` → "No changes detected").
+- **Traps handled:** (1) Django resolves the first matching pattern regardless of
+  method, so `POST /farms/` and `PATCH|DELETE /saloons/{id}/` EXTEND the existing
+  views — a second pattern would 405; (2) a farm/saloon created through the API
+  must mint its `legacy_slug_map` row in the same transaction, or the Flutter
+  aliases 404 it until somebody re-runs the backfill; (3) Django's delete
+  collector walks the UNMANAGED history tables, so hard deletes are judged by a
+  shared guard that refuses when the backend cannot verify dependents; (4) a
+  refused delete must not leave a `*_DELETED` audit row (audit is written after
+  the delete succeeds); (5) **found by Postgres, invisible on sqlite:**
+  `flock_cycles.saloon` is `ON DELETE RESTRICT`, so F6's "no active flock" rule
+  is unachievable — a CLOSED cycle binds the saloon forever (Django's collector
+  only emulates that constraint on sqlite, so the local loop passed while the
+  guard was reaching a row the DB would never release). The guard now reports
+  the schema's rule: `saloon has an active flock` / `saloon has flock history` /
+  `saloon has telemetry history`, and the contract says the same thing.
+- **Tests:** `backend/tests/test_followthrough_core.py` — 16 tests; on the sqlite
+  loop 14 pass / 2 skip (both Postgres-only: the compat-slug resolver and the new
+  telemetry-history delete verdict), and **16 pass on the CI Postgres/Timescale
+  stack**. The module also pins the "no audit row on a refused delete" rule and
+  the KPI number moving after an API-created mortality row.
+- **Gates (2026-09-12):** contract gate GREEN (5 tests), docs gates GREEN
+  (`test_openapi_schema.py` + `test_docs.py`), `makemigrations --check` →
+  "No changes detected", `openapi.generated.yaml` regenerated (mirror route set
+  matches the code), new-file coverage 89–100%, and the **full suite on
+  Postgres/Timescale + Redis: 568 passed, 3 skipped** — which is where the RLS
+  proofs, the compat-slug resolver and all three PG-only delete branches ran.
+- **Still to run:** the module-coverage script and the migrate-gate sweep against
+  a real CI image rebuild (Docker Hub/network timed out, so the suite ran on the
+  prebuilt `morghdari-test:ci` image with the working tree mounted at `/app`).
+  Known local-only noise: `test_m6_10_ops` O9/O10 fixtures need the broker, so
+  that module fails on a laptop without Redis and passes in the container.
+- **Tree state:** the wave is UNCOMMITTED (no commit was requested); the parked
+  sibling-writer files (`monitoring/0001`, `tenants/0002`, `reports/0001`) were
+  left untouched, as was the untracked staff-side draft
+  `docs/api-topology-write-v1.md` (another thread's work, whose §8 asks this
+  wave's guards be imported rather than duplicated — they are import-ready).
+
 ## Migrate-chain reconciliation — 2026-09-12 (branch tip is self-sufficient again)
 
 Three files had been parked uncommitted since the v0.7 tail, which meant a clean

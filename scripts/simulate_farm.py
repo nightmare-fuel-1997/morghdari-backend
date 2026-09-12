@@ -6,8 +6,9 @@ publishing REAL schema-2.0 payloads over the REAL MQTT path (demo branches).
 اسکیما-۲٫۰ را از مسیر واقعی MQTT به داشبورد زنده می‌فرستند.
 
 What it does:
-  1. Reads the topology manifest the operator supplies (farm/saloon ids from
-     the Django admin or API) via `--manifest`.
+  1. Reads the topology manifest the operator supplies (farm/saloon ids, built
+     through the API since contract v1.7.2: POST /api/v1/farms/, POST
+     /api/v1/farms/{id}/saloons/) via `--manifest`.
   2. Spawns ONE paho MQTT client PER SENSOR PACK (each a fake "device"), each
      publishing its own schema-2.0 reading to the REAL broker every
      `--interval` seconds (default 5). device_ts advances in REAL 60-second

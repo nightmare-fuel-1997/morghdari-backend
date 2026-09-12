@@ -1,0 +1,38 @@
+"""Alerts follow-through routes — contract v1.7.2 (spec §1, F9/F11/F12/F13).
+
+Mounted at api/v1/ from config/urls.py and listed in the contract gate's
+`_API_ROOTS`. Every route is a NEW path, so mounting it cannot change any
+existing behaviour:
+
+    GET    /alerts/                    engineer+   org-wide feed (F9)
+    GET    /maintenance-mutes/         manager+    first read path (F11)
+    POST   /maintenance-mutes/         manager+    first write path (F12)
+    DELETE /maintenance-mutes/{id}/    manager+    revoke early (F13)
+
+`/alerts/` and the long-standing `/alerts/{alert_id}/acknowledge/` coexist
+because both patterns are anchored full matches — the single-segment route can
+never swallow the two-segment one.
+
+فارسی: فهرستِ سازمانیِ هشدارها و پنجره‌های بی‌صداکننده — همه آدرس‌ها تازه‌اند و
+هیچ رفتاری را تغییر نمی‌دهند.
+"""
+
+from django.urls import path
+
+from apps.alerts.api_follow import (
+    alert_feed,
+    maintenance_mute_revoke,
+    maintenance_mutes,
+)
+
+app_name = "alerts-follow"
+
+urlpatterns = [
+    path("alerts/", alert_feed, name="alert-feed"),
+    path("maintenance-mutes/", maintenance_mutes, name="maintenance-mutes"),
+    path(
+        "maintenance-mutes/<int:mute_id>/",
+        maintenance_mute_revoke,
+        name="maintenance-mute-revoke",
+    ),
+]

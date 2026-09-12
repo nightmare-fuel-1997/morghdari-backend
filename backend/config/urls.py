@@ -21,6 +21,14 @@ urlpatterns = [
     path("api/v1/", include("apps.provisioning.urls")),
     path("api/v1/", include("apps.farms.urls")),
     path("api/v1/", include("apps.alerts.urls")),
+    # v1.7.2 follow-through wave (F1–F15) — new paths only, so mounting these
+    # cannot change any pre-existing route. Two of the wave's routes are NOT in
+    # these urlconfs on purpose: POST /farms/ and PATCH|DELETE /saloons/{id}/
+    # EXTEND the existing views above (api.farm_list / api.saloon_detail),
+    # because Django matches the first pattern regardless of method — a second
+    # pattern for a shared path would answer 405.
+    path("api/v1/", include("apps.farms.urls_follow")),
+    path("api/v1/", include("apps.alerts.urls_follow")),
     path("api/v1/", include("apps.monitoring.urls")),
     path("api/v1/", include("apps.reports.urls")),
     # M6-10 ops wave (contract v1.7.0-draft): audit/thresholds/photos/

@@ -55,10 +55,17 @@ VERBS = ("get", "post", "put", "patch", "delete")
 
 # v0.5-delivered FM lifecycle/rotation controls that the yaml never documented
 # (the support-side suspend/resume IS documented under /platform/...; these are
-# the manager-side twins). A contract erratum must ratify them in the docs
-# repo; until then they are the ONLY tolerated implemented-but-undocumented
-# routes, and this constant must not grow.
-ERRATUM_PENDING = {
+# the manager-side twins).
+# v1.7.2 (2026-09-12): the erratum was RATIFIED — the four paths are now in the
+# yaml verbatim with their role gates, so the set is EMPTY and stays that way.
+# The assert below is what keeps a future wave from quietly re-opening the hole.
+ERRATUM_PENDING: set = set()
+
+# v1.7.2 guard: the topology/staff twin for these routes does NOT exist as an
+# extra — if a future change makes an implemented route undocumented, this test
+# fails first. TODO-free on purpose: the four ratified paths are pinned by the
+# union test at the bottom of this module.
+RATIFIED_V072_TWINS = {
     ("post", "/gateways/{gateway_slot_id}/suspend/"),
     ("post", "/gateways/{gateway_slot_id}/resume/"),
     ("post", "/gateways/{gateway_slot_id}/rotate-credential/"),
@@ -76,6 +83,8 @@ _API_ROOTS = (
     "apps.provisioning.urls",
     "apps.farms.urls",
     "apps.alerts.urls",
+    "apps.farms.urls_follow",  # v1.7.2 follow-through wave (F2–F8/F14/F15)
+    "apps.alerts.urls_follow",  # v1.7.2 follow-through wave (F9/F11–F13)
     "apps.monitoring.urls",
     "apps.monitoring.urls_ops",  # M6-10 ops wave (contract v1.7.0)
     "apps.reports.urls",  # M7-15 §4s reports base (v0.9 scope pulled forward)
@@ -227,6 +236,22 @@ def test_contract_gaps_shrink_monotonically():
         "remove them from the constant:\n"
         + "\n".join(sorted(f"  {v.upper():6} {p}" for v, p in done))
     )
+
+
+@pytest.mark.django_db(transaction=False)
+def test_ratified_v072_gateway_twins_are_documented():
+    """v1.7.2 erratum ratification pin: the four manager-side lifecycle twins
+    that lived in ERRATUM_PENDING are now contract paths. Dropping one back out
+    of the yaml (or renaming a route) fails here instead of silently
+    re-opening the documented-vs-implemented hole."""
+    documented = _documented_full()
+    missing = RATIFIED_V072_TWINS - documented
+    assert missing == set(), (
+        "v1.7.2 ratified these manager-side twins into the contract; they are "
+        "no longer tolerated as undocumented extras:\n"
+        + "\n".join(sorted(f"  {v.upper():6} {p}" for v, p in missing))
+    )
+    assert _implemented() >= RATIFIED_V072_TWINS
 
 
 def test_known_gaps_ends_empty():

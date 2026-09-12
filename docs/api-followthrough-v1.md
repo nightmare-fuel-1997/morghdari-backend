@@ -1,8 +1,52 @@
 # Follow-Through APIs — Endpoint Spec (Contract v1.9.0-draft, App v1.1 scope extension II)
 
-> **Status:** DRAFT 2026-09-05 · **Additive-only** — no `ALTER` on core tables, no change to
+> **Status:** F1–F15 + the member role change are IMPLEMENTED (contract **v1.7.2**,
+> 2026-09-12) — see "Absorbed rows" below. F16–F36 remain draft; the surface is still
+> the v1.9.0 union, so 1.8.0 stays reserved for growth.
+> **Additive-only** — no `ALTER` on core tables, no change to
 > existing paths. Five small new tables (§8); everything else reads/writes frozen tables
 > (farm/saloon creation follows the locked rule: **owner creates farms**, Tracker §4d R3-ACTOR-MAP).
+>
+> **Absorbed rows (v1.7.2, 2026-09-12):** F1–F8, F9, F10, F11, F12, F13, F14, F15 — plus
+> `PATCH /org/members/{member_id}/` (the role change this spec never listed). Zero new
+> tables: the whole absorbed half reads and writes frozen tables, so the wave shipped with
+> **no migrations at all**. Implementation: `apps/farms/api_follow.py`,
+> `apps/alerts/api_follow.py`, `apps/accounts/views.py::update_member_role`, guards in
+> `apps/farms/services_follow.py` + `apps/alerts/services_follow.py` (the staff-side draft
+> `docs/api-topology-write-v1.md` §8 asks for exactly those guards to be imported, not
+> duplicated). Acceptance: `backend/tests/test_followthrough_core.py`.
+>
+> **Errata found while implementing (the spec was written against the docs, not the schema):**
+>
+> - **F8** listed `{label?, is_active?}` — `saloon_positions` has NO `is_active` column and the
+>   core schema is frozen, so the implemented endpoint renames labels only. An `is_active`
+>   toggle would need an `ALTER` (or a new table) and therefore a new decision.
+> - **F14** promised "snapshot finalization" — no `flock_daily_snapshots` table and no
+>   aggregates module exist in any wave yet, so the close endpoint does NOT claim it; the
+>   threshold-hash re-arm it DOES claim is proven by test.
+> - **F6** said "no active flock". The SCHEMA says more: `flock_cycles.saloon` is
+>   `ON DELETE RESTRICT`, so a saloon that ever housed a flock — a CLOSED cycle included —
+>   can never be hard-deleted. The sqlite test loop could not see it (Django's collector only
+>   emulates the constraint there); the Postgres run of `test_followthrough_core.py` caught a
+>   delete that could only ever 500. The endpoint now reports the real rule
+>   (`saloon has an active flock` / `saloon has flock history` / `saloon has telemetry
+>   history`), which is also why a delete is only attempted once dependents were *verified*.
+> - **F6, second finding:** a refused delete used to still write its `SALOON_DELETED` /
+>   `FARM_DELETED` audit row (the write happened before the verdict). Audit lines are now
+>   written only after the delete actually succeeded.
+> - **F15** gained an additive `cause` field (the column exists and was unreachable).
+> - **Member roles**: `reviewer` was defined by the v1.5 reports wave but the invite enum
+>   rejected it, so no API could grant the very role the reports surface reads. Fixed in the
+>   same wave (invite + role change accept it).
+> - **Slugs**: nothing minted `legacy_slug_map` rows for new topology, so a farm created
+>   through an API write would have been invisible to the Flutter aliases (a silent 404 — the
+>   resolver's foreign/unknown verdict). F1/F4 now mint the row in the same transaction.
+>
+> **Dormant-table record (the audit that produced this wave):** `doctor_tickets` and
+> `medical_prescriptions` are SUPERSEDED — `support_tickets` generalizes the doctor-ticket
+> workflow (§v1.1 README), and the FLAGGED report branch opens a `support_tickets` row, so
+> neither dormant table needs an endpoint. `vet_medication_catalog`'s write surface is the
+> v0.9 §4n `POST /vet-catalog/` (currently in the contract gate's excluded set), not this wave.
 > **Canonical homes:** this file (v1.9.0 surface) · decisions: `Open Items Tracker.md` §4q ·
 > plan: `VERSIONS.md` §v1.1 · release draft: `docs/releases/v1.9-followthrough-draft.md` ·
 > history: `CHANGELOG.md [Planned → 1.9.0]`.
@@ -21,7 +65,7 @@
 | F3 | `DELETE /api/v1/farms/{id}/` | owner | — | `200`: deleted **only when it has no saloons**, else `409 {"error":"farm not empty"}` (RESTRICT philosophy, never cascade) |
 | F4 | `POST /api/v1/farms/{id}/saloons/` | manager+ | `{name}` (+ positions seeded empty) | `201`: saloon |
 | F5 | `PATCH /api/v1/saloons/{id}/` | manager+ | `{name?}` | `200`: updated (operational state stays on its own endpoint) |
-| F6 | `DELETE /api/v1/saloons/{id}/` | manager+ | — | `200` only with no active flock and no telemetry, else `409` |
+| F6 | `DELETE /api/v1/saloons/{id}/` | manager+ | — | `200` only with **no flock history at all** and no telemetry, else `409` (schema is stricter than the original wording — see errata) |
 | F7 | `POST /api/v1/saloons/{id}/positions/` | manager+ | `{label}` (`UNIQUE(saloon_id,label)` stands) | `201`: position. `409` on duplicate label |
 | F8 | `PATCH /api/v1/saloons/{id}/positions/{pid}/` | manager+ | `{label?, is_active?}` | `200`. Sensor bindings follow automatically (mapping rows untouched) |
 | F9 | `GET /api/v1/alerts/` | engineer+ (org feed) | `farm_id?`, `saloon_id?`, `tier?`, `metric?`, `status?` (`ACTIVE`/`ALL`), `limit`/`offset` | `200`: `{results:[AlertInstance…], count}` — the missing org-wide feed (per-saloon read already exists) |
@@ -84,7 +128,14 @@ turnaround catalog + auto-finish, search across three entities RLS-scoped).
 
 ## 7. Acceptance checklist (docs-side)
 
-- [ ] F1–F36 matrix vs staging; delete-guards proven (non-empty farm/saloon refuse with 409).
+- [x] **v1.7.2 (F1–F15 + the role change):** `backend/tests/test_followthrough_core.py`
+      proves every route, guard and fence that needs no staging — role gates and scope
+      narrowing per endpoint, 409 delete guards, duplicate labels, the mute window rules,
+      the compat slug minted in-transaction (Postgres), and the two engine writers
+      end-to-end (F14 re-arms the hash; the KPI mortality number MOVES after F15).
+      `implemented == contract` re-greened on the ratified v1.7.2 yaml, and the generated
+      mirror passes the docs gate. The F16–F36 matrix vs staging stays open below.
+- [ ] F16–F36 matrix vs staging; delete-guards proven (non-empty farm/saloon refuse with 409).
 - [ ] F24 issues a token whose `org_id` is the target (multi-org switch works end-to-end).
 - [ ] Turnaround refuses during active flock; auto-finishes on 8th signature.
 - [ ] yaml ratification commit re-greens `implemented == contract`.

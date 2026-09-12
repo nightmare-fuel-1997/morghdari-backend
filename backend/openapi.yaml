@@ -1,10 +1,38 @@
 openapi: "3.0.3"
 info:
   title: Morghdari Poultry Monitoring API
-  version: "1.7.1"
+  version: "1.7.2"
   description: |
     REST API for the Morghdari multi-tenant poultry monitoring platform.
     WebSocket protocol is documented separately in the Frontend Integration Spec.
+
+    v1.7.2 (2026-09-12 — the follow-through CORE wave, docs/api-followthrough-v1.md
+    F1–F15 + the member role change, pulled forward from the v1.9.0 surface): the
+    tenant topology finally has write paths — an owner creates, renames and
+    deletes an EMPTY farm (409 "farm not empty" otherwise), manager+ adds and
+    deletes saloons (refused with an active flock or telemetry history) and
+    their physical positions, and EVERY farm/saloon creation mints its
+    legacy_slug_map row in the same transaction so the Flutter aliases resolve a
+    brand-new farm immediately instead of 404ing until someone re-runs the
+    backfill command. The two writers the engine was missing are here: flock
+    close — the only setter of flock_cycles.end_date, which re-arms the saloon's
+    threshold hash through the existing post_save fast path — and direct
+    mortality entry, because mortality_records had NO writer at all while
+    /saloons/{id}/kpis/ computed mortality_pct and its daily series from it (a
+    farm-facing number that could only ever read zero). Maintenance mutes gain
+    their first REST surface (the table was read by every alert evaluation and
+    writable only from the ORM — the model said "managed via Django Admin", and
+    no admin registration ever shipped), and /alerts/ becomes the org-wide feed
+    beside the per-saloon read. PATCH /org/members/{member_id}/ changes a role
+    (owner-only, self-change refused, live refresh lines revoked because claims
+    are frozen at token birth) and the `reviewer` role the v1.5 reports wave
+    defined is now GRANTABLE — the invite enum had rejected it, so no org could
+    produce one. Erratum ratified: the four manager-side gateway lifecycle twins
+    (suspend / resume / rotate-credential / rotation-ack) are documented here for
+    the first time, which empties the contract gate's ERRATUM_PENDING set.
+    Additive-only: zero new tables, zero migrations, no change to any existing
+    path and no change to the gateway state machine or the mute/velocity rules
+    (NH3 and temp velocity still always page).
 
     v1.7.1 (2026-09-12 owner decision — the threshold-template WRITE surface,
     O13–O16, additive to the v1.7.0 union): an engineer authors DRAFTS inside the
@@ -242,6 +270,44 @@ components:
           nullable: true
         highest_tier_reached:
           type: integer
+
+    MaintenanceMute:
+      type: object
+      description: >
+        One planned-maintenance mute window (F11-F13, v1.7.2). While active for a
+        saloon, threshold-crossing and duration-filter alerts are suppressed;
+        readings still log and Tier-1 velocity always pages (Decision 10).
+        `active` uses the ENGINE's predicate (starts_at ≤ now < ends_at), so a
+        row reads active here exactly when it suppresses an alert.
+      properties:
+        mute_id:
+          type: integer
+          example: 12
+        saloon_id:
+          type: string
+          description: Stringified saloon PK (contract shape)
+          example: '7'
+        farm_id:
+          type: integer
+          nullable: true
+        starts_at:
+          type: string
+          format: date-time
+        ends_at:
+          type: string
+          format: date-time
+        reason:
+          type: string
+          example: Exhaust fan replacement
+        active:
+          type: boolean
+        created_by:
+          type: integer
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
 
     Province:
       type: object
@@ -2286,6 +2352,54 @@ paths:
         '403': { description: Caller is not the org owner }
         '404': { description: No such member in the caller's org }
 
+  /org/members/{member_id}/:
+    patch:
+      tags: [Organization]
+      summary: Change a member's role — owner only (v1.7.2)
+      description: >
+        Owner-exclusive role change. Before this endpoint the only way a
+        membership changed role was deactivate + re-invite, and the `reviewer`
+        role the v1.5 reports wave defined could not be granted at all. The role
+        enum is the org-role list INCLUDING reviewer; a foreign member id is the
+        same 404 as an unknown one (never an existence oracle).
+
+        Role claims are minted from the membership row at login/refresh, so the
+        change lands on a fresh token: this endpoint revokes the member's live
+        refresh lines in the same transaction (their access token keeps the old
+        role for ≤15 min — the accepted C-14 shape). Deliberately refused: a
+        SELF-change (an owner demoting themselves would lock the org out of every
+        owner-only surface with nothing able to undo it) and a no-op change. A
+        MEMBER_ROLE_CHANGED audit row is always written.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: member_id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role:
+                  type: string
+                  enum: [owner, manager, engineer, doctor, worker, installer, reviewer]
+      responses:
+        '200':
+          description: Membership updated (the OrgMemberOut row)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgMemberOut'
+        '400': { description: Unknown role }
+        '401': { description: Invalid or missing token }
+        '403': { description: Caller is not the org owner }
+        '404': { description: No such member in the caller's org }
+        '409':
+          description: |
+            A state precondition failed — the member already has this role, or
+            the caller tried to change their OWN role.
+
   /saloons/{saloon_id}/reports/:
     get:
       tags: [Daily Reports]
@@ -3262,6 +3376,137 @@ paths:
                         saloon_count: { type: integer }
         '403': { description: Forbidden — engineer/worker/doctor }
 
+  # ------------------------------------------------------------------
+  # v1.7.2 — RATIFIED ERRATUM: the four manager-side gateway lifecycle twins
+  # shipped in v0.5 and were never documented (the support-side suspend/resume
+  # IS documented under /platform/...). They lived in the contract gate's
+  # ERRATUM_PENDING set; this ratification empties it, so an undocumented
+  # route now fails the gate instead of being tolerated.
+  # ------------------------------------------------------------------
+  /gateways/{gateway_slot_id}/suspend/:
+    post:
+      tags: [Provisioning & Gateways]
+      summary: Suspend a gateway — manager/owner (v0.5, ratified v1.7.2)
+      description: >
+        Sets the slot to SUSPENDED and revokes its EMQX ACLs (no_match=deny
+        drops every publish until resume). Only a PROVISIONED gateway can be
+        suspended — anything else is a 409. Foreign/unknown slot → 404.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: gateway_slot_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, example: Planned panel maintenance }
+      responses:
+        '200':
+          description: Gateway suspended
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  gateway_slot_id: { type: string }
+                  status: { type: string, example: SUSPENDED }
+        '401': { description: Invalid or missing token }
+        '403': { description: Caller is not manager/owner }
+        '404': { description: Unknown or foreign gateway slot }
+        '409': { description: The slot is not in a suspendable state }
+
+  /gateways/{gateway_slot_id}/resume/:
+    post:
+      tags: [Provisioning & Gateways]
+      summary: Resume a SUSPENDED gateway — manager/owner (v0.5, ratified v1.7.2)
+      description: >
+        Restores PROVISIONED and re-syncs the EMQX allow rules, so publishes flow
+        again without a reinstall. Only a SUSPENDED gateway can be resumed —
+        anything else is a 409.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: gateway_slot_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Gateway resumed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  gateway_slot_id: { type: string }
+                  status: { type: string, example: PROVISIONED }
+        '401': { description: Invalid or missing token }
+        '403': { description: Caller is not manager/owner }
+        '404': { description: Unknown or foreign gateway slot }
+        '409': { description: The slot is not SUSPENDED }
+
+  /gateways/{gateway_slot_id}/rotate-credential/:
+    post:
+      tags: [Provisioning & Gateways]
+      summary: Stage a gateway credential rotation — manager/owner (v0.5, ratified v1.7.2)
+      description: >
+        Stages a rotation and returns the new plaintext password EXACTLY ONCE
+        (later fetches see only the hash). The old credential keeps working at
+        the broker until the device ACKs the new one, so a lost response can
+        never lock a gateway out. Requires a PROVISIONED gateway (409 otherwise).
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: gateway_slot_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Rotation staged (password shown once)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  gateway_slot_id: { type: string }
+                  username: { type: string }
+                  password: { type: string }
+                  rotation_pending: { type: boolean, example: true }
+        '401': { description: Invalid or missing token }
+        '403': { description: Caller is not manager/owner }
+        '404': { description: Unknown or foreign gateway slot }
+        '409': { description: The slot is not PROVISIONED }
+
+  /gateways/{gateway_slot_id}/rotation-ack/:
+    post:
+      tags: [Provisioning & Gateways]
+      summary: Commit a staged rotation (commit-on-ACK) — manager/owner (v0.5, ratified v1.7.2)
+      description: >
+        Promotes the staged hash to active only when the presented
+        new_password matches it — that match is the proof the device received
+        the rotation. No staged rotation, or a mismatch, is a 409.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: gateway_slot_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [new_password]
+              properties:
+                new_password: { type: string }
+      responses:
+        '200':
+          description: Rotation committed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  gateway_slot_id: { type: string }
+                  rotation_committed: { type: boolean, example: true }
+        '401': { description: Invalid or missing token }
+        '403': { description: Caller is not manager/owner }
+        '404': { description: Unknown or foreign gateway slot }
+        '409': { description: No staged rotation, or the password does not match it }
+
   /gateways/{slot}/:
     get:
       tags: [Ops]
@@ -3366,6 +3611,611 @@ paths:
       responses:
         '200': { description: Revoked }
         '404': { description: Unknown or foreign session (identical) }
+
+  # ------------------------------------------------------------------
+  # v1.7.2 — follow-through CORE (F1–F15, docs/api-followthrough-v1.md):
+  # topology writes, the flock cycle's two missing writers, the org alert
+  # feed, the org home rollup and the mute windows. Additive-only: every path
+  # below is NEW (two of them EXTEND an existing path's method set — see the
+  # note on /farms/ and /saloons/{saloon_id}/).
+  # ------------------------------------------------------------------
+  /farms/:
+    get:
+      tags: [Farms]
+      summary: List farms (v1.6 native list)
+      description: >
+        FarmOverview[] for the caller's org (v1.6 native list). ?org_id= is
+        honored only when it EQUALS the validated claim org; a mismatch is 403.
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Farms of the caller's org
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/FarmOverview'
+        '401': { description: Invalid or missing token }
+        '403': { description: org_id does not match the claim org }
+    post:
+      tags: [Farms]
+      summary: F1 — create a farm (owner)
+      description: >
+        Owner-exclusive (the locked "owner creates farms" rule, Tracker §4d
+        R3-ACTOR-MAP). The org comes from the validated claim, never the body.
+        Geography is validated: province_id/city_id are required and must exist,
+        and an optional village_id must belong to that city. The new farm starts
+        with zero saloons, and its farm-<id> legacy_slug_map row is minted in the
+        SAME transaction so the Flutter compat aliases resolve it immediately —
+        waiting for the backfill command would 404 a farm that exists. Writes a
+        FARM_CREATED audit row. NOTE: this EXTENDS the existing /farms/ path with
+        a second method on purpose — a separate route would never be reached.
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, province_id, city_id]
+              properties:
+                name: { type: string, maxLength: 255, example: Farm A }
+                province_id: { type: integer, example: 1 }
+                city_id: { type: integer, example: 1 }
+                village_id: { type: integer, nullable: true, example: 1 }
+      responses:
+        '201':
+          description: Farm created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FarmOverview'
+        '400': { description: Invalid name, missing/unknown geography, or a village outside the city }
+        '401': { description: Invalid or missing token }
+        '403': { description: Caller is not the org owner }
+
+  /farms/{farm_id}/:
+    patch:
+      tags: [Farms]
+      summary: F2 — rename a farm (owner)
+      description: >
+        Name-only edit. Geography is deliberately immutable: re-homing a farm
+        re-homes every scope row and regional rollup, so it is a migration, not a
+        rename. Foreign/unknown id → 404; a farm outside the caller's
+        account_role_scopes rows → 403. Writes FARM_UPDATED and returns the
+        farm's FarmOverview.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: farm_id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, maxLength: 255 }
+      responses:
+        '200':
+          description: Farm renamed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FarmOverview'
+        '400': { description: Missing or invalid name }
+        '401': { description: Invalid or missing token }
+        '403': { description: Caller is not the org owner, or the farm is outside their scope }
+        '404': { description: Unknown or foreign farm }
+    delete:
+      tags: [Farms]
+      summary: F3 — delete an empty farm (owner)
+      description: >
+        Hard delete, only while the farm has NO saloons — the RESTRICT
+        philosophy, never a cascade. A farm that still owns a saloon is 409
+        {"error": "farm not empty"}; one still referenced by history (alert
+        instances, command logs) is a 409 naming the relation, never a 500. The
+        legacy_slug_map rows are left in place: ids are never re-issued. Writes
+        FARM_DELETED in the same transaction as the delete.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: farm_id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: Farm deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  farm_id: { type: integer }
+                  deleted: { type: boolean, example: true }
+        '401': { description: Invalid or missing token }
+        '403': { description: Caller is not the org owner, or the farm is outside their scope }
+        '404': { description: Unknown or foreign farm }
+        '409': { description: Farm still has saloons, or is still referenced by history }
+
+  /farms/{farm_id}/saloons/:
+    post:
+      tags: [Farms]
+      summary: F4 — add a saloon to a farm (manager+)
+      description: >
+        Creates one saloon under a farm of the caller's org; positions start
+        EMPTY by design (F7 adds them one at a time). The saloon inherits the
+        farm's org and gets its device-<id> compat slug in the same transaction
+        (the farm/org slug rows come with it). Foreign/unknown farm → 404; a farm
+        outside the caller's scope rows → 403. Returns SaloonDetail and writes
+        SALOON_CREATED.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: farm_id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, maxLength: 255, example: Saloon 3 }
+      responses:
+        '201':
+          description: Saloon created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SaloonDetail'
+        '400': { description: Missing or invalid name }
+        '401': { description: Invalid or missing token }
+        '403': { description: Caller lacks manager/owner, or the farm is outside their scope }
+        '404': { description: Unknown or foreign farm }
+
+  /saloons/{saloon_id}/:
+    get:
+      tags: [Farms]
+      summary: Saloon detail
+      description: >
+        Full saloon record: identity, geography, operational state, flock age,
+        gateway binding and sensor slots. Nulls are honest (no flock, no zone,
+        Redis down). Foreign/unknown saloon → 404.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: saloon_id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: Saloon detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SaloonDetail'
+        '401': { description: Invalid or missing token }
+        '404': { description: Unknown or foreign saloon }
+    patch:
+      tags: [Farms]
+      summary: F5 — rename a saloon (manager+)
+      description: >
+        Name-only. The operational state keeps its own endpoint (the canonical
+        loop owns it) and the threshold-template assignment keeps O16, so a
+        rename can never move a live alarm band. Foreign/unknown → 404; outside
+        the caller's scope → 403. Writes SALOON_UPDATED and returns SaloonDetail.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: saloon_id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, maxLength: 255 }
+      responses:
+        '200':
+          description: Saloon renamed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SaloonDetail'
+        '400': { description: Missing or invalid name }
+        '401': { description: Invalid or missing token }
+        '403': { description: Caller lacks manager/owner, or the saloon is outside their scope }
+        '404': { description: Unknown or foreign saloon }
+    delete:
+      tags: [Farms]
+      summary: F6 — delete an empty saloon (manager+)
+      description: >
+        Hard delete, only while the saloon has NO flock history at all and NO
+        telemetry history. Stricter than the spec's "no active flock": the
+        schema makes flock_cycles.saloon ON DELETE RESTRICT, so a saloon that
+        ever housed a flock — a closed cycle included — can never be hard
+        deleted. The saloon id is what telemetry, alerts, reports and cycles key
+        off, which is why each verdict above preserves it. Verdicts: 409
+        "saloon has an active flock", 409 "saloon has flock history", 409
+        "saloon has telemetry history", or 409 naming the still-referencing
+        relation (positions, sensor slots, gateway bindings). The compat slug row
+        stays (ids are never re-issued). Writes SALOON_DELETED in the same
+        transaction, and only after the delete succeeded.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: saloon_id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: Saloon deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  saloon_id: { type: string }
+                  deleted: { type: boolean, example: true }
+        '401': { description: Invalid or missing token }
+        '403': { description: Caller lacks manager/owner, or the saloon is outside their scope }
+        '404': { description: Unknown or foreign saloon }
+        '409': { description: Active flock, telemetry history, or a still-referencing relation }
+
+  /saloons/{saloon_id}/positions/:
+    post:
+      tags: [Farms]
+      summary: F7 — add a physical position to a saloon (manager+)
+      description: >
+        One named position ("North Wall", …). The sensor hierarchy is saloon →
+        position → sensor slot, so this step must exist before a slot can be
+        bound. UNIQUE(saloon_id, label) stands: a duplicate label is 409
+        (pre-checked and backed by the constraint, so a concurrent double-submit
+        behaves). Foreign/unknown saloon → 404; outside the caller's scope → 403.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: saloon_id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [label]
+              properties:
+                label: { type: string, maxLength: 100, example: North Wall }
+      responses:
+        '201':
+          description: Position created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  position_id: { type: integer }
+                  saloon_id: { type: string }
+                  label: { type: string }
+                  created_by: { type: integer, nullable: true }
+        '400': { description: Missing or invalid label }
+        '401': { description: Invalid or missing token }
+        '403': { description: Caller lacks manager/owner, or the saloon is outside their scope }
+        '404': { description: Unknown or foreign saloon }
+        '409': { description: A position with this label already exists }
+
+  /saloons/{saloon_id}/positions/{position_id}/:
+    patch:
+      tags: [Farms]
+      summary: F8 — rename a position (manager+, label only)
+      description: >
+        Renames one position; sensor bindings follow automatically because the
+        mapping rows reference the position by id, so nothing is re-bound and no
+        telemetry history moves. LABEL ONLY: the follow-through draft also listed
+        an is_active toggle here, but saloon_positions has no such column and the
+        core schema is frozen — the erratum is recorded in the spec
+        (docs/api-followthrough-v1.md F8) instead of an ALTER. A duplicate label
+        is 409 like F7.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: saloon_id, in: path, required: true, schema: { type: integer } }
+        - { name: position_id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label: { type: string, maxLength: 100 }
+      responses:
+        '200':
+          description: Position renamed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  position_id: { type: integer }
+                  saloon_id: { type: string }
+                  label: { type: string }
+                  created_by: { type: integer, nullable: true }
+        '400': { description: Missing or invalid label }
+        '401': { description: Invalid or missing token }
+        '403': { description: Caller lacks manager/owner, or the saloon is outside their scope }
+        '404': { description: Unknown saloon or position }
+        '409': { description: A position with this label already exists }
+
+  /saloons/{saloon_id}/flocks/{flock_id}/close/:
+    patch:
+      tags: [Farms]
+      summary: F14 — close the active flock cycle (engineer+)
+      description: >
+        Sets flock_cycles.end_date — the write this table never had, and the one
+        every downstream reader waits for: the KPI windows, the quality service's
+        per-cycle verdicts and the threshold hash all key off `end_date IS NULL`
+        meaning "active". Only the saloon's ACTIVE cycle can be closed (already
+        closed → 400 "no active flock"), and end_date may not precede
+        start_date. The save fires the existing flock_cycles.post_save fast path,
+        which re-arms the saloon's threshold hash immediately. SNAPSHOT
+        FINALIZATION IS NOT PART OF THIS ENDPOINT: flock_daily_snapshots and the
+        aggregates module that would write it exist in no wave yet (erratum in
+        docs/api-followthrough-v1.md F14).
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: saloon_id, in: path, required: true, schema: { type: integer } }
+        - { name: flock_id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [end_date]
+              properties:
+                end_date:
+                  type: string
+                  description: YYYY-MM-DD or ISO datetime (naive = Asia/Tehran)
+                  example: '2026-09-12'
+      responses:
+        '200':
+          description: Cycle closed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  flock_id: { type: integer }
+                  saloon_id: { type: string }
+                  end_date: { type: string, format: date }
+                  status: { type: string, example: CLOSED }
+        '400': { description: Missing/unparseable end_date, end_date < start_date, or no active flock }
+        '401': { description: Invalid or missing token }
+        '403': { description: Caller lacks engineer+, or the saloon is outside their scope }
+        '404': { description: Unknown saloon/flock, or a flock of another saloon (400 when it is in-org) }
+
+  /saloons/{saloon_id}/flocks/{flock_id}/mortality/:
+    post:
+      tags: [Farms]
+      summary: F15 — record deaths directly (engineer+)
+      description: >
+        The writer mortality_records never had. GET /saloons/{id}/kpis/ computes
+        mortality_pct and the daily series from THIS table while the daily report
+        stores its own mortality_count, so before this endpoint the
+        farmer-facing mortality figure could only ever read zero. Direct entry
+        sits BESIDE the report counts: this endpoint never rewrites a report and
+        a report never writes here. occurred_on is a Tehran calendar day stored
+        at 00:00 Asia/Tehran (the same day boundary the KPI groups by); it may
+        not be in the future nor precede the cycle start. count ≥ 1. cause is an
+        additive extension of the draft (the column exists and was unreachable).
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: saloon_id, in: path, required: true, schema: { type: integer } }
+        - { name: flock_id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [occurred_on, count]
+              properties:
+                occurred_on: { type: string, example: '2026-09-11' }
+                count: { type: integer, minimum: 1, example: 15 }
+                cause: { type: string, maxLength: 100, example: heat_stress }
+                note: { type: string, example: Heat spike during the fan outage }
+      responses:
+        '201':
+          description: Mortality row recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  mortality_id: { type: integer }
+                  flock_id: { type: integer }
+                  saloon_id: { type: string }
+                  count: { type: integer }
+                  occurred_on: { type: string, format: date }
+                  recorded_by: { type: integer }
+                  cause: { type: string, nullable: true }
+                  notes: { type: string, nullable: true }
+        '400': { description: Missing/unparseable day, count < 1, future day, or a day before the cycle start }
+        '401': { description: Invalid or missing token }
+        '403': { description: Caller lacks engineer+, or the saloon is outside their scope }
+        '404': { description: Unknown saloon or flock (a flock of another saloon answers 400 when it is in-org) }
+
+  /overview/:
+    get:
+      tags: [Farms]
+      summary: F10 — org home rollup (any member)
+      description: >
+        Every farm of the caller's org with saloon count, unresolved-alert count
+        and highest active tier, plus org totals — the multi-farm home view that
+        GET /farms/{id}/overview/ (one farm at a time) never gave. Aggregates are
+        computed in bulk (no per-farm query) and both RLS and the caller's
+        account_role_scopes rows narrow the farms, the saloons and the totals.
+        highest_tier is null when nothing is unresolved, never 0.
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Farm rollup + totals
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  farms:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        farm_id: { type: integer }
+                        name: { type: string }
+                        saloon_count: { type: integer }
+                        active_alert_count: { type: integer }
+                        highest_tier: { type: integer, nullable: true }
+                  totals:
+                    type: object
+                    properties:
+                      farm_count: { type: integer }
+                      saloon_count: { type: integer }
+                      active_alert_count: { type: integer }
+                      highest_tier: { type: integer, nullable: true }
+        '400': { description: The token carries no org context }
+        '401': { description: Invalid or missing token }
+
+  /alerts/:
+    get:
+      tags: [Alerts]
+      summary: F9 — org-wide alert feed (engineer+)
+      description: >
+        Every alert of the caller's org, newest first, {results, count} paginated
+        — the org-wide sibling of GET /saloons/{id}/alerts/ ("what is on fire
+        right now" for a whole farm or org). Filters: farm_id, saloon_id, status
+        (ACTIVE default / ALL), tier (1-3 on highest_tier_reached) and metric
+        (metric key). Each is validated — an unknown tier or metric key is 400,
+        because a typo that silently narrows a feed reads exactly like "nothing
+        is wrong". The caller's account_role_scopes rows narrow the result set
+        like every other read surface.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, default: 50, maximum: 500 } }
+        - { name: offset, in: query, required: false, schema: { type: integer, default: 0 } }
+        - { name: farm_id, in: query, required: false, schema: { type: integer } }
+        - { name: saloon_id, in: query, required: false, schema: { type: integer } }
+        - { name: status, in: query, required: false, schema: { type: string, enum: [ACTIVE, ALL] } }
+        - { name: tier, in: query, required: false, schema: { type: integer, enum: [1, 2, 3] } }
+        - { name: metric, in: query, required: false, schema: { type: string }, example: nh3 }
+      responses:
+        '200':
+          description: Alert page
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AlertInstance'
+                  count: { type: integer }
+        '400': { description: Bad status/tier/metric, or invalid pagination }
+        '401': { description: Invalid or missing token }
+        '403': { description: Caller lacks engineer/manager/owner }
+
+  /maintenance-mutes/:
+    get:
+      tags: [Alerts]
+      summary: F11 — list maintenance-mute windows (manager+)
+      description: >
+        First READ path for maintenance_mutes. active_only=true (default) keeps
+        only windows the engine would honour right now
+        (starts_at ≤ now < ends_at); false returns the history. saloon_id narrows
+        to one saloon. Rows are newest-first with {results, count}, always
+        claim-org scoped and then narrowed by the caller's scope rows.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, default: 50, maximum: 500 } }
+        - { name: offset, in: query, required: false, schema: { type: integer, default: 0 } }
+        - { name: saloon_id, in: query, required: false, schema: { type: integer } }
+        - { name: active_only, in: query, required: false, schema: { type: boolean, default: true } }
+      responses:
+        '200':
+          description: Mute page
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/MaintenanceMute'
+                  count: { type: integer }
+        '400': { description: Bad saloon_id/active_only, or invalid pagination }
+        '401': { description: Invalid or missing token }
+        '403': { description: Caller lacks manager/owner }
+    post:
+      tags: [Alerts]
+      summary: F12 — open a maintenance-mute window (manager+)
+      description: >
+        First WRITE path for maintenance_mutes — the table was read by every
+        alert evaluation and writable only from the ORM (the model's "managed via
+        Django Admin" note is superseded in v1.7.2: no admin registration ever
+        shipped). While the window covers "now", threshold-crossing and
+        duration-filter alerts for that saloon are SUPPRESSED — readings still
+        log, and Tier-1 velocity (NH3/temp) still pages: Decision 10 is enforced
+        in the evaluation path and cannot be reached from here. Rules: ends_at
+        after starts_at, window ≤ 72 h, no overlap with another window of the
+        same saloon (abutting windows are allowed). A window already over is 400;
+        one that has started but not ended is accepted. Writes MUTE_CREATED.
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [saloon_id, starts_at, ends_at, reason]
+              properties:
+                saloon_id: { type: integer, example: 7 }
+                starts_at: { type: string, example: '2026-09-12T06:00:00Z' }
+                ends_at: { type: string, example: '2026-09-12T12:00:00Z' }
+                reason: { type: string, maxLength: 200, example: Exhaust fan replacement }
+      responses:
+        '201':
+          description: Mute window created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MaintenanceMute'
+        '400': { description: 'Bad window (order, > 72 h, entirely past) or missing/invalid fields' }
+        '401': { description: Invalid or missing token }
+        '403': { description: Caller lacks manager/owner, or the saloon is outside their scope }
+        '404': { description: Unknown or foreign saloon }
+        '409': { description: The window overlaps an existing window for this saloon }
+
+  /maintenance-mutes/{mute_id}/:
+    delete:
+      tags: [Alerts]
+      summary: F13 — revoke a mute window (manager+)
+      description: >
+        Ends a window early so alerting resumes at once. Two honest branches,
+        because maintenance_mutes carries CHECK(ends_at > starts_at): a RUNNING
+        window has ends_at shortened to the revocation instant (row and history
+        kept); a NOT-YET-STARTED window's row is removed (it suppressed nothing,
+        and there is no honest way to move a future window into the past). A
+        window that already ended is 409 "mute is not active". Either way a
+        MUTE_REVOKED audit row is written — the audit trail is never lost.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: mute_id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: Window revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  mute_id: { type: integer }
+                  saloon_id: { type: string, nullable: true }
+                  ends_at: { type: string }
+                  status: { type: string, example: REVOKED }
+        '401': { description: Invalid or missing token }
+        '403': { description: Caller lacks manager/owner, or the saloon is outside their scope }
+        '404': { description: Unknown or foreign mute }
+        '409': { description: The mute is not active (already ended) }
 
   # ------------------------------------------------------------------
   # v1.7.0 — W1..W5 compat report aliases (M7-17; spec

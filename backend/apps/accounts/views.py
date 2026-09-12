@@ -34,7 +34,7 @@ from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from apps.accounts import mfa
-from apps.accounts.models import OrgMember
+from apps.accounts.models import OrgMember, UserSession
 from apps.accounts.services import (
     register_session,
     refresh_is_revoked,
@@ -54,6 +54,7 @@ from apps.accounts.serializers import (
     SUPPORT_SESSION_REQUEST_EXAMPLE,
     SUPPORT_SESSION_RESPONSE_EXAMPLE,
     MemberDeactivateResponseSerializer,
+    MemberRoleUpdateRequestSerializer,
     MemberInviteRequestSerializer,
     MemberOutSerializer,
     MfaConfirmRequestSerializer,
@@ -85,7 +86,12 @@ from apps.tenants.models import Organization
 from apps.tenants.models import Organization
 
 # Contract v1.4.3 OrgMemberInviteRequest.role enum — the ONLY writable roles.
-ORG_MEMBER_ROLES = ["owner", "manager", "engineer", "doctor", "worker", "installer"]
+# v1.7.2: `reviewer` added. The v1.5 reports wave DEFINED that role (read-only
+# on daily reports, by absence from every write role set) but never made it
+# grantable, so an org could not actually produce one: the invite answered 400
+# and the membership row could only be edited from the ORM. Both the invite and
+# the new role-change endpoint accept it now.
+ORG_MEMBER_ROLES = ["owner", "manager", "engineer", "doctor", "worker", "installer", "reviewer"]
 
 User = get_user_model()
 
@@ -403,6 +409,106 @@ def deactivate_member(request, member_id: int):
     member.is_active = False
     member.save(update_fields=["is_active"])
     return Response({"is_active": False})
+
+
+@extend_schema(
+    tags=[TAG_ORG],
+    operation_id="update_org_member_role",
+    summary="Change a member's role — owner only",
+    description="""Owner-exclusive role change (contract v1.7.2). Before this endpoint the
+only way a membership changed role was to deactivate and re-invite it, and the
+`reviewer` role the v1.5 reports wave defined could not be granted at all.
+
+Verdicts: 400 unknown role; 403 caller is not the owner; 404 no such member
+**in the caller's org** (a foreign member id is the same 404 — never an
+existence oracle); 409 `member already has this role`, and 409 for a
+SELF-CHANGE (an owner who demotes themselves can lock the org out of every
+owner-only surface, and nothing in the API could undo it).
+
+Role claims are minted from the membership row at login/refresh, so the change
+lands at the member's next refresh — this endpoint revokes their live refresh
+lines in the same transaction to force exactly that, leaving the ≤15-minute
+access-token tail as the accepted, documented risk (C-14 shape). Writes a
+`MEMBER_ROLE_CHANGED` audit row.""",
+    parameters=[
+        OpenApiParameter(
+            "member_id", int, OpenApiParameter.PATH, description="OrgMember row id."
+        )
+    ],
+    request=MemberRoleUpdateRequestSerializer,
+    responses={
+        200: MemberOutSerializer,
+        **error_responses(400, 401, 403, 404),
+        409: CONFLICT_RESPONSE,
+    },
+    examples=[
+        OpenApiExample("Read-only reports reviewer", request_only=True, value={"role": "reviewer"})
+    ],
+)
+@api_view(["PATCH"])
+@permission_classes([IsAuthenticated])
+def update_member_role(request, member_id: int):
+    """/org/members/{id}/ — owner-exclusive role change (v1.7.2 F37).
+
+    فارسی: تغییرِ نقشِ عضو فقط با مالک؛ تغییرِ نقشِ خودِ مالک ممنوع است تا سازمان
+    قفل نشود، و خطوطِ نوسازیِ همان عضو باطل می‌شود تا نقشِ تازه اعمال شود.
+    """
+    forbidden = _require_owner(request)
+    if forbidden is not None:
+        return forbidden
+
+    org_id = _claims(request).get("org_id")
+    if org_id is None:
+        return Response({"error": "organization context required"}, status=400)
+
+    member = (
+        OrgMember.objects.select_related("user")
+        .filter(id=member_id, org_id=org_id)
+        .first()
+    )
+    if member is None:
+        return Response({"error": "no such member in the caller's org"}, status=404)
+
+    payload = request.data if isinstance(request.data, dict) else {}
+    role = payload.get("role")
+    if role not in ORG_MEMBER_ROLES:
+        return Response(
+            {"error": "role must be one of " + ", ".join(ORG_MEMBER_ROLES)}, status=400
+        )
+
+    if member.user_id == request.user.id:
+        return Response(
+            {"error": "an owner cannot change their own role"}, status=409
+        )
+    if member.role == role:
+        return Response({"error": "member already has this role"}, status=409)
+
+    previous = member.role
+    with transaction.atomic():
+        member.role = role
+        member.save(update_fields=["role"])
+        # Role claims are frozen at token birth (permissions.RequireRole reads
+        # the claims, never the DB), so the change only lands on a fresh token:
+        # kill the member's live refresh lines and let them log in again. The
+        # already-issued access token keeps the old role until it expires — the
+        # same accepted ≤15-minute window as C-14 deactivation.
+        revoked = UserSession.objects.filter(
+            user=member.user, revoked_at__isnull=True
+        ).update(revoked_at=timezone.now())
+        AccountActivityLog.objects.create(
+            actor=request.user,
+            org_id=org_id,
+            action="MEMBER_ROLE_CHANGED",
+            ip_address=request.META.get("REMOTE_ADDR"),
+            details={
+                "member_id": member.id,
+                "user_id": member.user_id,
+                "old_role": previous,
+                "new_role": role,
+                "sessions_revoked": revoked,
+            },
+        )
+    return Response(_member_out(member))
 
 
 @extend_schema(

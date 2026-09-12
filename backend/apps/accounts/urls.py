@@ -16,6 +16,7 @@ from apps.accounts.views import (
     support_gateway_provisioning,
     support_session,
     support_task_dispatch,
+    update_member_role,
 )
 
 app_name = "accounts"
@@ -30,6 +31,10 @@ urlpatterns = [
         deactivate_member,
         name="org-member-deactivate",
     ),
+    # v1.7.2 (F37): owner-exclusive role change. A distinct path from
+    # /deactivate/ — both patterns are anchored full matches, so neither can
+    # shadow the other.
+    path("org/members/<int:member_id>/", update_member_role, name="org-member-role"),
     # Contract v1.4.4: audited support-session opening (staff-not-superuser).
     path("platform/support/session/", support_session, name="support-session"),
     # M7-07: staff MFA enrollment + the 3 whitelisted support ops (v1.2). The

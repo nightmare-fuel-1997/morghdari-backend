@@ -199,7 +199,85 @@ Shipped inside v0.6 (M6-10) ahead of the 1.7.0 tag: pagination convention,
 O1–O12, `user_sessions`, `diag:last:{slot}`, yaml ratification. Promoted to
 `[v0.6]` above.
 
-## [Unreleased → 1.7.1] — threshold-template write surface (O13–O16)
+## [1.7.2] — 2026-09-12 — follow-through core: topology writes, the cycle writers, mutes (F1–F15)
+
+An audit of the shipped surface found four things the ENGINE needed that no API
+could write: `flock_cycles.end_date` (closing a cycle was impossible, while the
+KPI windows, the quality verdicts and the threshold hash all key off it),
+`mortality_records` (KPI mortality could only ever read zero while daily reports
+stored their own count), `maintenance_mutes` (read by every alert evaluation,
+writable only from the ORM — the model said "via Django Admin" and no admin
+registration ever shipped), and the org's own topology (nothing could create a
+farm/saloon/position except SQL). This wave implements the documented
+follow-through CORE (`docs/api-followthrough-v1.md` F1–F15) plus the member role
+change. Additive-only: **zero new tables, zero migrations**, no change to any
+existing path.
+
+### Added — tenant topology writes
+- `POST /farms/` (F1, owner) and `PATCH|DELETE /farms/{id}/` (F2/F3, owner):
+  geography validated (village must belong to the city), delete refused with
+  `409 farm not empty`.
+- `POST /farms/{id}/saloons/` (F4, manager+) and `PATCH|DELETE /saloons/{id}/`
+  (F5/F6, manager+): a saloon is deletable only with no flock history at all and
+  no telemetry history (the schema is stricter than the spec's "no active flock"
+  — see the fix below).
+- `POST /saloons/{id}/positions/` (F7) and `PATCH .../positions/{pid}/` (F8,
+  manager+), duplicate label `409`.
+- **Every farm/saloon creation mints its `legacy_slug_map` row in the same
+  transaction**, so the Flutter compat aliases resolve a brand-new farm at once;
+  the slug convention now lives in one module (`apps/compat/legacy_slugs.py`)
+  that the ops backfill command calls too.
+
+### Added — the two writers the engine was missing
+- `PATCH /saloons/{id}/flocks/{fid}/close/` (F14, engineer+): sets `end_date`,
+  the only writer there is, and the save re-arms the saloon's threshold hash
+  through the existing post_save fast path. Only the ACTIVE cycle closes.
+- `POST /saloons/{id}/flocks/{fid}/mortality/` (F15, engineer+): writes
+  `mortality_records` — the table `/saloons/{id}/kpis/` computes `mortality_pct`
+  and its daily series from. Direct entry sits BESIDE the daily-report counts.
+
+### Added — reads and windows
+- `GET /alerts/` (F9, engineer+): the org-wide feed (farm/saloon/status/tier/
+  metric filters, `{results, count}`) beside the per-saloon read.
+- `GET /overview/` (F10, any member): multi-farm home rollup with totals.
+- `GET|POST /maintenance-mutes/` + `DELETE /maintenance-mutes/{id}/` (F11–F13,
+  manager+): first REST surface for the mute table; ≤72 h, no overlap per
+  saloon, revoke early.
+
+### Added — members + contract
+- `PATCH /org/members/{member_id}/` (owner-only): role change with a self-change
+  refusal (an owner demoting themselves would lock the org out) and live refresh
+  lines revoked in the same transaction (claims are frozen at token birth).
+- `reviewer` is now GRANTABLE: the v1.5 reports wave defined the role but the
+  invite enum rejected it, so no org could produce one.
+- **Erratum ratified**: the four manager-side gateway lifecycle twins
+  (suspend/resume/rotate-credential/rotation-ack) shipped in v0.5 and were never
+  documented; they are in the yaml now and the contract gate's `ERRATUM_PENDING`
+  set is EMPTY.
+- Contract yaml ratified 1.7.1 → **1.7.2** (+20 paths, 1 new component); the
+  generated mirror was regenerated in the same wave.
+
+### Fixed along the way
+- The module-coverage gate only recognised `api.py`, so the new
+  `api_follow.py`-style modules would have been invisible to it — the exact
+  aggregate-hole class the gate was written for (widened to `api*.py`).
+- A refused delete no longer leaves a `*_DELETED` audit trail: the audit row is
+  written only after the delete succeeds (the FKs are RESTRICT, so deletions
+  carry their ids in `details`).
+- Hard deletes are judged by a shared guard (`services_follow.delete_row`) that
+  refuses on a backend whose history tables do not exist instead of dying inside
+  Django's collector.
+- **F6 promised a delete the database refuses.** `flock_cycles.saloon` is
+  `ON DELETE RESTRICT`, so a saloon that ever housed a flock — a CLOSED cycle
+  included — can never be hard-deleted. The sqlite test loop could not see it
+  (Django's collector only emulates that constraint), so the first Postgres run
+  of `test_followthrough_core.py` found the guard reaching a row the DB would
+  never release. The guard now reports the real rule in three distinct verdicts
+  (active flock / flock history / telemetry history), and the Postgres-only test
+  `test_saloon_delete_refuses_when_measured` pins the telemetry branch the sqlite
+  loop cannot exercise.
+
+## [1.7.1] — 2026-09-12 — threshold-template write surface (O13–O16)
 
 Owner decision 2026-09-12: the seeded-only template rule is lifted, so a manager
 can tune bands per breed without a deploy and an engineer can prepare next

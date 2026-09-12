@@ -348,7 +348,15 @@ class MaintenanceMute(models.Model):
     """Planned-maintenance mute windows (GS-MAINT-MUTE, 2026-08-23 — Tracker §4i).
     While active for a saloon, threshold-crossing and duration-filter alerts are
     SUPPRESSED (readings still logged); velocity emergencies ALWAYS bypass mutes
-    (Decision 10 invariant). Managed via Django Admin in v1 — no REST endpoint."""
+    (Decision 10 invariant).
+
+    v1.7.2 (2026-09-12, F11–F13) SUPERSEDES the original "Managed via Django
+    Admin in v1 — no REST endpoint" note: no admin registration ever shipped, so
+    for three versions this table was read by every alert evaluation and
+    writable by nothing but the ORM and tests. The REST surface is now
+    `GET|POST /maintenance-mutes/` + `DELETE /maintenance-mutes/{id}/`
+    (apps/alerts/api_follow.py), owner-sided rules in apps/alerts/services_follow.py.
+    """
 
     id = models.AutoField(primary_key=True)
     org = models.ForeignKey("tenants.Organization", on_delete=models.RESTRICT, related_name="+")

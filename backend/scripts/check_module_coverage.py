@@ -8,8 +8,12 @@ Aggregate green is necessary but not sufficient.
 
 What it does:
   - FAIL (exit 1) when any request-path file is below 80:
-    *views*.py, api.py, consumers*.py, ws*.py
-    (the live UX contract — a thinly tested view ships 500s to farmers)
+    *views*.py, api*.py, consumers*.py, ws*.py
+    (the live UX contract — a thinly tested view ships 500s to farmers).
+    v1.7.2: the match widened from `api.py` to `api*.py`. The follow-through
+    wave ships `api_follow.py` / `views_follow.py`-style modules, and the exact
+    name `api.py` would have left the NEWEST request paths outside this gate —
+    the same aggregate-hole class the 2026-09-07 audit created this script for.
   - WARN (exit 0, listed) when any service file is below 90:
     *services*.py, services/*.py
     (the safety math — breach/firing/sweeps deserve the M4 >=90% bar)
@@ -45,7 +49,7 @@ def _bucket(filename: str) -> str | None:
     name = low.rsplit("/", 1)[-1]
     if "service" in low:
         return "services"
-    if "view" in name or name == "api.py" or "consumer" in name or name.startswith("ws"):
+    if "view" in name or name.startswith("api") or "consumer" in name or name.startswith("ws"):
         return "views"
     return None
 
