@@ -25,6 +25,6 @@
 | H0 | Gateway HW register + retire (`POST /platform/support/hardware/gateways/`, retire path), platform-staff session only, audited | v0.8 | serial+slot linked without SQL; sync passes right after; 409 on occupied; contract 1.7.3 | ✅ done 2026-09-12 (`apps/accounts/api_hardware.py`, 13-test module, yaml 1.7.3) |
 | H1 | Sensor HW register + retire (same pattern, `HardwareRegistry`) | H0 | same semantics; unknown unit → 400 downstream, never silent | ✅ done 2026-09-12 (same module/tests/contract as H0) |
 | H2 | Actuator HW register + retire (same pattern, `ActuatorHardwareRegistry`) | H0 | same-shape, covered by the H-track test module | ✅ done 2026-09-12 (same module/tests/contract as H0) |
-| H3 | Gateway replacement ceremony: retire old unit + fresh one-time creds + revoke old EMQX authn user + slot/ACL continuity | H0 | old password dead at broker, new connects, no gap beyond the swap | ⏳ next |
-| H4 | Downlink ACL provisioning (T5–T9 ota/commands rules) for real gateways | H0 | HIL `--target real` P5/P6 have rules (today: no-match deny) | ⏳ next |
-| H5 | Verify-only: platform staff reach O9 diagnostics + LOS alerts via support session | v0.7 | checklist green, no code expected | ⏳ with H3/H4 |
+| H3 | Gateway replacement ceremony: retire old unit + fresh one-time creds + revoke old EMQX authn user + slot/ACL continuity | H0 | old password dead at broker, new connects, no gap beyond the swap | ✅ done 2026-09-12 (replace endpoint, one-time password never re-issued, FNV-soft broker push, contract 1.7.4) |
+| H4 | Downlink ACL provisioning (T5–T9 ota/commands rules) for real gateways | H0 | HIL `--target real` P5/P6 have rules (today: no-match deny) | ✅ done 2026-09-12 (acl-backfill endpoint, additive-only, re-runs add zero, contract 1.7.4) |
+| H5 | Verify-only: platform staff reach O9 diagnostics + LOS alerts via support session | v0.7 | checklist green, no code expected | ⏳ with B-wave verification |

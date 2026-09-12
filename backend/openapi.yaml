@@ -1,10 +1,15 @@
 openapi: "3.0.3"
 info:
   title: Morghdari Poultry Monitoring API
-  version: "1.7.3"
+  version: "1.7.4"
   description: |
     REST API for the Morghdari multi-tenant poultry monitoring platform.
     WebSocket protocol is documented separately in the Frontend Integration Spec.
+
+    v1.7.4 (2026-09-12 — H3/H4 close the hardware track): the gateway
+    replacement ceremony (retire + fresh one-time credential + broker
+    continuity, replays never re-issue) and the T1–T9 downlink ACL backfill
+    for pre-M8-04-H slots.
 
     v1.7.3 (2026-09-12 — the Hardware Team write path, v0.9 H0–H2): the six
     platform hardware endpoints (register + retire x gateway/sensor/actuator)
@@ -2065,6 +2070,75 @@ paths:
           description: No active support session for this org
         '404':
           description: Hardware row not found in the session org
+
+  /platform/support/hardware/gateways/{hw_id}/replace/:
+    post:
+      tags: [Platform Support]
+      summary: Swap the live gateway unit with fresh credentials (v0.9 H3)
+      description: >
+        One atomic ceremony: retire the old unit, register the new serial,
+        and set a FRESH MQTT password on the slot credential (old password
+        dies with the swap). The plaintext returns EXACTLY ONCE — replays
+        answer idempotent:true with an empty password and never re-issue.
+        Broker push is FNV-soft. Writes SUPPORT_OP_HW_REPLACE (never the
+        plaintext).
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - name: hw_id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [new_hardware_id, reason]
+              properties:
+                new_hardware_id: { type: string }
+                reason: { type: string }
+      responses:
+        '200':
+          description: Swap complete (or replayed → idempotent); audit row written
+        '403':
+          description: No active support session for this org
+        '404':
+          description: Hardware row not active in the session org
+        '409':
+          description: New serial already live in this org
+
+  /platform/support/hardware/gateways/{slot_id}/acl-backfill/:
+    post:
+      tags: [Platform Support]
+      summary: Backfill the full T1–T9 MQTT rule set onto a slot (v0.9 H4)
+      description: >
+        Slots approved before M8-04-H carry telemetry/status rules only.
+        Creates the missing allow-rows from the canonical set (additive-only,
+        re-runs add zero) and re-pushes the broker sync. Writes
+        SUPPORT_OP_HW_ACL_BACKFILL.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - name: slot_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string }
+      responses:
+        '200':
+          description: Rule set complete; audit row written
+        '403':
+          description: No active support session for this org
+        '404':
+          description: Gateway slot not found in the session org
 
   /platform/support/tasks/drain/:
     post:

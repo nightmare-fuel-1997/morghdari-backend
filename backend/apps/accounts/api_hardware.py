@@ -31,13 +31,21 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.accounts.serializers import (
+    HardwareAclBackfillResponseSerializer,
     HardwareRegisterRequestSerializer,
     HardwareRegisterResponseSerializer,
+    HardwareReplaceRequestSerializer,
+    HardwareReplaceResponseSerializer,
     HardwareRetireRequestSerializer,
     HardwareRetireResponseSerializer,
 )
 from apps.accounts.views import _audit_support_op, _support_op_context
 from apps.common.schemas import CONFLICT_RESPONSE, TAG_SUPPORT, error_responses
+from apps.mqtt_auth.services import (
+    hash_password,
+    sync_gateway_acls,
+    update_gateway_user_password,
+)
 
 _KINDS = ("gateway", "sensor", "actuator")
 
@@ -248,3 +256,192 @@ def hw_actuator_register(request):
 def hw_actuator_retire(request, hw_id: int):
     """POST /platform/support/hardware/actuators/{hw_id}/retire/."""
     return _retire(request, "actuator", hw_id)
+
+
+@extend_schema(
+    tags=[TAG_SUPPORT],
+    operation_id="hw_gateway_replace",
+    summary="Swap the live gateway unit with fresh credentials (H3)",
+    description="""Replacement ceremony in one atomic DB transaction: retire the
+old unit, register the new serial, and set a FRESH MQTT password on the
+slot's credential (the old password dies with the swap). The plaintext is
+returned EXACTLY ONCE — a replayed ceremony answers idempotent:true with an
+empty password and never re-issues. Broker push is FNV-soft
+(broker_synced:false still completes the ceremony; rotation heals a missed
+push). Writes SUPPORT_OP_HW_REPLACE — never the plaintext.""",
+    request=HardwareReplaceRequestSerializer,
+    responses={
+        200: HardwareReplaceResponseSerializer,
+        409: CONFLICT_RESPONSE,
+        **error_responses(400, 401, 403, 404),
+    },
+    examples=[
+        OpenApiExample(
+            "Replace a dead unit",
+            request_only=True,
+            value={"new_hardware_id": "GW-2026-0043", "reason": "lightning strike, INC-2041"},
+        )
+    ],
+)
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def hw_gateway_replace(request, hw_id: int):
+    """POST /platform/support/hardware/gateways/{hw_id}/replace/ (H3)."""
+    import secrets
+
+    from django.db import transaction
+
+    org_id, incident_id, denied = _support_op_context(request)
+    if denied is not None:
+        return denied
+    new_hw = str(request.data.get("new_hardware_id") or "").strip()
+    reason = str(request.data.get("reason") or "").strip()
+    if not new_hw:
+        return Response({"error": "new_hardware_id required"}, status=400)
+    if not reason:
+        return Response({"error": "reason required"}, status=400)
+
+    from apps.devices.models import GatewayHardwareRegistry
+
+    old = GatewayHardwareRegistry.objects.filter(
+        pk=hw_id, org_id=org_id, removed_at__isnull=True
+    ).first()
+    if old is None:
+        # Replay path: the ceremony already ran — the new unit is live.
+        # Answer the stored state WITHOUT re-issuing (the one-time password
+        # must never be emitted twice).
+        live = GatewayHardwareRegistry.objects.filter(
+            hardware_id=new_hw, org_id=org_id, removed_at__isnull=True
+        ).first()
+        if live is not None:
+            return Response(
+                {
+                    "old_id": hw_id,
+                    "new_id": live.pk,
+                    "slot_id": live.slot_id,
+                    "username": live.slot_id,
+                    "password": "",
+                    "broker_synced": False,
+                    "idempotent": True,
+                }
+            )
+        return Response({"error": "hardware row not active in the session org"}, status=404)
+    if new_hw == old.hardware_id:
+        return Response({"error": "new_hardware_id must differ from the live unit"}, status=400)
+    clash = GatewayHardwareRegistry.objects.filter(
+        hardware_id=new_hw, org_id=org_id, removed_at__isnull=True
+    ).first()
+    if clash is not None:
+        return Response({"error": "new_hardware_id already live in this org"}, status=409)
+
+    from apps.mqtt_auth.models import MqttDeviceCredential
+
+    password = secrets.token_urlsafe(32)
+    with transaction.atomic():
+        old.removed_at = timezone.now()
+        old.removed_by = request.user
+        old.save(update_fields=["removed_at", "removed_by"])
+        new_row = GatewayHardwareRegistry.objects.create(
+            slot=old.slot, org_id=org_id, hardware_id=new_hw, installed_by=request.user
+        )
+        credential, _ = MqttDeviceCredential.objects.get_or_create(
+            device_id=old.slot_id,
+            defaults={
+                "username": old.slot_id,
+                "password_hash": hash_password(password),
+            },
+        )
+        credential.username = old.slot_id
+        credential.password_hash = hash_password(password)
+        credential.pending_password_hash = None
+        credential.is_active = True
+        credential.last_rotated_at = timezone.now()
+        credential.save()
+
+    broker_ok = update_gateway_user_password(old.slot_id, password)
+    acl = sync_gateway_acls(new_row.slot)
+    broker_synced = bool(broker_ok) and bool(acl.get("reachable"))
+    _audit_support_op(
+        request, org_id, "SUPPORT_OP_HW_REPLACE", incident_id,
+        {
+            "old_id": old.pk,
+            "new_id": new_row.pk,
+            "slot_id": old.slot_id,
+            "username": old.slot_id,
+            "broker_synced": broker_synced,
+            "reason": reason,
+        },
+    )
+    return Response(
+        {
+            "old_id": old.pk,
+            "new_id": new_row.pk,
+            "slot_id": old.slot_id,
+            "username": old.slot_id,
+            "password": password,
+            "broker_synced": broker_synced,
+        }
+    )
+
+
+@extend_schema(
+    tags=[TAG_SUPPORT],
+    operation_id="hw_gateway_acl_backfill",
+    summary="Backfill the full T1–T9 MQTT rule set onto a slot (H4)",
+    description="""Slots approved before M8-04-H carry telemetry/status rules
+only — under no_match=deny the real firmware's downlink (T3/T5/T6/T8) and
+response publishes (T4/T7/T9) die at the broker. This creates the missing
+allow-rows from the canonical `gateway_acl_rule_items` set (additive-only,
+re-runs add zero) and re-pushes the broker sync. Writes
+SUPPORT_OP_HW_ACL_BACKFILL.""",
+    request=HardwareRetireRequestSerializer,
+    responses={
+        200: HardwareAclBackfillResponseSerializer,
+        **error_responses(400, 401, 403, 404),
+    },
+    examples=[
+        OpenApiExample(
+            "Backfill downlink rules",
+            request_only=True,
+            value={"reason": "pre-H4 slot, INC-2041"},
+        )
+    ],
+)
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def hw_gateway_acl_backfill(request, slot_id: str):
+    """POST /platform/support/hardware/gateways/{slot_id}/acl-backfill/ (H4)."""
+    org_id, incident_id, denied = _support_op_context(request)
+    if denied is not None:
+        return denied
+    reason = str(request.data.get("reason") or "").strip()
+    if not reason:
+        return Response({"error": "reason required"}, status=400)
+
+    from apps.devices.models import GatewaySlot
+    from apps.mqtt_auth.models import MqttAclRule
+    from apps.provisioning.api import gateway_acl_rule_items
+
+    slot = GatewaySlot.objects.filter(pk=slot_id, org_id=org_id).first()
+    if slot is None:
+        return Response({"error": "gateway not found in the session org"}, status=404)
+    if slot.farm_id is None:
+        return Response({"error": "slot has no farm; attach a farm first"}, status=400)
+
+    added = 0
+    for item in gateway_acl_rule_items(str(org_id), slot.farm_id, slot.slot_id):
+        _, created = MqttAclRule.objects.get_or_create(
+            username=slot.slot_id, action=item["action"], topic=item["topic"],
+            defaults={"permission": "allow"},
+        )
+        added += bool(created)
+    total = MqttAclRule.objects.filter(username=slot.slot_id).count()
+    acl = sync_gateway_acls(slot)
+    broker_synced = bool(acl.get("reachable"))
+    _audit_support_op(
+        request, org_id, "SUPPORT_OP_HW_ACL_BACKFILL", incident_id,
+        {"slot_id": slot.slot_id, "added": added, "rules_total": total, "reason": reason},
+    )
+    return Response(
+        {"slot_id": slot.slot_id, "rules_total": total, "added": added, "broker_synced": broker_synced}
+    )

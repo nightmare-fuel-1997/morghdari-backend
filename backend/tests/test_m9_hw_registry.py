@@ -340,3 +340,173 @@ class ActuatorHardwareTests(HardwareRegistryBase):
         self.assertEqual(retired.status_code, 200)
         row = ActuatorHardwareRegistry.objects.get(pk=created.data["id"])
         self.assertIsNotNone(row.removed_at)
+
+
+class GatewayReplaceTests(HardwareRegistryBase):
+    """H3 — the replacement ceremony: retire + fresh creds + broker continuity."""
+
+    def _active_hw(self, hw="HW-OLD-1"):
+        self._authed()
+        response = self.client.post(
+            reverse("accounts:hw-gateway-register"),
+            {"slot_id": "HW-GW-01", "hardware_id": hw, "reason": "x"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        return response.data["id"]
+
+    def _credential(self):
+        from apps.mqtt_auth.models import MqttDeviceCredential
+        from apps.mqtt_auth.services import hash_password
+
+        return MqttDeviceCredential.objects.create(
+            device_id="HW-GW-01", username="HW-GW-01", password_hash=hash_password("old-secret")
+        )
+
+    def test_replace_retires_old_issues_creds_and_audits(self):
+        from unittest import mock
+
+        old_id = self._active_hw()
+        self._credential()
+        with mock.patch(
+            "apps.accounts.api_hardware.update_gateway_user_password", return_value=True
+        ) as push, mock.patch(
+            "apps.accounts.api_hardware.sync_gateway_acls",
+            return_value={"synced": 9, "reachable": True},
+        ) as sync:
+            response = self.client.post(
+                reverse("accounts:hw-gateway-replace", kwargs={"hw_id": old_id}),
+                {"new_hardware_id": "HW-NEW-1", "reason": "lightning strike"},
+                format="json",
+            )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertTrue(response.data["broker_synced"])
+        self.assertEqual(response.data["username"], "HW-GW-01")
+        self.assertTrue(response.data["password"])
+        push.assert_called_once()
+        self.assertEqual(push.call_args.args[0], "HW-GW-01")
+        sync.assert_called_once()
+        self.assertIsNotNone(GatewayHardwareRegistry.objects.get(pk=old_id).removed_at)
+        new_row = GatewayHardwareRegistry.objects.get(
+            hardware_id="HW-NEW-1", removed_at__isnull=True
+        )
+        self.assertEqual(new_row.slot_id, "HW-GW-01")
+        self.assertEqual(response.data["new_id"], new_row.pk)
+        audit = AccountActivityLog.objects.filter(action="SUPPORT_OP_HW_REPLACE").order_by("-id").first()
+        self.assertIsNotNone(audit)
+        self.assertEqual(audit.details["incident_id"], "INC-HW")
+        self.assertNotIn("password", audit.details)
+
+    def test_replace_replay_does_not_reissue_password(self):
+        from unittest import mock
+
+        from apps.mqtt_auth.models import MqttDeviceCredential
+
+        old_id = self._active_hw()
+        self._credential()
+        body = {"new_hardware_id": "HW-NEW-2", "reason": "x"}
+        url = reverse("accounts:hw-gateway-replace", kwargs={"hw_id": old_id})
+        with mock.patch("apps.accounts.api_hardware.update_gateway_user_password", return_value=True), mock.patch(
+            "apps.accounts.api_hardware.sync_gateway_acls", return_value={"synced": 9, "reachable": True}
+        ):
+            first = self.client.post(url, body, format="json")
+            issued_hash = MqttDeviceCredential.objects.get(username="HW-GW-01").password_hash
+            second = self.client.post(url, body, format="json")
+        self.assertEqual(first.status_code, 200)
+        self.assertTrue(first.data["password"])
+        self.assertEqual(second.status_code, 200)
+        self.assertTrue(second.data["idempotent"])
+        self.assertEqual(second.data["password"], "")
+        self.assertEqual(second.data["new_id"], first.data["new_id"])
+        # no second issuance: the DB hash is untouched by the replay
+        self.assertEqual(
+            MqttDeviceCredential.objects.get(username="HW-GW-01").password_hash, issued_hash
+        )
+
+    def test_replace_broker_down_still_completes_ceremony(self):
+        from unittest import mock
+
+        old_id = self._active_hw()
+        self._credential()
+        with mock.patch(
+            "apps.accounts.api_hardware.update_gateway_user_password", return_value=False
+        ), mock.patch(
+            "apps.accounts.api_hardware.sync_gateway_acls",
+            return_value={"synced": 0, "reachable": False},
+        ):
+            response = self.client.post(
+                reverse("accounts:hw-gateway-replace", kwargs={"hw_id": old_id}),
+                {"new_hardware_id": "HW-NEW-3", "reason": "x"},
+                format="json",
+            )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertFalse(response.data["broker_synced"])
+        self.assertTrue(
+            GatewayHardwareRegistry.objects.filter(hardware_id="HW-NEW-3", removed_at__isnull=True).exists()
+        )
+
+    def test_replace_validates(self):
+        old_id = self._active_hw()
+        url = reverse("accounts:hw-gateway-replace", kwargs={"hw_id": old_id})
+        self.assertEqual(
+            self.client.post(url, {"new_hardware_id": "HW-X"}, format="json").status_code, 400
+        )
+        self.assertEqual(
+            self.client.post(
+                reverse("accounts:hw-gateway-replace", kwargs={"hw_id": 424243}), {"new_hardware_id": "HW-X", "reason": "x"}, format="json"
+            ).status_code,
+            404,
+        )
+
+
+class GatewayAclBackfillTests(HardwareRegistryBase):
+    """H4 — pre-M8-04-H slots carry telemetry/status rules only; backfill the T1–T9 set."""
+
+    def _legacy_rules(self):
+        from apps.mqtt_auth.models import MqttAclRule, MqttDeviceCredential
+        from apps.mqtt_auth.services import hash_password
+
+        MqttDeviceCredential.objects.create(
+            device_id="HW-GW-01", username="HW-GW-01", password_hash=hash_password("s3cret")
+        )
+        base = f"{self.org.org_id}/farms/{self.farm.pk}/gateways/HW-GW-01"
+        MqttAclRule.objects.create(username="HW-GW-01", action="publish", topic=f"{base}/telemetry", permission="allow")
+        MqttAclRule.objects.create(username="HW-GW-01", action="publish", topic=f"{base}/status", permission="allow")
+
+    def test_backfill_adds_missing_downlink_rules(self):
+        from unittest import mock
+
+        self._legacy_rules()
+        self._authed()
+        with mock.patch(
+            "apps.accounts.api_hardware.sync_gateway_acls",
+            return_value={"synced": 9, "reachable": True},
+        ) as sync:
+            response = self.client.post(
+                reverse("accounts:hw-gateway-acl-backfill", kwargs={"slot_id": "HW-GW-01"}),
+                {"reason": "pre-H4 slot"},
+                format="json",
+            )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["rules_total"], 9)
+        self.assertEqual(response.data["added"], 7)
+        self.assertTrue(response.data["broker_synced"])
+        sync.assert_called_once()
+        again = self.client.post(
+            reverse("accounts:hw-gateway-acl-backfill", kwargs={"slot_id": "HW-GW-01"}),
+            {"reason": "pre-H4 slot"},
+            format="json",
+        )
+        self.assertEqual(again.data["added"], 0)
+        self.assertEqual(again.data["rules_total"], 9)
+
+    def test_backfill_foreign_slot_is_404(self):
+        other = Organization.objects.create(name="HW-OTHER-2")
+        GatewaySlot.objects.create(slot_id="HW-GW-OTHER", org=other, provisioning_status="PROVISIONED")
+        self._authed()
+        response = self.client.post(
+            reverse("accounts:hw-gateway-acl-backfill", kwargs={"slot_id": "HW-GW-OTHER"}),
+            {"reason": "x"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 404)

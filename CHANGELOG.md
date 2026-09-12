@@ -46,6 +46,16 @@ alerting in minutes — each step measured against its RTO.
 - M8-04/05/06 parked as `v0.8-HIL` (hardware-team owned, backend-only close
   per owner 2026-09-12). Tag `v0.8-DR` (push waived — no remote).
 
+## [1.7.4] — 2026-09-12 — Replacement ceremony + downlink backfill (H3–H4)
+
+H3 `POST /platform/support/hardware/gateways/{hw_id}/replace/`: one atomic
+swap — retire old unit, register new serial, fresh MQTT password on the slot
+credential (old dies with the swap). Plaintext exactly once; replays answer
+idempotent with an empty password and never re-issue; broker push FNV-soft.
+H4 backfills the full T1–T9 allow-rule set onto pre-M8-04-H slots
+(additive-only, re-runs add zero) and re-pushes the broker sync. Both audited
+(`SUPPORT_OP_HW_REPLACE` / `SUPPORT_OP_HW_ACL_BACKFILL`, never the plaintext).
+
 ## [1.7.3] — 2026-09-12 — Hardware Team write path (H0–H2, v0.9 pilot backend)
 
 Six platform endpoints behind the audited support session: register + retire

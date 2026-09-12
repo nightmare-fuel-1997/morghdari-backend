@@ -1,9 +1,9 @@
 openapi: 3.0.3
 info:
   title: Morghdari Poultry Monitoring API
-  version: 1.7.3
+  version: 1.7.4
   description: |-
-    REST API for the Morghdari multi-tenant poultry monitoring platform. Contract v1.7.3 (ops wave + merged daily-report schemas + the threshold-template write surface O13–O16 + the follow-through core: tenant topology writes F1–F8, flock close F14, direct mortality entry F15, org alert feed F9, home rollup F10, maintenance-mute windows F11–F13, member role change, the ratified manager-side gateway lifecycle twins, and the Hardware Team write path H0–H2: platform hardware register + retire x gateway/sensor/actuator).
+    REST API for the Morghdari multi-tenant poultry monitoring platform. Contract v1.7.4 (ops wave + merged daily-report schemas + the threshold-template write surface O13–O16 + the follow-through core: tenant topology writes F1–F8, flock close F14, direct mortality entry F15, org alert feed F9, home rollup F10, maintenance-mute windows F11–F13, member role change, the ratified manager-side gateway lifecycle twins, the Hardware Team write path H0–H2, the gateway replacement ceremony H3, and the downlink ACL backfill H4).
 
     Authentication: Bearer JWT (15-min access token, 7-day refresh token; rotation is intentionally OFF — deactivated members fail closed via org-claim re-derivation). Gateway devices use HTTP Basic (username = gateway_slot_id) on the config endpoint only.
 
@@ -3660,6 +3660,87 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: Not found — id/slug unknown OR outside the caller's org (never
             distinguished).
+  /api/v1/platform/support/hardware/gateways/{hw_id}/replace/:
+    post:
+      operationId: hw_gateway_replace
+      description: |-
+        Replacement ceremony in one atomic DB transaction: retire the
+        old unit, register the new serial, and set a FRESH MQTT password on the
+        slot's credential (the old password dies with the swap). The plaintext is
+        returned EXACTLY ONCE — a replayed ceremony answers idempotent:true with an
+        empty password and never re-issues. Broker push is FNV-soft
+        (broker_synced:false still completes the ceremony; rotation heals a missed
+        push). Writes SUPPORT_OP_HW_REPLACE — never the plaintext.
+      summary: Swap the live gateway unit with fresh credentials (H3)
+      parameters:
+      - in: path
+        name: hw_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Platform Support
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HardwareReplaceRequestRequest'
+            examples:
+              ReplaceADeadUnit:
+                value:
+                  new_hardware_id: GW-2026-0043
+                  reason: lightning strike, INC-2041
+                summary: Replace a dead unit
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/HardwareReplaceRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/HardwareReplaceRequestRequest'
+        required: true
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HardwareReplaceResponse'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Conflict — state precondition failed (e.g. concurrent sync
+            lock, wrong flock state).
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Validation error — malformed input, bad enum, or out-of-range
+            value.
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Not found — id/slug unknown OR outside the caller's org (never
+            distinguished).
   /api/v1/platform/support/hardware/gateways/{hw_id}/retire/:
     post:
       operationId: hw_gateway_retire
@@ -3703,6 +3784,78 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HardwareRetireResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Validation error — malformed input, bad enum, or out-of-range
+            value.
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Not found — id/slug unknown OR outside the caller's org (never
+            distinguished).
+  /api/v1/platform/support/hardware/gateways/{slot_id}/acl-backfill/:
+    post:
+      operationId: hw_gateway_acl_backfill
+      description: |-
+        Slots approved before M8-04-H carry telemetry/status rules
+        only — under no_match=deny the real firmware's downlink (T3/T5/T6/T8) and
+        response publishes (T4/T7/T9) die at the broker. This creates the missing
+        allow-rows from the canonical `gateway_acl_rule_items` set (additive-only,
+        re-runs add zero) and re-pushes the broker sync. Writes
+        SUPPORT_OP_HW_ACL_BACKFILL.
+      summary: Backfill the full T1–T9 MQTT rule set onto a slot (H4)
+      parameters:
+      - in: path
+        name: slot_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - Platform Support
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HardwareRetireRequestRequest'
+            examples:
+              BackfillDownlinkRules:
+                value:
+                  reason: pre-H4 slot, INC-2041
+                summary: Backfill downlink rules
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/HardwareRetireRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/HardwareRetireRequestRequest'
+        required: true
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HardwareAclBackfillResponse'
           description: ''
         '400':
           content:
@@ -8704,6 +8857,24 @@ components:
       - city_id
       - id
       - name
+    HardwareAclBackfillResponse:
+      type: object
+      properties:
+        slot_id:
+          type: string
+        rules_total:
+          type: integer
+          description: Allow-rows after the backfill (full T1–T9 set is 9).
+        added:
+          type: integer
+          description: Rows created by this call (0 on re-run).
+        broker_synced:
+          type: boolean
+      required:
+      - added
+      - broker_synced
+      - rules_total
+      - slot_id
     HardwareRegisterRequestRequest:
       type: object
       description: |-
@@ -8748,6 +8919,54 @@ components:
       - hardware_id
       - id
       - slot_id
+    HardwareReplaceRequestRequest:
+      type: object
+      description: 'Swap the live gateway unit: retire + fresh credential in one ceremony
+        (H3).'
+      properties:
+        new_hardware_id:
+          type: string
+          minLength: 1
+          description: Factory serial of the replacement unit.
+        reason:
+          type: string
+          minLength: 1
+          description: MANDATORY justification — a blank value is a 400.
+      required:
+      - new_hardware_id
+      - reason
+    HardwareReplaceResponse:
+      type: object
+      properties:
+        old_id:
+          type: integer
+          description: Retired registry row pk.
+        new_id:
+          type: integer
+          description: New active registry row pk.
+        slot_id:
+          type: string
+        username:
+          type: string
+          description: MQTT username (== slot id, unchanged by the swap).
+        password:
+          type: string
+          description: One-time plaintext for the new unit — returned ONLY on first
+            success; replays answer idempotent:true with an empty password (never
+            re-emitted).
+        broker_synced:
+          type: boolean
+          description: False means the broker push failed soft (rotation heals it)
+            — the DB ceremony still completed.
+        idempotent:
+          type: boolean
+      required:
+      - broker_synced
+      - new_id
+      - old_id
+      - password
+      - slot_id
+      - username
     HardwareRetireRequestRequest:
       type: object
       properties:

@@ -396,3 +396,32 @@ class HardwareRetireResponseSerializer(serializers.Serializer):
     idempotent = serializers.BooleanField(
         required=False, help_text="Present (true) only when the row was already retired."
     )
+
+
+class HardwareReplaceRequestSerializer(serializers.Serializer):
+    """Swap the live gateway unit: retire + fresh credential in one ceremony (H3)."""
+
+    new_hardware_id = serializers.CharField(help_text="Factory serial of the replacement unit.")
+    reason = serializers.CharField(help_text="MANDATORY justification — a blank value is a 400.")
+
+
+class HardwareReplaceResponseSerializer(serializers.Serializer):
+    old_id = serializers.IntegerField(help_text="Retired registry row pk.")
+    new_id = serializers.IntegerField(help_text="New active registry row pk.")
+    slot_id = serializers.CharField()
+    username = serializers.CharField(help_text="MQTT username (== slot id, unchanged by the swap).")
+    password = serializers.CharField(
+        help_text="One-time plaintext for the new unit — returned ONLY on first success; "
+        "replays answer idempotent:true with an empty password (never re-emitted)."
+    )
+    broker_synced = serializers.BooleanField(
+        help_text="False means the broker push failed soft (rotation heals it) — the DB ceremony still completed."
+    )
+    idempotent = serializers.BooleanField(required=False)
+
+
+class HardwareAclBackfillResponseSerializer(serializers.Serializer):
+    slot_id = serializers.CharField()
+    rules_total = serializers.IntegerField(help_text="Allow-rows after the backfill (full T1–T9 set is 9).")
+    added = serializers.IntegerField(help_text="Rows created by this call (0 on re-run).")
+    broker_synced = serializers.BooleanField()

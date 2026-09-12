@@ -21,7 +21,9 @@ from apps.accounts.views import (
 from apps.accounts.api_hardware import (
     hw_actuator_register,
     hw_actuator_retire,
+    hw_gateway_acl_backfill,
     hw_gateway_register,
+    hw_gateway_replace,
     hw_gateway_retire,
     hw_sensor_register,
     hw_sensor_retire,
@@ -68,6 +70,19 @@ urlpatterns = [
         "platform/support/hardware/gateways/<int:hw_id>/retire/",
         hw_gateway_retire,
         name="hw-gateway-retire",
+    ),
+    # v0.9 H3/H4 — Django resolves the FIRST matching pattern regardless of
+    # method (v1.7.2 lesson): these full paths cannot shadow each other
+    # (<int:hw_id>/replace/ vs <str:slot_id>/acl-backfill/ are disjoint).
+    path(
+        "platform/support/hardware/gateways/<int:hw_id>/replace/",
+        hw_gateway_replace,
+        name="hw-gateway-replace",
+    ),
+    path(
+        "platform/support/hardware/gateways/<str:slot_id>/acl-backfill/",
+        hw_gateway_acl_backfill,
+        name="hw-gateway-acl-backfill",
     ),
     path("platform/support/hardware/sensors/", hw_sensor_register, name="hw-sensor-register"),
     path(
