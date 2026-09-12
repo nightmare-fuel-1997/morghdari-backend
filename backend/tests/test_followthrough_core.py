@@ -924,6 +924,35 @@ def _compat_ddl_guard():
     yield
 
 
+@pytest.fixture(autouse=True)
+def _telemetry_ddl_guard():
+    """PG: make sure saloon_telemetry exists (cold-DB twin of _compat_ddl_guard).
+
+    The F6 telemetry verdict queries the unmanaged hypertable, which
+    --nomigrations never creates and no earlier module creates in-session
+    (this module sorts before test_m3_*). Without this, a cold CI database
+    500s with UndefinedTable while a warm reused one passes.
+    """
+    if connection.vendor == "postgresql":
+        try:
+            from tests.conftest import _execute_sql, _sql_from_migration
+            from tests.conftest import BACKEND_DIR
+
+            with connection.cursor() as cursor:
+                if cursor.execute(
+                    "SELECT to_regclass('public.saloon_telemetry') IS NULL"
+                ).fetchone()[0]:
+                    _execute_sql(
+                        cursor,
+                        _sql_from_migration(
+                            BACKEND_DIR / "apps" / "telemetry" / "migrations" / "0002_timescale_hypertables.py"
+                        ),
+                    )
+        except Exception:  # noqa: BLE001 — best-effort, same pragmatism as _compat_ddl_guard
+            pass
+    yield
+
+
 class TestCompatSlugMinting:
     """The write path must mint legacy_slug_map rows in the same transaction.
 
