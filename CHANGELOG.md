@@ -663,3 +663,53 @@ NULLIF-hardened policy template; C-07/C-08/C-09 doc-vs-Django seams
 - Farm/saloon CRUD endpoints decision (Tracker §6)
 - KB site resync with docs changes (§7 edits not yet reflected)
 - alert_acknowledgements org_id (C-10) — APPROVED & APPLIED 2026-08-24, see [Unreleased]
+
+## [Planned → 0.8.0] — DR + real-hardware HIL (M8, v0.8 start)
+
+Started 2026-09-12 on `v0.8-m8` (owner go — hardware team procurement runs in
+parallel; the ESP32 itself is the hardware team's deliverable).
+
+### Added — M8-01 wal-g bake-in (DR §2.1/§3.3)
+- `docker/postgres-walg/` image: timescale + wal-g v3.0.9, `archive_mode=on`,
+  `archive_command=wal-g wal-push %p`, `archive_timeout=300` (RPO ≤ 1 h math)
+- Prod compose postgres → the wal-g image + WALG/AWS env block; rehearsal
+  override builds locally + adds MinIO (S3-compatible wal-g target) so the T2
+  drill runs without cloud S3 creds
+- `scripts/walg_base_backup.sh` — weekly base backup + `backup-list` evidence
+
+### Added — M8-02 T2 PITR drill (DR §3.1)
+- `scripts/pitr_rehearsal.sh` — the full drill executable end-to-end: parity
+  baseline → WAL switch → target time → stop writers (incl. EMQX) → marker
+  row → vol rm → `wal-g backup-fetch` → restore_command + recovery_target_time
+  + `recovery.signal` → replay-pause wait → marker-absent + row-parity +
+  hypertable verify → promote → restart → RTO measured + DR-log row
+- Post-drill verification covers the v1.6.0 tables (`legacy_slug_map`,
+  `daily_report_extras`) per Tracker §4o/§4s
+
+### Added — M8-03 T3 Redis-wipe drill (DR §3.2)
+- `alerts.rebuild_active_state_from_db` IMPLEMENTED (Tracker §4l Q10 park
+  lifted): re-creates breach + active-alert keys from Postgres truth; LOS and
+  REPLAY_ANALYSIS rows deliberately untouched; admin-or-default alias routing
+  (5-test module `test_m8_03_rebuild_drill.py`)
+- `thresholds.recache_*` routed through the admin alias — FIXES the M4-latent
+  no-op where the FORCE-RLS worker's midnight threshold backstop saw zero
+  saloons cross-org
+- `scripts/redis_wipe_drill.sh` — volume rm → rebuild leg → threshold warmer →
+  LOS suppression window → breach evidence → RTO measured + DR-log row
+
+### Added — C5 backend HIL readiness + Hardware Handover Harness
+- `scripts/check_hil_readiness.py` (health/hardware-time/config-route probes +
+  O9/T5–T9/OTA/LOS static gates) and `scripts/ota_checksums.py` (T6 manifest)
+- `scripts/hil_handover/hil_harness.py` (+ README) — receiver-side executable
+  acceptance for the hardware team: P1 config fetch, P2 telemetry honesty,
+  P3 LWT, P4 buffered replay w/ ORIGINAL timestamps, P5 OTA, P6 rotation;
+  `--target sim` (self-test, P5/P6 SKIP) vs `--target real` (the handover gate)
+- `versions/v0.8/DR-LOG.md` — repo-local mirror of the DR Plan §6 log
+
+### Status
+- M8-01/02/03 + C5 + harness IMPLEMENTED on `v0.8-m8`; **live drill execution
+  (RTO/RPO rows) pending stack restart**.
+- **Scope cut 2026-09-12 (backend-only close as `v0.8-DR`, owner go):**
+  M8-04/M8-05/M8-06 PARKED — no ESP32/firmware hands-on for the backend owner;
+  hardware-team owned as `v0.8-HIL` follow-up. Close claims the DR half only
+  (2 DR-log rows + `--target sim` proof), NOT the real-radio exit demo.
