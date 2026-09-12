@@ -61,6 +61,7 @@ DECLARE
     'biosecurity_events',
     'maintenance_mutes',
     'alert_subscriptions',  -- v0.9 M9-10/B2: org-wide category mutes (GS-ROUTING)
+    'user_panel_overrides',  -- v0.9 M9-08/B3: per-user panel gates (definitions + role rows are global, like the metric catalog)
     'dashboard_configs',
     'provisioning_audit_log',
     'org_offboarding_log',

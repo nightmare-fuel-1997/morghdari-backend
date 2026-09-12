@@ -1,10 +1,15 @@
 openapi: "3.0.3"
 info:
   title: Morghdari Poultry Monitoring API
-  version: "1.7.5"
+  version: "1.7.6"
   description: |
     REST API for the Morghdari multi-tenant poultry monitoring platform.
     WebSocket protocol is documented separately in the Frontend Integration Spec.
+
+    v1.7.6 (2026-09-12 — granular panels, v0.9/B3 D24-2): panel catalog +
+    role gates + user overrides with the documented resolution chain
+    (user override → role rows with deny-wins → default-open; owner_only
+    panels absolute). Reviewer read-only falls out (no write admits them).
 
     v1.7.5 (2026-09-12 — alert-subscription mutes, v0.9/B2 GS-ROUTING):
     org-wide category mutes (manager+ writes, members read) honoured at a new
@@ -2961,106 +2966,116 @@ paths:
         '403': { description: Caller lacks the doctor/vet role }
         '409': { description: An item with this name already exists in the org }
 
-  /me/panels/:
-    get:
-      tags: [Panels]
-      summary: My resolved panel permissions (v1.5 — Tracker §4n)
-      description: >
-        Returns the RESOLVED can_view/can_edit per panel: user override
-        (non-null) → role_panel → system default all-true (panels default
-        OPEN, backward-compat).
-      security: [{ BearerAuth: [] }]
-      responses:
-        '200':
-          description: Resolved panel map
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties:
-                  type: object
-                  properties:
-                    can_view: { type: boolean }
-                    can_edit: { type: boolean }
-                    resolved_from: { type: string, enum: [user_override, role_default, system_default] }
+  # §4n panel placeholders REMOVED 2026-09-12 (v0.9/B3): superseded by the
+  # shipped shape below (/panels/me/ + role-permissions + user-overrides).
+  # The shipped surface resolves visibility only (panels gate viewing; edit
+  # rights come from roles) — can_edit from the draft never materialized.
 
-  /panels/{role}/:
+  /panels/me/:
     get:
       tags: [Panels]
-      summary: Read a role's panel permissions (v1.5 — Tracker §4n)
+      summary: Resolve my visible panels (v0.9/B3, D24-2 chain)
+      description: >
+        User override → role rows (deny wins) → panel default; owner_only
+        panels open for owners only. Any member reads.
       security: [{ BearerAuth: [] }]
-      parameters:
-        - { name: role, in: path, required: true, schema: { type: string, enum: [owner, manager, engineer, doctor, worker, installer, reviewer] } }
       responses:
         '200':
-          description: Role panel rows
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  type: object
-                  properties:
-                    panel_key: { type: string }
-                    can_view: { type: boolean }
-                    can_edit: { type: boolean }
-        '403': { description: Forbidden — user not in the target org }
-    put:
+          description: Resolved panel list with source per panel
+
+  /panels/role-permissions/:
+    get:
       tags: [Panels]
-      summary: Set a role's panel permissions — owner-only admin panel (v1.5 — Tracker §4n)
+      summary: List role panel gates (v0.9/B3)
       security: [{ BearerAuth: [] }]
-      parameters:
-        - { name: role, in: path, required: true, schema: { type: string, enum: [owner, manager, engineer, doctor, worker, installer, reviewer] } }
+      responses:
+        '200':
+          description: Role gate rows
+    post:
+      tags: [Panels]
+      summary: Set a role panel gate, owner-only (v0.9/B3)
+      security: [{ BearerAuth: [] }]
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [panels]
+              required: [panel_id, role, allowed]
               properties:
-                panels:
-                  type: array
-                  items:
-                    type: object
-                    required: [panel_key]
-                    properties:
-                      panel_key: { type: string }
-                      can_view: { type: boolean }
-                      can_edit: { type: boolean }
+                panel_id: { type: string }
+                role: { type: string }
+                allowed: { type: boolean }
       responses:
-        '200': { description: Role panel permissions saved }
-        '403': { description: Caller is not owner/admin for this org }
+        '200':
+          description: Gate upserted
+        '403':
+          description: Caller is not owner
 
-  /panels/users/{user_id}/:
-    put:
+  /panels/role-permissions/{perm_id}/:
+    delete:
       tags: [Panels]
-      summary: Set a user's panel overrides — owner-only (v1.5 — Tracker §4n)
-      description: >
-        NULL = inherit from the role row (then system default). Non-null wins.
+      summary: Delete a role panel gate, owner-only (v0.9/B3)
       security: [{ BearerAuth: [] }]
       parameters:
-        - { name: user_id, in: path, required: true, schema: { type: integer } }
+        - name: perm_id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Gate deleted
+        '404':
+          description: Gate not found
+
+  /panels/user-overrides/:
+    get:
+      tags: [Panels]
+      summary: List user panel overrides (v0.9/B3)
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Override rows, org-scoped
+    post:
+      tags: [Panels]
+      summary: Set a user panel override, owner-only (v0.9/B3)
+      description: >
+        Wins over every role row except on owner_only panels (fail-closed).
+      security: [{ BearerAuth: [] }]
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [panels]
+              required: [panel_id, user_id, allowed]
               properties:
-                panels:
-                  type: array
-                  items:
-                    type: object
-                    required: [panel_key]
-                    properties:
-                      panel_key: { type: string }
-                      can_view: { type: boolean, nullable: true }
-                      can_edit: { type: boolean, nullable: true }
+                panel_id: { type: string }
+                user_id: { type: integer }
+                allowed: { type: boolean }
       responses:
-        '200': { description: User overrides saved }
-        '403': { description: Caller is not owner/admin for this org }
+        '200':
+          description: Override upserted
+        '403':
+          description: Caller is not owner
+        '404':
+          description: User not an active member of this org
+
+  /panels/user-overrides/{override_id}/:
+    delete:
+      tags: [Panels]
+      summary: Delete a user panel override, owner-only (v0.9/B3)
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - name: override_id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Override deleted
+        '404':
+          description: Override not found
 
   # /me/alert-subscriptions/ REMOVED 2026-09-12 (v0.9/B2): superseded by the
   # shipped org-scoped shape (/alert-subscriptions/ + /{metric_key}/ below).

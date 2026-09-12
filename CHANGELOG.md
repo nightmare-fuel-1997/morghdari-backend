@@ -46,6 +46,15 @@ alerting in minutes — each step measured against its RTO.
 - M8-04/05/06 parked as `v0.8-HIL` (hardware-team owned, backend-only close
   per owner 2026-09-12). Tag `v0.8-DR` (push waived — no remote).
 
+## [1.7.6] — 2026-09-12 — Granular panels (B3, D24-2)
+
+Panel catalog (8 seeded panels, admin owner-only) + role gates + user
+overrides with the documented chain (user override → role rows with
+deny-wins → default-open; owner_only absolute, fail-closed). Reviewer
+read-only falls out (no write path admits reviewer). Shipped
+visibility-only, superseding the three §4n panel placeholders. RLS on user
+overrides via the initdb tenant table list.
+
 ## [1.7.5] — 2026-09-12 — Alert-subscription mutes (B2, GS-ROUTING)
 
 Org-wide category mutes: `alert_subscriptions` table (manager+ writes via

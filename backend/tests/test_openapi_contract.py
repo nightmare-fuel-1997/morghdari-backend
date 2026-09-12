@@ -45,10 +45,10 @@ EXCLUDED_EXACT = {
     # B2 (2026-09-12): /me/alert-subscriptions/ left the set — subscriptions
     # shipped org-scoped (/alert-subscriptions/ + /{metric}/) instead of
     # per-user; the yaml documents the shipped shape.
+    # B3 (2026-09-12): the three §4n panel placeholders left the set —
+    # panels shipped as /panels/me/ + role-permissions + user-overrides
+    # (visibility-only; the draft's can_edit never materialized).
     "/vet-catalog/",
-    "/me/panels/",
-    "/panels/{role}/",
-    "/panels/users/{user_id}/",
     "/farms/{farm_id}/events/",
     "/support-tickets/",
 }

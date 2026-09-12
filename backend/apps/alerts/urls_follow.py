@@ -27,6 +27,13 @@ from apps.alerts.api_follow import (
     maintenance_mute_revoke,
     maintenance_mutes,
 )
+from apps.alerts.api_panels import (
+    panels_me,
+    role_panel_permission_delete,
+    role_panel_permissions,
+    user_panel_override_delete,
+    user_panel_overrides,
+)
 
 app_name = "alerts-follow"
 
@@ -45,5 +52,19 @@ urlpatterns = [
         "alert-subscriptions/<str:metric_key>/",
         alert_subscription_unmute,
         name="alert-subscription-unmute",
+    ),
+    # v0.9/B3 granular panels (D24-2). Same GET+POST twin rule as above.
+    path("panels/me/", panels_me, name="panels-me"),
+    path("panels/role-permissions/", role_panel_permissions, name="role-panel-permissions"),
+    path(
+        "panels/role-permissions/<int:perm_id>/",
+        role_panel_permission_delete,
+        name="role-panel-permission-delete",
+    ),
+    path("panels/user-overrides/", user_panel_overrides, name="user-panel-overrides"),
+    path(
+        "panels/user-overrides/<int:override_id>/",
+        user_panel_override_delete,
+        name="user-panel-override-delete",
     ),
 ]

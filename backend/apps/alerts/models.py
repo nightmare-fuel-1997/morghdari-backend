@@ -429,5 +429,61 @@ class AlertSubscription(models.Model):
     class Meta:
         db_table = "alert_subscriptions"
         constraints = [
-            models.UniqueConstraint(fields=["org", "metric_key"], name="uq_alert_subscriptions_org_metric"),
+            models.UniqueConstraint(fields=["org", "metric_key"],
+                                    name="uq_alert_subscriptions_org_metric"),
+        ]
+
+
+class PanelDefinition(models.Model):
+    """Dashboard panel catalog (v0.9 M9-08/B3 — granular panels, D24-2).
+
+    GLOBAL rows (org-less, like the metric catalog — panel semantics are
+    uniform across orgs). `default_open=True` is the doc rule (every panel
+    visible unless gated); `owner_only=True` marks the admin panel, which
+    NOTHING except the owner role can open (fail-closed — overrides and
+    role rows cannot widen it). Fixed catalog seeded by migration (same
+    ON CONFLICT pattern as the metric seeds); no write API by design.
+    """
+
+    panel_id = models.CharField(max_length=50, primary_key=True)
+    title = models.CharField(max_length=100)
+    default_open = models.BooleanField(default=True)
+    owner_only = models.BooleanField(default=False)
+
+    class Meta:
+        db_table = "panel_definitions"
+
+
+class RolePanelPermission(models.Model):
+    """Per-role panel gate (middle of the D24-2 resolution chain)."""
+
+    id = models.AutoField(primary_key=True)
+    panel = models.ForeignKey(PanelDefinition, on_delete=models.CASCADE, related_name="+")
+    role = models.CharField(max_length=30)
+    allowed = models.BooleanField()
+
+    class Meta:
+        db_table = "role_panel_permissions"
+        constraints = [
+            models.UniqueConstraint(fields=["panel", "role"], name="uq_role_panel"),
+        ]
+
+
+class UserPanelOverride(models.Model):
+    """Per-user panel gate (top of the D24-2 chain) — org-scoped + RLS.
+
+    Wins over every role row for that user, EXCEPT on owner_only panels
+    (the admin panel stays owner-only no matter what — fail-closed).
+    """
+
+    id = models.AutoField(primary_key=True)
+    org = models.ForeignKey("tenants.Organization", on_delete=models.RESTRICT, related_name="+")
+    panel = models.ForeignKey(PanelDefinition, on_delete=models.CASCADE, related_name="+")
+    user = models.ForeignKey("accounts.User", on_delete=models.CASCADE, related_name="+")
+    allowed = models.BooleanField()
+
+    class Meta:
+        db_table = "user_panel_overrides"
+        constraints = [
+            models.UniqueConstraint(fields=["panel", "user"], name="uq_user_panel_override"),
         ]

@@ -1,9 +1,9 @@
 openapi: 3.0.3
 info:
   title: Morghdari Poultry Monitoring API
-  version: 1.7.5
+  version: 1.7.6
   description: |-
-    REST API for the Morghdari multi-tenant poultry monitoring platform. Contract v1.7.5 (ops wave + merged daily-report schemas + the threshold-template write surface O13–O16 + the follow-through core + the Hardware Team write path H0–H4 + alert-subscription mutes B2: org-wide category mutes honored at evaluation lane 2c, Tier-1 velocity structurally unmutable).
+    REST API for the Morghdari multi-tenant poultry monitoring platform. Contract v1.7.6 (ops wave + merged daily-report schemas + the threshold-template write surface O13–O16 + the follow-through core + the Hardware Team write path H0–H4 + alert-subscription mutes B2 + granular panels B3: catalog + role gates + user overrides, D24-2 chain).
 
     Authentication: Bearer JWT (15-min access token, 7-day refresh token; rotation is intentionally OFF — deactivated members fail closed via org-claim re-derivation). Gateway devices use HTTP Basic (username = gateway_slot_id) on the config endpoint only.
 
@@ -3428,6 +3428,293 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: Unauthenticated — missing, expired, or malformed Bearer token.
+  /api/v1/panels/me/:
+    get:
+      operationId: resolve_my_panels
+      description: |-
+        User override → role rows (deny wins) → panel default;
+        owner_only panels open for owners only. Any member reads (reviewer included —
+        panels are read-only for them by construction).
+      summary: Resolve my visible panels (D24-2 chain)
+      tags:
+      - Alerts & KPI
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PanelResolveResponse'
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+  /api/v1/panels/role-permissions/:
+    get:
+      operationId: list_role_panel_permissions
+      description: Any member reads.
+      summary: List role panel gates
+      tags:
+      - Alerts & KPI
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RolePermResponse'
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+    post:
+      operationId: set_role_panel_permission
+      description: Upserts the (panel, role) row. Writes PANEL_ROLE_SET.
+      summary: Set a role panel gate (owner-only)
+      tags:
+      - Alerts & KPI
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RolePermRequestRequest'
+            examples:
+              GateLuxPanel:
+                value:
+                  panel_id: telemetry
+                  role: worker
+                  allowed: false
+                summary: Gate lux panel
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/RolePermRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/RolePermRequestRequest'
+        required: true
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RolePermResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Validation error — malformed input, bad enum, or out-of-range
+            value.
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+  /api/v1/panels/role-permissions/{perm_id}/:
+    delete:
+      operationId: delete_role_panel_permission
+      description: Falls back to the panel default. Unknown id is 404.
+      summary: Delete a role panel gate (owner-only)
+      parameters:
+      - in: path
+        name: perm_id
+        schema:
+          type: integer
+        description: Permission row pk.
+        required: true
+      tags:
+      - Alerts & KPI
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RolePermResponse'
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Not found — id/slug unknown OR outside the caller's org (never
+            distinguished).
+  /api/v1/panels/user-overrides/:
+    get:
+      operationId: list_user_panel_overrides
+      description: Any member reads (org-scoped).
+      summary: List user panel overrides
+      tags:
+      - Alerts & KPI
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PanelOverrideResponse'
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+    post:
+      operationId: set_user_panel_override
+      description: |-
+        Upserts the (panel, user) row; wins over every role row
+        except on owner_only panels (which stay owner-only — fail-closed). The user
+        must be an active member of the caller's org. Writes PANEL_OVERRIDE_SET.
+      summary: Set a user panel override (owner-only)
+      tags:
+      - Alerts & KPI
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PanelOverrideRequestRequest'
+            examples:
+              OpenReports:
+                value:
+                  panel_id: reports
+                  user_id: 7
+                  allowed: true
+                summary: Open reports
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PanelOverrideRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PanelOverrideRequestRequest'
+        required: true
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PanelOverrideResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Validation error — malformed input, bad enum, or out-of-range
+            value.
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+  /api/v1/panels/user-overrides/{override_id}/:
+    delete:
+      operationId: delete_user_panel_override
+      description: Unknown/other-org id is 404.
+      summary: Delete a user panel override (owner-only)
+      parameters:
+      - in: path
+        name: override_id
+        schema:
+          type: integer
+        description: Override row pk.
+        required: true
+      tags:
+      - Alerts & KPI
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PanelOverrideResponse'
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Not found — id/slug unknown OR outside the caller's org (never
+            distinguished).
   /api/v1/platform/support/alerts/{alert_id}/force-resolve/:
     post:
       operationId: support_alert_force_resolve
@@ -9857,6 +10144,63 @@ components:
       - active_alert_count
       - farm_count
       - saloon_count
+    PanelOverrideRequestRequest:
+      type: object
+      properties:
+        panel_id:
+          type: string
+          minLength: 1
+        user_id:
+          type: integer
+        allowed:
+          type: boolean
+      required:
+      - allowed
+      - panel_id
+      - user_id
+    PanelOverrideResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+        panel_id:
+          type: string
+        user_id:
+          type: integer
+        allowed:
+          type: boolean
+      required:
+      - allowed
+      - id
+      - panel_id
+      - user_id
+    PanelResolveResponse:
+      type: object
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/PanelResolvedItem'
+      required:
+      - results
+    PanelResolvedItem:
+      type: object
+      properties:
+        panel_id:
+          type: string
+        title:
+          type: string
+        visible:
+          type: boolean
+        source:
+          type: string
+          description: owner-only | user-override | role | default — the D24-2 chain
+            step that decided.
+      required:
+      - panel_id
+      - source
+      - title
+      - visible
     PasswordChangeRequestRequest:
       type: object
       properties:
@@ -10727,6 +11071,37 @@ components:
       - is_system_default
       - role
       - widgets
+    RolePermRequestRequest:
+      type: object
+      properties:
+        panel_id:
+          type: string
+          minLength: 1
+        role:
+          type: string
+          minLength: 1
+        allowed:
+          type: boolean
+      required:
+      - allowed
+      - panel_id
+      - role
+    RolePermResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+        panel_id:
+          type: string
+        role:
+          type: string
+        allowed:
+          type: boolean
+      required:
+      - allowed
+      - id
+      - panel_id
+      - role
     RotationAckRequestRequest:
       type: object
       properties:

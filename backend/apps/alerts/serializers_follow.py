@@ -97,3 +97,42 @@ class SubMuteResponseSerializer(serializers.Serializer):
 class SubUnmuteResponseSerializer(serializers.Serializer):
     metric_key = serializers.CharField()
     muted = serializers.BooleanField(help_text="Always false after unmute.")
+
+
+class PanelResolvedItemSerializer(serializers.Serializer):
+    panel_id = serializers.CharField()
+    title = serializers.CharField()
+    visible = serializers.BooleanField()
+    source = serializers.CharField(
+        help_text="owner-only | user-override | role | default — the D24-2 chain step that decided."
+    )
+
+
+class PanelResolveResponseSerializer(serializers.Serializer):
+    results = PanelResolvedItemSerializer(many=True)
+
+
+class RolePermRequestSerializer(serializers.Serializer):
+    panel_id = serializers.CharField()
+    role = serializers.CharField()
+    allowed = serializers.BooleanField()
+
+
+class RolePermResponseSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    panel_id = serializers.CharField()
+    role = serializers.CharField()
+    allowed = serializers.BooleanField()
+
+
+class PanelOverrideRequestSerializer(serializers.Serializer):
+    panel_id = serializers.CharField()
+    user_id = serializers.IntegerField()
+    allowed = serializers.BooleanField()
+
+
+class PanelOverrideResponseSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    panel_id = serializers.CharField()
+    user_id = serializers.IntegerField()
+    allowed = serializers.BooleanField()
