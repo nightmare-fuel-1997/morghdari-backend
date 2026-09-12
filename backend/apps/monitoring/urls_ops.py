@@ -57,4 +57,6 @@ urlpatterns = [
     # O11/O12 — session register
     path("auth/sessions/", ops_views.sessions, name="sessions"),
     path("auth/sessions/<int:session_id>/", ops_views.session_revoke, name="session-revoke"),
+    # v0.9/B5 — daily reconciliation ledger (M9-02 tooling, engineer+)
+    path("reconciliation/", ops_views.reconciliation, name="reconciliation"),
 ]

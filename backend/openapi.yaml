@@ -1,10 +1,13 @@
 openapi: "3.0.3"
 info:
   title: Morghdari Poultry Monitoring API
-  version: "1.7.7"
+  version: "1.7.8"
   description: |
     REST API for the Morghdari multi-tenant poultry monitoring platform.
     WebSocket protocol is documented separately in the Frontend Integration Spec.
+
+    v1.7.8 (2026-09-12 — daily reconciliation ledger, v0.9/B5): engineer+
+    GET /reconciliation/ (DB rows + DLQ rows + alert list per Tehran day).
 
     v1.7.7 (2026-09-12 — public status page, v0.9/B4 MET-STATUS):
     unauthenticated /status/ from blackbox probe history (14-day share per
@@ -3874,6 +3877,26 @@ paths:
       responses:
         '200': { description: Revoked }
         '404': { description: Unknown or foreign session (identical) }
+
+  # ------------------------------------------------------------------
+  # v1.7.8 — daily reconciliation ledger (v0.9/B5, M9-02 tooling)
+  # ------------------------------------------------------------------
+  /reconciliation/:
+    get:
+      tags: [Monitoring]
+      summary: Daily delivery ledger per Tehran day (v0.9/B5)
+      description: >
+        DB rows + DLQ rows (with reason/gateway attribution) + alert list
+        per org. accounted_pct is the pilot delivery gate. Engineer+ reads,
+        claim-org scoped; ?day= defaults to yesterday Tehran.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: day, in: query, required: false, schema: { type: string, example: '2026-09-10' } }
+      responses:
+        '200':
+          description: Ledger rows
+        '403':
+          description: Caller lacks engineer+ in this org
 
   # ------------------------------------------------------------------
   # v1.7.2 — follow-through CORE (F1–F15, docs/api-followthrough-v1.md):

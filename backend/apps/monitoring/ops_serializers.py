@@ -367,3 +367,29 @@ class SessionItemSerializer(serializers.Serializer):
 class SessionRevokeResponseSerializer(serializers.Serializer):
     status = serializers.CharField(help_text='Always "revoked" on success.')
     id = serializers.IntegerField()
+
+
+class ReconAlertSerializer(serializers.Serializer):
+    tier = serializers.IntegerField()
+    metric = serializers.CharField()
+    status = serializers.CharField()
+    triggered_at = serializers.CharField()
+
+
+class ReconOrgSerializer(serializers.Serializer):
+    org_id = serializers.CharField()
+    db_rows = serializers.IntegerField(help_text="Raw telemetry rows stored that day.")
+    dlq_rows = serializers.IntegerField(help_text="Dead-lettered rows that day.")
+    accounted_pct = serializers.FloatField(
+        allow_null=True,
+        help_text="db/(db+dlq)*100 — every row has a verdict; null when the org has neither.",
+    )
+    by_reason = serializers.DictField(child=serializers.IntegerField())
+    by_gateway = serializers.DictField(child=serializers.IntegerField())
+    alerts = ReconAlertSerializer(many=True)
+    dlq_unavailable = serializers.BooleanField()
+
+
+class ReconReportSerializer(serializers.Serializer):
+    day = serializers.CharField(help_text="Tehran day, YYYY-MM-DD.")
+    orgs = ReconOrgSerializer(many=True)

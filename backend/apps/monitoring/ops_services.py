@@ -16,6 +16,11 @@ missing, never fabricated.
 import json
 import logging
 import os
+from datetime import date as _date
+from datetime import datetime as _datetime
+from datetime import time as _time
+from datetime import timedelta as _timedelta
+from datetime import timezone as _timezone
 
 from django.core.exceptions import BadRequest
 
@@ -336,3 +341,132 @@ def _as_error_list(raw):
     except (TypeError, ValueError):
         return []
     return parsed if isinstance(parsed, list) else []
+
+
+# ---------------------------------------------------------------------------
+# Daily reconciliation (v0.9 M9-10/B5) — the pilot's acceptance ledger.
+# ---------------------------------------------------------------------------
+
+RECON_DLQ_STREAM = "telemetry:dead_letter"
+RECON_DLQ_SCAN_CAP = 5000
+RECON_ALERT_CAP = 200
+TEHRAN = _timezone(_timedelta(hours=3, minutes=30))  # fixed — DST abolished 2022
+
+
+def parse_recon_day(raw: str):
+    """YYYY-MM-DD or ValueError (the view maps to 400)."""
+    return _date.fromisoformat(raw.strip())
+
+
+def _tehran_day_bounds(day):
+    start = _datetime.combine(day, _time.min, tzinfo=TEHRAN)
+    return start, start + _timedelta(days=1)
+
+
+def _payload_day(payload: str, entry_id: str):
+    """Tehran day of a DLQ entry: payload device_ts first (device truth),
+    else the stream entry-id milliseconds (ingest truth)."""
+    try:
+        device_ts = (json.loads(payload) or {}).get("device_ts")
+        if device_ts:
+            return _datetime.fromisoformat(str(device_ts).replace("Z", "+00:00")).astimezone(TEHRAN).date()
+    except (ValueError, TypeError, AttributeError):
+        pass
+    try:
+        ms = int(str(entry_id).split("-")[0])
+        return _datetime.fromtimestamp(ms / 1000.0, tz=_timezone.utc).astimezone(TEHRAN).date()
+    except (ValueError, TypeError, OSError):
+        return None
+
+
+def recon_day_report(day, org_id=None, redis_client=None) -> dict:
+    """One Tehran day's delivery ledger: DB rows + DLQ rows + alert list.
+
+    accounted_pct = db / (db + dlq) per org — every row has a verdict
+    (stored or dead-lettered with a reason); None when the org has neither.
+    reasons/by_gateway come from DLQ topics/payloads. Redis failure degrades
+    to the DB half with dlq_unavailable:true (D22 — never fabricate).
+    """
+    import datetime as dt
+
+    from django.db import connections
+    from django.db.models import Count
+
+    from apps.alerts.models import AlertInstance
+    from apps.telemetry.models import SaloonTelemetry
+
+    if isinstance(day, str):
+        day = dt.date.fromisoformat(day)
+    start, end = _tehran_day_bounds(day)
+    alias = "admin" if "admin" in connections.databases else "default"
+
+    db_counts = dict(
+        SaloonTelemetry.objects.using(alias)
+        .filter(device_ts__gte=start, device_ts__lt=end)
+        .values("org_id")
+        .annotate(n=Count("pk"))
+        .values_list("org_id", "n")
+    )
+    orgs = {str(k): {"db_rows": v} for k, v in db_counts.items()}
+
+    dlq_unavailable = False
+    dlq_rows: list = []
+    client = redis_client or _redis_client()
+    try:
+        for entry_id, fields in client.xrevrange(RECON_DLQ_STREAM, "+", "-", count=RECON_DLQ_SCAN_CAP):
+            if _payload_day(fields.get("payload", ""), entry_id) != day:
+                continue
+            dlq_rows.append({
+                "topic": fields.get("topic", ""),
+                "reason": fields.get("reason", "unknown"),
+            })
+    except Exception:  # noqa: BLE001 — degrade to the DB half
+        logger.warning("recon: DLQ unreadable, reporting DB half only")
+        dlq_unavailable = True
+
+    for row in dlq_rows:
+        parts = (row["topic"] or "").split("/")
+        key = parts[0] if parts else "unknown"
+        org = orgs.setdefault(key, {"db_rows": 0})
+        org.setdefault("dlq_rows", 0)
+        org["dlq_rows"] += 1
+        org.setdefault("by_reason", {}).setdefault(row["reason"], 0)
+        org["by_reason"][row["reason"]] += 1
+        gw = parts[4] if len(parts) > 4 else "unknown"
+        org.setdefault("by_gateway", {}).setdefault(gw, 0)
+        org["by_gateway"][gw] += 1
+
+    alert_qs = AlertInstance.objects.using(alias).filter(
+        triggered_at__gte=start, triggered_at__lt=end
+    )
+    if org_id is not None:
+        alert_qs = alert_qs.filter(org_id=org_id)
+    alerts: dict[str, list] = {}
+    for alert in alert_qs.order_by("-triggered_at")[:RECON_ALERT_CAP]:
+        alerts.setdefault(str(alert.org_id), []).append({
+            "tier": alert.highest_tier_reached or 1,
+            "metric": alert.metric_type,
+            "status": alert.current_status,
+            "triggered_at": alert.triggered_at.isoformat(),
+        })
+
+    if org_id is not None:
+        orgs = {k: v for k, v in orgs.items() if k == str(org_id)}
+        for key in list(alerts):
+            if key != str(org_id):
+                del alerts[key]
+    report = []
+    for key in sorted(set(list(orgs) + list(alerts))):
+        org = orgs.get(key, {"db_rows": 0})
+        db, dlq = org.get("db_rows", 0), org.get("dlq_rows", 0)
+        report.append({
+            "org_id": key,
+            "db_rows": db,
+            "dlq_rows": dlq,
+            "accounted_pct": round(100.0 * db / (db + dlq), 2) if (db + dlq) else None,
+            "by_reason": org.get("by_reason", {}),
+            "by_gateway": org.get("by_gateway", {}),
+            "alerts": alerts.get(key, []),
+            "dlq_unavailable": dlq_unavailable,
+        })
+    return {"day": day.isoformat(), "orgs": report}

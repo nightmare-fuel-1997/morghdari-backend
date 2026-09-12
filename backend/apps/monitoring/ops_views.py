@@ -1437,3 +1437,44 @@ def _saloon_template_assign(request, saloon_id: int):
         )
     effective, source = effective_template(_saloon_flock(saloon), saloon)
     return Response(ser.saloon_template_item(saloon, effective, source))
+
+
+# ---------------------------------------------------------------------------
+# Reconciliation — GET /reconciliation/ (v0.9/B5, M9-02 tooling)
+# ---------------------------------------------------------------------------
+
+
+@extend_schema(
+    tags=[TAG_OPS],
+    operation_id="daily_reconciliation_report",
+    summary="Daily delivery ledger: DB rows + DLQ rows + alert list (v0.9/B5)",
+    description="""The pilot acceptance ledger per Tehran day: every reading
+has a verdict (stored or dead-lettered with a reason). accounted_pct is the
+delivery gate (pubacked readings in DB-or-DLQ). Engineer+ reads, claim-org
+scoped. ?day=YYYY-MM-DD defaults to yesterday Tehran.""",
+    parameters=[
+        OpenApiParameter(
+            "day", str, OpenApiParameter.QUERY, required=False,
+            description="Tehran day, YYYY-MM-DD (default: yesterday).",
+        )
+    ],
+    responses={
+        200: ser.ReconReportSerializer,
+        **error_responses(400, 401, 403),
+    },
+)
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def reconciliation(request):
+    """GET /reconciliation/ — the shadow-run daily loop in one call."""
+    org_claim = _org_claim(request)
+    if org_claim is None:
+        return _forbidden()
+    if not _roles(request) & {"owner", "manager", "engineer"}:
+        return _forbidden()
+    raw_day = str(request.query_params.get("day") or "").strip()
+    try:
+        day = svc.parse_recon_day(raw_day) if raw_day else None
+    except ValueError:
+        return _bad_request("day must be YYYY-MM-DD")
+    return Response(svc.recon_day_report(day, org_id=org_claim))

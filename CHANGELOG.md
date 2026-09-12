@@ -46,6 +46,13 @@ alerting in minutes — each step measured against its RTO.
 - M8-04/05/06 parked as `v0.8-HIL` (hardware-team owned, backend-only close
   per owner 2026-09-12). Tag `v0.8-DR` (push waived — no remote).
 
+## [1.7.8] — 2026-09-12 — Daily reconciliation ledger (B5, M9-02 tooling)
+
+Engineer+ `GET /reconciliation/` + `manage.py recon_day`: per Tehran day,
+per org — DB rows, DLQ rows with reason/gateway attribution, accounted_pct
+delivery gate, and the alert list. Redis failure degrades to the DB half
+(never fabricated).
+
 ## [1.7.7] — 2026-09-12 — Public status page (B4, MET-STATUS)
 
 Unauthenticated `GET /status/`: 14-day `probe_success` share per blackbox

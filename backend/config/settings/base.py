@@ -261,10 +261,10 @@ SPECTACULAR_SETTINGS = {
     "TITLE": "Morghdari Poultry Monitoring API",
     "DESCRIPTION": (
         "REST API for the Morghdari multi-tenant poultry monitoring platform. "
-        "Contract v1.7.7 (ops wave + merged daily-report schemas + the "
+        "Contract v1.7.8 (ops wave + merged daily-report schemas + the "
         "threshold-template write surface O13–O16 + the follow-through core + "
         "the Hardware Team write path H0–H4 + alert-subscription mutes B2 + "
-        "granular panels B3 + public status page B4).\n\n"
+        "granular panels B3 + public status page B4 + reconciliation B5).\n\n"
         "Authentication: Bearer JWT (15-min access token, 7-day refresh token; "
         "rotation is intentionally OFF — deactivated members fail closed via "
         "org-claim re-derivation). Gateway devices use HTTP Basic "
@@ -277,7 +277,7 @@ SPECTACULAR_SETTINGS = {
         "human-written contract is backend/openapi.yaml (the "
         "implemented == contract gate); this page is its generated mirror."
     ),
-    "VERSION": "1.7.7",
+    "VERSION": "1.7.8",
     "CONTACT": {"name": "Morghdari Platform Team"},
     "LICENSE": {"name": "Proprietary — Morghdari"},
     # 2026-09-11 fix (Swagger "Try it out" NetworkError): the server is a
