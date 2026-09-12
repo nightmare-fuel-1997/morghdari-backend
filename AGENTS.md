@@ -25,3 +25,17 @@ Use the synapse MCP tools for long-term memory across sessions. The server runs 
 - Report stale/wrong retrieved facts with `memory_feedback` instead of silently re-storing.
 - Never try to store credentials — Synapse rejects them by design.
 
+# Orca auto-manager routing (standing rule)
+
+Triage every request first. If it has 2+ independent subtasks, touches 2+ areas, or >3 files → Coordinator mode. Else do it directly. Fast-path: if decomposition yields only 1 real Task, do it directly and say so.
+
+Coordinator mode (Orca supervised loop, `orca` binary):
+1. `status → orchestration run-create --objective "<goal>"` (one Run binds the work).
+2. Start the FULL first wave before waiting: `worker-start --spec "<self-contained spec>" --worktree current --agent <id>` per Task. No file overlap → `--worktree current`; overlap risk → child worktree via `worktree create --parent-worktree active`.
+3. `check --wait --types "worker_done,escalation,question"`; answer questions with `reply`. Timeout/absence = checkpoint, keep waiting — stop/retry only on positive `exited` proof.
+4. Manager supervises only — never edits files. Review findings become new fix Tasks.
+5. Close only when `worker-list --terminal-state reclaimable` returns none; per settled worker do exactly one: reuse terminal, `worker-retain`, or `worker-release`. Report per-Task outcome + evidence + blockers.
+
+Worker spec template (every spec names all five):
+- Target: files/component/env in scope. Change: concrete result. Constraints: invariants + do-not-touch. Ownership: what this worker may edit. Acceptance: test/output proving done. Expected return: 3-sentence summary + `--outcome succeeded|failed` + real `--files-modified`/`--report-path` via `worker_done` exactly once.
+
