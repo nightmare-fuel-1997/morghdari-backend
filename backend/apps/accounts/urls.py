@@ -18,6 +18,14 @@ from apps.accounts.views import (
     support_task_dispatch,
     update_member_role,
 )
+from apps.accounts.api_hardware import (
+    hw_actuator_register,
+    hw_actuator_retire,
+    hw_gateway_register,
+    hw_gateway_retire,
+    hw_sensor_register,
+    hw_sensor_retire,
+)
 
 app_name = "accounts"
 
@@ -53,4 +61,24 @@ urlpatterns = [
         name="support-alert-force-resolve",
     ),
     path("platform/support/tasks/drain/", support_task_dispatch, name="support-task-dispatch"),
+    # v0.9 H0-H2: Hardware Team write path — register + retire x gateway /
+    # sensor / actuator, behind the same audited support session as M7-07 ops.
+    path("platform/support/hardware/gateways/", hw_gateway_register, name="hw-gateway-register"),
+    path(
+        "platform/support/hardware/gateways/<int:hw_id>/retire/",
+        hw_gateway_retire,
+        name="hw-gateway-retire",
+    ),
+    path("platform/support/hardware/sensors/", hw_sensor_register, name="hw-sensor-register"),
+    path(
+        "platform/support/hardware/sensors/<int:hw_id>/retire/",
+        hw_sensor_retire,
+        name="hw-sensor-retire",
+    ),
+    path("platform/support/hardware/actuators/", hw_actuator_register, name="hw-actuator-register"),
+    path(
+        "platform/support/hardware/actuators/<int:hw_id>/retire/",
+        hw_actuator_retire,
+        name="hw-actuator-retire",
+    ),
 ]

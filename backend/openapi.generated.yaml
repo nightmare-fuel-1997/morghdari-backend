@@ -1,9 +1,9 @@
 openapi: 3.0.3
 info:
   title: Morghdari Poultry Monitoring API
-  version: 1.7.2
+  version: 1.7.3
   description: |-
-    REST API for the Morghdari multi-tenant poultry monitoring platform. Contract v1.7.2 (ops wave + merged daily-report schemas + the threshold-template write surface O13–O16 + the follow-through core: tenant topology writes F1–F8, flock close F14, direct mortality entry F15, org alert feed F9, home rollup F10, maintenance-mute windows F11–F13, member role change, and the ratified manager-side gateway lifecycle twins).
+    REST API for the Morghdari multi-tenant poultry monitoring platform. Contract v1.7.3 (ops wave + merged daily-report schemas + the threshold-template write surface O13–O16 + the follow-through core: tenant topology writes F1–F8, flock close F14, direct mortality entry F15, org alert feed F9, home rollup F10, maintenance-mute windows F11–F13, member role change, the ratified manager-side gateway lifecycle twins, and the Hardware Team write path H0–H2: platform hardware register + retire x gateway/sensor/actuator).
 
     Authentication: Bearer JWT (15-min access token, 7-day refresh token; rotation is intentionally OFF — deactivated members fail closed via org-claim re-derivation). Gateway devices use HTTP Basic (username = gateway_slot_id) on the config endpoint only.
 
@@ -3422,6 +3422,427 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: Conflict — state precondition failed (e.g. concurrent sync
             lock, wrong flock state).
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Validation error — malformed input, bad enum, or out-of-range
+            value.
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Not found — id/slug unknown OR outside the caller's org (never
+            distinguished).
+  /api/v1/platform/support/hardware/actuators/:
+    post:
+      operationId: hw_actuator_register
+      description: |-
+        Hardware Team write path (H2): creates the `actuator_hardware_registry`
+        row. Same register semantics as the gateway kind.
+      summary: Register an actuator hardware unit onto a slot
+      tags:
+      - Platform Support
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HardwareRegisterRequestRequest'
+            examples:
+              RegisterActuatorHardware:
+                value:
+                  slot_id: HW-GW-01
+                  hardware_id: GW-2026-0042
+                  reason: factory batch 7, INC-2041
+                summary: Register actuator hardware
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/HardwareRegisterRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/HardwareRegisterRequestRequest'
+        required: true
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HardwareRegisterResponse'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Conflict — state precondition failed (e.g. concurrent sync
+            lock, wrong flock state).
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Validation error — malformed input, bad enum, or out-of-range
+            value.
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Not found — id/slug unknown OR outside the caller's org (never
+            distinguished).
+  /api/v1/platform/support/hardware/actuators/{hw_id}/retire/:
+    post:
+      operationId: hw_actuator_retire
+      description: Closes the actuator registry row; idempotent on an already-retired
+        row.
+      summary: Retire an actuator hardware unit
+      parameters:
+      - in: path
+        name: hw_id
+        schema:
+          type: integer
+        description: Registry row pk from the register response.
+        required: true
+      tags:
+      - Platform Support
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HardwareRetireRequestRequest'
+            examples:
+              RetireActuatorHardware:
+                value:
+                  reason: dead radio, INC-2041
+                summary: Retire actuator hardware
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/HardwareRetireRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/HardwareRetireRequestRequest'
+        required: true
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HardwareRetireResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Validation error — malformed input, bad enum, or out-of-range
+            value.
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Not found — id/slug unknown OR outside the caller's org (never
+            distinguished).
+  /api/v1/platform/support/hardware/gateways/:
+    post:
+      operationId: hw_gateway_register
+      description: |-
+        Hardware Team write path (H0): creates the `gateway_hardware_registry`
+        row the installer sync requires (`active gateway hardware not registered`
+        otherwise). Idempotent on the identical active row; 409 when the slot
+        already carries a different live unit; foreign slot is 404.
+      summary: Register a gateway hardware unit onto a slot
+      tags:
+      - Platform Support
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HardwareRegisterRequestRequest'
+            examples:
+              RegisterGatewayHardware:
+                value:
+                  slot_id: HW-GW-01
+                  hardware_id: GW-2026-0042
+                  reason: factory batch 7, INC-2041
+                summary: Register gateway hardware
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/HardwareRegisterRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/HardwareRegisterRequestRequest'
+        required: true
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HardwareRegisterResponse'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Conflict — state precondition failed (e.g. concurrent sync
+            lock, wrong flock state).
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Validation error — malformed input, bad enum, or out-of-range
+            value.
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Not found — id/slug unknown OR outside the caller's org (never
+            distinguished).
+  /api/v1/platform/support/hardware/gateways/{hw_id}/retire/:
+    post:
+      operationId: hw_gateway_retire
+      description: |-
+        Closes the registry row (removed_at/removed_by); idempotent on an
+        already-retired row. Retiring the slot's last live unit blocks the installer
+        sync with an honest 400 until a new unit registers.
+      summary: Retire a gateway hardware unit
+      parameters:
+      - in: path
+        name: hw_id
+        schema:
+          type: integer
+        description: Registry row pk from the register response.
+        required: true
+      tags:
+      - Platform Support
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HardwareRetireRequestRequest'
+            examples:
+              RetireGatewayHardware:
+                value:
+                  reason: dead radio, INC-2041
+                summary: Retire gateway hardware
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/HardwareRetireRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/HardwareRetireRequestRequest'
+        required: true
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HardwareRetireResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Validation error — malformed input, bad enum, or out-of-range
+            value.
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Not found — id/slug unknown OR outside the caller's org (never
+            distinguished).
+  /api/v1/platform/support/hardware/sensors/:
+    post:
+      operationId: hw_sensor_register
+      description: |-
+        Hardware Team write path (H1): creates the `hardware_registry` row for
+        a sensor pack. Same register semantics as the gateway kind.
+      summary: Register a sensor hardware unit onto a slot
+      tags:
+      - Platform Support
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HardwareRegisterRequestRequest'
+            examples:
+              RegisterSensorHardware:
+                value:
+                  slot_id: HW-GW-01
+                  hardware_id: GW-2026-0042
+                  reason: factory batch 7, INC-2041
+                summary: Register sensor hardware
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/HardwareRegisterRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/HardwareRegisterRequestRequest'
+        required: true
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HardwareRegisterResponse'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Conflict — state precondition failed (e.g. concurrent sync
+            lock, wrong flock state).
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Validation error — malformed input, bad enum, or out-of-range
+            value.
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Not found — id/slug unknown OR outside the caller's org (never
+            distinguished).
+  /api/v1/platform/support/hardware/sensors/{hw_id}/retire/:
+    post:
+      operationId: hw_sensor_retire
+      description: Closes the sensor registry row; idempotent on an already-retired
+        row.
+      summary: Retire a sensor hardware unit
+      parameters:
+      - in: path
+        name: hw_id
+        schema:
+          type: integer
+        description: Registry row pk from the register response.
+        required: true
+      tags:
+      - Platform Support
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HardwareRetireRequestRequest'
+            examples:
+              RetireSensorHardware:
+                value:
+                  reason: dead radio, INC-2041
+                summary: Retire sensor hardware
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/HardwareRetireRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/HardwareRetireRequestRequest'
+        required: true
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HardwareRetireResponse'
+          description: ''
         '400':
           content:
             application/json:
@@ -8283,6 +8704,73 @@ components:
       - city_id
       - id
       - name
+    HardwareRegisterRequestRequest:
+      type: object
+      description: |-
+        Register one factory hardware unit onto a slot (H0-H2, v0.9).
+
+        The slot must belong to the session org; the hardware id is the factory
+        serial the Hardware Team reads off the unit (server-side truth — the
+        installer sync can only reference rows created here).
+      properties:
+        slot_id:
+          type: string
+          minLength: 1
+          description: Slot pk in the session org (gateway slot / sensor slot / actuator
+            slot).
+        hardware_id:
+          type: string
+          minLength: 1
+          description: Factory serial, e.g. GW-2026-0042.
+        reason:
+          type: string
+          minLength: 1
+          description: MANDATORY justification — a blank value is a 400.
+      required:
+      - hardware_id
+      - reason
+      - slot_id
+    HardwareRegisterResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: Registry row pk (used by the retire endpoint).
+        hardware_id:
+          type: string
+        slot_id:
+          type: string
+        idempotent:
+          type: boolean
+          description: Present (true) only when the unit was already active on the
+            slot.
+      required:
+      - hardware_id
+      - id
+      - slot_id
+    HardwareRetireRequestRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          description: MANDATORY justification — a blank value is a 400.
+      required:
+      - reason
+    HardwareRetireResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+        retired:
+          type: boolean
+          description: True once the row carries removed_at.
+        idempotent:
+          type: boolean
+          description: Present (true) only when the row was already retired.
+      required:
+      - id
+      - retired
     HardwareTime:
       type: object
       description: NTP fallback — current server time in whole unix seconds.

@@ -1,10 +1,15 @@
 openapi: "3.0.3"
 info:
   title: Morghdari Poultry Monitoring API
-  version: "1.7.2"
+  version: "1.7.3"
   description: |
     REST API for the Morghdari multi-tenant poultry monitoring platform.
     WebSocket protocol is documented separately in the Frontend Integration Spec.
+
+    v1.7.3 (2026-09-12 — the Hardware Team write path, v0.9 H0–H2): the six
+    platform hardware endpoints (register + retire x gateway/sensor/actuator)
+    behind the audited support session — serials no longer enter via direct
+    DB writes. Idempotent re-register, 409 on occupied slots, 404 across orgs.
 
     v1.7.2 (2026-09-12 — the follow-through CORE wave, docs/api-followthrough-v1.md
     F1–F15 + the member role change, pulled forward from the v1.9.0 surface): the
@@ -1882,6 +1887,184 @@ paths:
           description: No active support session for this org
         '404':
           description: Alert not found (or already resolved → idempotent 200)
+
+  /platform/support/hardware/gateways/:
+    post:
+      tags: [Platform Support]
+      summary: Register a gateway hardware unit onto a slot (v0.9 H0)
+      description: >
+        Hardware Team write path: creates the gateway_hardware_registry row the
+        installer sync requires. Requires an ACTIVE support session for the
+        slot's org; writes SUPPORT_OP_HW_REGISTER with the incident_id.
+        Idempotent on the identical active row; 409 when the slot already
+        carries a different live unit (retire it first).
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [slot_id, hardware_id, reason]
+              properties:
+                slot_id: { type: string }
+                hardware_id: { type: string }
+                reason: { type: string }
+      responses:
+        '200':
+          description: Unit registered (or already active → idempotent); audit row written
+        '403':
+          description: No active support session for this org
+        '404':
+          description: Slot not found in the session org
+        '409':
+          description: Slot already has different live hardware
+
+  /platform/support/hardware/gateways/{hw_id}/retire/:
+    post:
+      tags: [Platform Support]
+      summary: Retire a gateway hardware unit (v0.9 H0)
+      description: >
+        Closes the registry row (removed_at/removed_by); idempotent on an
+        already-retired row. Writes SUPPORT_OP_HW_RETIRE with the incident_id.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - name: hw_id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string }
+      responses:
+        '200':
+          description: Unit retired; audit row written
+        '403':
+          description: No active support session for this org
+        '404':
+          description: Hardware row not found in the session org
+
+  /platform/support/hardware/sensors/:
+    post:
+      tags: [Platform Support]
+      summary: Register a sensor hardware unit onto a slot (v0.9 H1)
+      description: >
+        Hardware Team write path for sensor packs (hardware_registry). Same
+        register semantics as the gateway kind; session-scoped + audited.
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [slot_id, hardware_id, reason]
+              properties:
+                slot_id: { type: string }
+                hardware_id: { type: string }
+                reason: { type: string }
+      responses:
+        '200':
+          description: Unit registered (or already active → idempotent); audit row written
+        '403':
+          description: No active support session for this org
+        '404':
+          description: Slot not found in the session org
+        '409':
+          description: Slot already has different live hardware
+
+  /platform/support/hardware/sensors/{hw_id}/retire/:
+    post:
+      tags: [Platform Support]
+      summary: Retire a sensor hardware unit (v0.9 H1)
+      description: >
+        Closes the sensor registry row; idempotent on an already-retired row.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - name: hw_id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string }
+      responses:
+        '200':
+          description: Unit retired; audit row written
+        '403':
+          description: No active support session for this org
+        '404':
+          description: Hardware row not found in the session org
+
+  /platform/support/hardware/actuators/:
+    post:
+      tags: [Platform Support]
+      summary: Register an actuator hardware unit onto a slot (v0.9 H2)
+      description: >
+        Hardware Team write path for actuators (actuator_hardware_registry).
+        Same register semantics as the gateway kind; session-scoped + audited.
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [slot_id, hardware_id, reason]
+              properties:
+                slot_id: { type: string }
+                hardware_id: { type: string }
+                reason: { type: string }
+      responses:
+        '200':
+          description: Unit registered (or already active → idempotent); audit row written
+        '403':
+          description: No active support session for this org
+        '404':
+          description: Slot not found in the session org
+        '409':
+          description: Slot already has different live hardware
+
+  /platform/support/hardware/actuators/{hw_id}/retire/:
+    post:
+      tags: [Platform Support]
+      summary: Retire an actuator hardware unit (v0.9 H2)
+      description: >
+        Closes the actuator registry row; idempotent on an already-retired row.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - name: hw_id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string }
+      responses:
+        '200':
+          description: Unit retired; audit row written
+        '403':
+          description: No active support session for this org
+        '404':
+          description: Hardware row not found in the session org
 
   /platform/support/tasks/drain/:
     post:

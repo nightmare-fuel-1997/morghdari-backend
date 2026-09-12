@@ -46,6 +46,15 @@ alerting in minutes — each step measured against its RTO.
 - M8-04/05/06 parked as `v0.8-HIL` (hardware-team owned, backend-only close
   per owner 2026-09-12). Tag `v0.8-DR` (push waived — no remote).
 
+## [1.7.3] — 2026-09-12 — Hardware Team write path (H0–H2, v0.9 pilot backend)
+
+Six platform endpoints behind the audited support session: register + retire
+x gateway/sensor/actuator (`/platform/support/hardware/...`). Serials no
+longer enter via direct DB writes — the only writer the three registry tables
+ever had was the test suite. Idempotent re-register, 409 on occupied slots,
+404 across orgs, `SUPPORT_OP_HW_*` audit rows with the session incident id.
+Zero new tables, zero migrations. See `versions/v0.9/TASKS.md` (H0–H2).
+
 ## [v0.7] — 2026-09-10 — production birth on the laptop (M7)
 
 The system runs on real hardware and screams when it is sick: laptop-as-VPS rehearsed, metrics/bridges/heartbeats live, native lists + reports merged, support activated, compat scoped down. Contract gate: `implemented == contract`.

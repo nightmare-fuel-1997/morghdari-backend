@@ -362,3 +362,37 @@ MFA_SETUP_RESPONSE_EXAMPLE = OpenApiExample(
         "confirmed": False,
     },
 )
+
+
+class HardwareRegisterRequestSerializer(serializers.Serializer):
+    """Register one factory hardware unit onto a slot (H0-H2, v0.9).
+
+    The slot must belong to the session org; the hardware id is the factory
+    serial the Hardware Team reads off the unit (server-side truth — the
+    installer sync can only reference rows created here).
+    """
+
+    slot_id = serializers.CharField(help_text="Slot pk in the session org (gateway slot / sensor slot / actuator slot).")
+    hardware_id = serializers.CharField(help_text="Factory serial, e.g. GW-2026-0042.")
+    reason = serializers.CharField(help_text="MANDATORY justification — a blank value is a 400.")
+
+
+class HardwareRegisterResponseSerializer(serializers.Serializer):
+    id = serializers.IntegerField(help_text="Registry row pk (used by the retire endpoint).")
+    hardware_id = serializers.CharField()
+    slot_id = serializers.CharField()
+    idempotent = serializers.BooleanField(
+        required=False, help_text="Present (true) only when the unit was already active on the slot."
+    )
+
+
+class HardwareRetireRequestSerializer(serializers.Serializer):
+    reason = serializers.CharField(help_text="MANDATORY justification — a blank value is a 400.")
+
+
+class HardwareRetireResponseSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    retired = serializers.BooleanField(help_text="True once the row carries removed_at.")
+    idempotent = serializers.BooleanField(
+        required=False, help_text="Present (true) only when the row was already retired."
+    )
