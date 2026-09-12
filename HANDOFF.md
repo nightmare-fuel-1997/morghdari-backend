@@ -1,5 +1,14 @@
 # HANDOFF — v0.1 accomplished & closed
 
+> **v1.7.2 UPDATE (2026-09-12):** contract v1.7.2 (follow-through CORE F1–F15 +
+> member role change, erratum ratified) sealed on branch `docs/openapi-annotations`,
+> commits `a2c2caa` + `a3fe730` + `fa0eda9`, tag `v1.7.2`. Acceptance from the exact
+> tagged tree: migrate-gate DEPLOYABLE (73 migrations), 568 passed / 3 skipped @
+> 89.73% on PG/Timescale + Redis, module gate GREEN, trivy 0 HIGH/CRITICAL.
+> Notable: cold-DB `UndefinedTable` on `saloon_telemetry` found by the ritual and
+> fixed in `fa0eda9` (test-side DDL guard — warm reused DBs had masked it). NEXT:
+> v0.8 planning on owner go. Push waived — no remote.
+
 > **v0.3 UPDATE (2026-08-26):** v0.3 (ingestion + fake gateway, M3) is CLOSED
 > on branch `v0.3-m3`, tag `v0.3`. Truth files: `versions/v0.3/{TASKS,README,
 > DEMO-M3}.md`, CHANGELOG `[v0.3]`, Tracker §4k (decisions Q1–Q6), CONSTRAINTS
