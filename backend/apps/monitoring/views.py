@@ -21,14 +21,63 @@ from django.http import HttpResponse
 from drf_spectacular.utils import OpenApiExample, OpenApiResponse, extend_schema
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, renderer_classes
 from rest_framework.permissions import AllowAny
+from rest_framework.renderers import BrowsableAPIRenderer, JSONRenderer
 from rest_framework.response import Response
 
 from apps.common.schemas import TAG_MONITORING
-from apps.monitoring.serializers import HardwareTimeSerializer, HealthResponseSerializer
+from apps.monitoring.serializers import (
+    HardwareTimeSerializer,
+    HealthResponseSerializer,
+    StatusPageSerializer,
+)
 
-APP_VERSION = "0.7"  # bumped by the v0.7 DoD sweep (F5, 2026-09-10 re-verify: health still said 0.6)
+PROMETHEUS_URL = os.environ.get("PROMETHEUS_URL", "http://prometheus:9090")
+STATUS_SLO_PCT = 99.9
+STATUS_WINDOW = "14d"
+
+
+def _prom_query(expr: str, timeout: float = 5.0) -> dict:
+    """Minimal Prometheus HTTP API client (stdlib — no new dependency)."""
+    import json
+    import urllib.parse
+    import urllib.request
+
+    url = PROMETHEUS_URL.rstrip("/") + "/api/v1/query?" + urllib.parse.urlencode({"query": expr})
+    with urllib.request.urlopen(url, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _prober_uptime() -> tuple[str, float | None, list]:
+    """14-day probe_success share per blackbox vantage (MET-STATUS).
+
+    overall = MINIMUM across vantages (fail-closed reporting: the worst
+    vantage is the headline). Returns (status, overall_pct, probers).
+    Raises on Prometheus failure — the caller turns that into `unknown`,
+    never a 500 (a status page must not die with its monitor).
+    """
+    data = _prom_query(
+        'avg_over_time(probe_success{job=~"blackbox-external.*"}[%s])' % STATUS_WINDOW
+    )
+    probers = []
+    for series in data.get("data", {}).get("result", []):
+        metric = series.get("metric", {})
+        value = series.get("value", [None, None])[1]
+        pct = round(float(value) * 100.0, 3) if value not in (None, "NaN") else None
+        probers.append({
+            "job": metric.get("job", "?"),
+            "target": metric.get("instance", metric.get("target", "?")),
+            "uptime_pct": pct,
+        })
+    probers.sort(key=lambda p: p["job"])
+    measured = [p["uptime_pct"] for p in probers if p["uptime_pct"] is not None]
+    if not measured:
+        return "unknown", None, probers
+    overall = min(measured)
+    return ("operational" if overall >= STATUS_SLO_PCT else "degraded"), overall, probers
+
+APP_VERSION = "0.8-DR"  # bumped past the v0.8-DR close (was 0.7)
 
 
 def _redis():
@@ -177,8 +226,41 @@ Rate-limited at nginx; not a DRF-authenticated surface.""",
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def hardware_time(request):
-    """NTP fallback — current server time in whole unix seconds."""
+    """NTP fallback - current server time in whole unix seconds."""
     return Response({"unix_ts": int(time.time())})
+
+
+@extend_schema(
+    tags=[TAG_MONITORING],
+    operation_id="public_status_page",
+    summary="Public status page: 14-day uptime from probe history (v0.9/B4)",
+    description="""Unauthenticated (MET-STATUS). Renders blackbox probe_success
+history only — aggregate booleans, zero tenant data by construction (nothing
+org-scoped is touched). `Accept: text/html` returns the browsable human page.
+Prometheus unreachable → 200 `unknown`, never a 500.""",
+    responses={200: StatusPageSerializer},
+)
+@api_view(["GET"])
+@permission_classes([AllowAny])
+@renderer_classes([JSONRenderer, BrowsableAPIRenderer])
+def status_page(request):
+    """GET /status/ — the pilot's public uptime page.
+
+    JSON by default; text/html renders DRF's browsable page (human-readable,
+    zero templates — the pilot needs a readable page, not a designed one).
+    """
+    import datetime as dt
+
+    try:
+        status, overall, probers = _prober_uptime()
+    except Exception:  # noqa: BLE001 — unknown, not 500 (see docstring)
+        status, overall, probers = "unknown", None, []
+    return Response({
+        "status": status,
+        "uptime_14d_pct": overall,
+        "probers": probers,
+        "checked_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    })
 
 
 def metrics(request):

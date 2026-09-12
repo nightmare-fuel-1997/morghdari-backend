@@ -1,10 +1,14 @@
 openapi: "3.0.3"
 info:
   title: Morghdari Poultry Monitoring API
-  version: "1.7.6"
+  version: "1.7.7"
   description: |
     REST API for the Morghdari multi-tenant poultry monitoring platform.
     WebSocket protocol is documented separately in the Frontend Integration Spec.
+
+    v1.7.7 (2026-09-12 — public status page, v0.9/B4 MET-STATUS):
+    unauthenticated /status/ from blackbox probe history (14-day share per
+    vantage, minimum headline, unknown-never-500).
 
     v1.7.6 (2026-09-12 — granular panels, v0.9/B3 D24-2): panel catalog +
     role gates + user overrides with the documented resolution chain
@@ -923,6 +927,27 @@ components:
           enum: [assigned, org_breed, org_default, global_default, none]
 
 paths:
+  /status/:
+    get:
+      tags: [Monitoring]
+      summary: Public status page — 14-day uptime (v0.9/B4, MET-STATUS)
+      description: >
+        Unauthenticated. Blackbox probe_success history only — aggregate
+        booleans, zero tenant data by construction. Minimum across vantages
+        is the headline (fail-closed); Prometheus unreachable yields
+        `unknown`, never an error.
+      responses:
+        '200':
+          description: Status payload (or unknown)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [operational, degraded, unknown] }
+                  uptime_14d_pct: { type: number, nullable: true }
+                  checked_at: { type: string }
+
   /auth/login/:
     post:
       tags: [Authentication]

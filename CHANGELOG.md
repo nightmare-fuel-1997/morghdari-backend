@@ -46,6 +46,14 @@ alerting in minutes — each step measured against its RTO.
 - M8-04/05/06 parked as `v0.8-HIL` (hardware-team owned, backend-only close
   per owner 2026-09-12). Tag `v0.8-DR` (push waived — no remote).
 
+## [1.7.7] — 2026-09-12 — Public status page (B4, MET-STATUS)
+
+Unauthenticated `GET /status/`: 14-day `probe_success` share per blackbox
+vantage with the minimum as headline (fail-closed), `unknown` (never an
+error) when Prometheus is unreachable. Aggregate booleans only — no tenant
+data can leak by construction. Also: `/api/v1/health/` version echoes
+`0.8-DR` again (was stale at 0.7).
+
 ## [1.7.6] — 2026-09-12 — Granular panels (B3, D24-2)
 
 Panel catalog (8 seeded panels, admin owner-only) + role gates + user

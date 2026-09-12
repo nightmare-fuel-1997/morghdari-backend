@@ -92,3 +92,25 @@ class HardwareTimeSerializer(serializers.Serializer):
     """NTP fallback — current server time in whole unix seconds."""
 
     unix_ts = serializers.IntegerField(help_text="Server unix time (seconds).")
+
+
+class StatusProberSerializer(serializers.Serializer):
+    job = serializers.CharField(help_text="Blackbox job (external vantage).")
+    target = serializers.CharField(help_text="Probed URL.")
+    uptime_pct = serializers.FloatField(
+        allow_null=True, help_text="14-day probe_success share, percent. Null when Prometheus has no samples."
+    )
+
+
+class StatusPageSerializer(serializers.Serializer):
+    """Public status page (v0.9/B4, MET-STATUS) — aggregate probe history only."""
+
+    status = serializers.ChoiceField(
+        choices=["operational", "degraded", "unknown"],
+        help_text="degraded when any vantage < 99.9% over 14d; unknown when Prometheus is unreachable.",
+    )
+    uptime_14d_pct = serializers.FloatField(
+        allow_null=True, help_text="Minimum across vantages (fail-closed reporting)."
+    )
+    probers = StatusProberSerializer(many=True)
+    checked_at = serializers.CharField(help_text="Server time, UTC ISO Z.")
