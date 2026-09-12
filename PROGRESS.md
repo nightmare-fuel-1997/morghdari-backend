@@ -1,4 +1,6 @@
-# Progress — v0.7 Production Birth on the Laptop
+# Progress — v0.8-DR CLOSED (backend half) / v0.7 Production Birth on the Laptop
+
+## v0.8-DR CLOSED — 2026-09-12 (on `v0.8-m8`, tag `v0.8-DR`; hardware tail parked as `v0.8-HIL`)
 
 ## v0.8 M8 start — DR + handover harness — 2026-09-12 (on `v0.8-m8`, owner go; hardware team procurement runs in parallel)
 
@@ -7,7 +9,7 @@
 - **T3 Redis-wipe drill (M8-03):** `alerts.rebuild_active_state_from_db` **implemented** (Tracker §4l Q10 park lifted) — re-creates breach + active-alert keys from Postgres truth; LOS/REPLAY rows deliberately untouched; admin-or-default alias routing. `thresholds.recache_*` routed through the same alias — **fixes the M4-latent midnight-backstop no-op under FORCE-RLS**. `scripts/redis_wipe_drill.sh` runs the 5-leg drill (volume rm → rebuild → threshold warmer → LOS window → breach evidence → RTO/DR-log).
 - **C5 + Hardware Handover Harness (M8-04-H):** `scripts/check_hil_readiness.py` (C1–C7 gaps: health, hardware/time, config route, O9, T5–T9 ACLs, OTA tooling, LOS tunable) + `scripts/ota_checksums.py` (T6 manifest). `scripts/hil_handover/hil_harness.py` = the receiver-side executable acceptance the ESP32 team passes at bring-up: P1 config fetch / P2 telemetry honesty / P3 LWT / P4 buffered replay (ORIGINAL timestamps) / P5 OTA / P6 rotation — `--target sim` (self-test) vs `--target real` (handover gate).
 - **Tests/gates:** `test_m8_03_rebuild_drill.py` (5 tests: materialisation, LOS/replay skip, resolved-skip, idempotence, empty ledger). VALIDATED: py_compile green; unit module green on the sqlite quick loop; compose `config` parses; wal-g image build (docker build). **Live drill execution (RTO/RPO DR-log rows) = next step:** recompose the stack (new postgres image) then `REHEARSAL=1 scripts/pitr_rehearsal.sh` + `scripts/redis_wipe_drill.sh` — these take the rehearsal stack offline by design.
-- **Status board:** `versions/v0.8/TASKS.md` — M8-01/02/03 LIVE-GREEN 2026-09-12 (T2 + T3 DR-log rows) + M8-04-H sim-green; M8-04..06 parked as `v0.8-HIL`; M8-07 DoD sweep open. CHANGELOG `[Planned → 0.8.0]` written. DR-log skeleton at `versions/v0.8/DR-LOG.md`.
+- **Status board:** `versions/v0.8/TASKS.md` — M8-01/02/03 LIVE-GREEN 2026-09-12 (T2 + T3 DR-log rows) + M8-04-H sim-green; M8-04..06 parked as `v0.8-HIL`; M8-07 DONE (CHANGELOG `[v0.8-DR]` + `docs/releases/v0.8-DR.md` + `versions/v0.8/DEMO-M8-DR.md`, tag `v0.8-DR`, push waived — no remote). CHANGELOG `[Planned → 0.8.0]` written. DR-log at `versions/v0.8/DR-LOG.md` (3 rows: T2 PASS, T3 run-1 VOID, T3 run-2 PASS).
 
 ## Contract v1.7.2 — follow-through CORE (F1–F15 + member role change) — 2026-09-12 (code + gates GREEN; sealed by M0 close-out)
 

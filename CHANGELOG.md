@@ -3,6 +3,49 @@
 All notable changes per version. Format follows the spiral-roadmap discipline:
 one section per version tag, each listing what risk the version killed.
 
+## [v0.8-DR] — 2026-09-12 — disaster recovery, backend half (M8-DR)
+
+Recovery is rehearsed, not documented: point-in-time restore and Redis-wipe
+recovery both proven live on the rehearsal stack with measured RTOs. Contract
+untouched (no surface added in v0.8-DR).
+
+### Risk killed
+**Unproven recovery.** Before v0.8-DR, PITR was a runbook nobody had run
+(no wal-g in the image, no archive, no base backup) and the Redis-wipe path
+was code nobody had executed (the rebuild service was still a parked stub in
+the running images). Now the base backup exists, WAL flows continuously, the
+T2 restore reaches a chosen instant with row parity, and the T3 wipe re-arms
+alerting in minutes — each step measured against its RTO.
+
+### Added — M8-01 wal-g bake-in + M8-02 T2 live PASS
+- wal-g v3.0.9 baked into the postgres image (Alpine rebuild: apk + gcompat +
+  real asset filename), `archive_mode=on`, MinIO rehearsal target, weekly
+  base-backup script; base pushed, WAL verified flowing.
+- T2 live: target 13:37:57+00, marker absent, parity 11/2/2, hypertables
+  present, RTO ~10 min (plan ≤ 240). DR-LOG row 1.
+
+### Added — M8-03 T3 live PASS + M8-04-H sim-green
+- Real volume wipe → rebuild clean on the new code → 6/6 threshold hashes
+  with full bands → HIL P2+P4 end-to-end after the wipe, RTO ~5 min
+  (plan ≤ 15). Run 1 VOID (fake wipe — documented, not hidden). DR-LOG rows 2–3.
+- Readiness 8/8 + harness sim 4 PASS + 2 honest SKIP (P5/P6 need hardware).
+
+### Fixed along the way (drill-found, all in-tree)
+- Custom `config_file` repeats `listen_addresses` + timescaledb preload;
+  PG libpq env for wal-g; `backup-fetch LATEST`; `-p morghdari` typo;
+  T2 backup guard + correct fetch ordering; T3 `rm -f` + fatal wipe +
+  synchronous legs; flock lookups join the admin-alias routing (M8-03b);
+  six HIL-harness sim bugs + `--hardware-id` / `--mqtt-observer-user/pass`.
+
+### Verification
+- Transcript `versions/v0.8/DEMO-M8-DR.md`; DR log `versions/v0.8/DR-LOG.md`.
+- Post-drills: all services healthy, 0 pending migrations, subscribers
+  SUBACK-granted. Release note `docs/releases/v0.8-DR.md`.
+
+### Scope note
+- M8-04/05/06 parked as `v0.8-HIL` (hardware-team owned, backend-only close
+  per owner 2026-09-12). Tag `v0.8-DR` (push waived — no remote).
+
 ## [v0.7] — 2026-09-10 — production birth on the laptop (M7)
 
 The system runs on real hardware and screams when it is sick: laptop-as-VPS rehearsed, metrics/bridges/heartbeats live, native lists + reports merged, support activated, compat scoped down. Contract gate: `implemented == contract`.
