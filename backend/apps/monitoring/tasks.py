@@ -81,7 +81,8 @@ def _admin_alias() -> str:
 
 
 @shared_task(name="monitoring.build_org_usage")
-def build_org_usage(day=None) -> int:    """Nightly per-org rollup → org_daily_usage (upsert) + cost gauge.
+def build_org_usage(day=None) -> int:
+    """Nightly per-org rollup → org_daily_usage (upsert) + cost gauge.
 
     Sources (data-aggregates-v1.md `aggregates.build_org_usage`):
       * msg_count  — row count in the org's day window from saloon_telemetry
