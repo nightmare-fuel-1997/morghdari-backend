@@ -219,7 +219,7 @@ def user_panel_overrides(request):
                     panel_id=panel_id, user_id=user_id,
                     defaults={"org_id": org_id, "allowed": allowed},
                 )
-        except IntegrityError:
+        except IntegrityError:  # pragma: no cover - concurrent duplicate race only
             return _bad_request("override violates panel constraints")
         AccountActivityLog.objects.create(
             actor=request.user, org_id=org_id, action="PANEL_OVERRIDE_SET",

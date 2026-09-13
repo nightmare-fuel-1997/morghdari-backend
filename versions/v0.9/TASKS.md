@@ -1,5 +1,10 @@
 # v0.9 TASKS — ordered breakdown
 
+> **Backend wave CLOSED 2026-09-12 as `v0.9-backend`** (branch
+> `v0.9-pilot-backend`): H0–H4 + B1–B5 live-green, full CI 630 passed,
+> migrate-gate DEPLOYABLE. Field calendar (M9-01/02/03/05) parked — no farm.
+> Full `v0.9` + M9-07 stay open for the shadow-run.
+
 | # | Task | Depends on | Acceptance |
 |---|---|---|---|
 | M9-01 | Pilot farm selected + agreement; gateway mounted on real saloon wall (radio survey) | v0.8 | device live, RSSI acceptable at far corner |
@@ -27,4 +32,4 @@
 | H2 | Actuator HW register + retire (same pattern, `ActuatorHardwareRegistry`) | H0 | same-shape, covered by the H-track test module | ✅ done 2026-09-12 (same module/tests/contract as H0) |
 | H3 | Gateway replacement ceremony: retire old unit + fresh one-time creds + revoke old EMQX authn user + slot/ACL continuity | H0 | old password dead at broker, new connects, no gap beyond the swap | ✅ done 2026-09-12 (replace endpoint, one-time password never re-issued, FNV-soft broker push, contract 1.7.4) |
 | H4 | Downlink ACL provisioning (T5–T9 ota/commands rules) for real gateways | H0 | HIL `--target real` P5/P6 have rules (today: no-match deny) | ✅ done 2026-09-12 (acl-backfill endpoint, additive-only, re-runs add zero, contract 1.7.4) |
-| H5 | Verify-only: platform staff reach O9 diagnostics + LOS alerts via support session | v0.7 | checklist green, no code expected | ⏳ with B-wave verification |
+| H5 | Verify-only: platform staff reach O9 diagnostics + LOS alerts via support session | v0.7 | checklist green, no code expected | ✅ verified 2026-09-12 (m7_07 + m6_10 suites green on CI, 63 passed — no code needed) |

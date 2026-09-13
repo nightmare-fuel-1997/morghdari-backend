@@ -199,3 +199,134 @@ def test_cross_org_overrides_invisible():
     )
     assert seen.status_code == 200
     assert seen.data == {"results": [], "count": 0}
+
+
+@pytest.mark.django_db
+def test_role_perm_list_validation_and_delete():
+    from apps.alerts.api_panels import role_panel_permission_delete, role_panel_permissions
+
+    w = _world()
+    owner = w["users"]["owner"]
+    oclaims = ["owner"]
+    made = _call(
+        role_panel_permissions, "POST", "/api/v1/panels/role-permissions/",
+        owner, oclaims, w["org"],
+        {"panel_id": _pid(w["tag"], "dashboard"), "role": "worker", "allowed": False},
+    )
+    assert made.status_code == 200
+    listed = _call(
+        role_panel_permissions, "GET", "/api/v1/panels/role-permissions/",
+        owner, oclaims, w["org"],
+    )
+    assert listed.data["count"] == 1
+    assert listed.data["results"][0]["role"] == "worker"
+    bad_panel = _call(
+        role_panel_permissions, "POST", "/api/v1/panels/role-permissions/",
+        owner, oclaims, w["org"],
+        {"panel_id": "nope", "role": "worker", "allowed": False},
+    )
+    assert bad_panel.status_code == 400
+    bad_role = _call(
+        role_panel_permissions, "POST", "/api/v1/panels/role-permissions/",
+        owner, oclaims, w["org"],
+        {"panel_id": _pid(w["tag"], "dashboard"), "role": "janitor", "allowed": False},
+    )
+    assert bad_role.status_code == 400
+    bad_allowed = _call(
+        role_panel_permissions, "POST", "/api/v1/panels/role-permissions/",
+        owner, oclaims, w["org"],
+        {"panel_id": _pid(w["tag"], "dashboard"), "role": "worker", "allowed": "yes"},
+    )
+    assert bad_allowed.status_code == 400
+    gone = _call(
+        role_panel_permission_delete, "DELETE",
+        f"/api/v1/panels/role-permissions/{made.data['id']}/",
+        owner, oclaims, w["org"], perm_id=made.data["id"],
+    )
+    assert gone.status_code == 200
+    missing = _call(
+        role_panel_permission_delete, "DELETE",
+        "/api/v1/panels/role-permissions/424242/",
+        owner, oclaims, w["org"], perm_id=424242,
+    )
+    assert missing.status_code == 404
+
+
+@pytest.mark.django_db
+def test_overrides_list_and_no_org_denied():
+    from apps.alerts.api_panels import panels_me, role_panel_permissions, user_panel_overrides
+    from rest_framework.test import APIRequestFactory, force_authenticate
+
+    w = _world()
+    owner = w["users"]["owner"]
+    made = _call(
+        user_panel_overrides, "POST", "/api/v1/panels/user-overrides/",
+        owner, ["owner"], w["org"],
+        {"panel_id": _pid(w["tag"], "dashboard"), "user_id": w["users"]["worker"].pk, "allowed": False},
+    )
+    listed = _call(
+        user_panel_overrides, "GET", "/api/v1/panels/user-overrides/",
+        owner, ["owner"], w["org"],
+    )
+    assert listed.data["count"] == 1
+    assert listed.data["results"][0]["id"] == made.data["id"]
+    for view, method, kwargs in (
+        (panels_me, "GET", {}),
+        (role_panel_permissions, "GET", {}),
+        (user_panel_overrides, "GET", {}),
+    ):
+        request = getattr(APIRequestFactory(), method.lower())("/x", format="json")
+        force_authenticate(request, user=owner)
+        request.jwt_claims = {}
+        assert view(request, **kwargs).status_code == 403
+
+
+@pytest.mark.django_db
+def test_pagination_and_delete_gates():
+    from apps.alerts.api_panels import (
+        role_panel_permission_delete,
+        role_panel_permissions,
+        user_panel_override_delete,
+        user_panel_overrides,
+    )
+
+    w = _world()
+    owner, manager = w["users"]["owner"], w["users"]["manager"]
+    bad_page = _call(
+        role_panel_permissions, "GET", "/api/v1/panels/role-permissions/",
+        owner, ["owner"], w["org"], {"limit": "-1"},
+    )
+    assert bad_page.status_code == 400
+    bad_page2 = _call(
+        user_panel_overrides, "GET", "/api/v1/panels/user-overrides/",
+        owner, ["owner"], w["org"], {"limit": "nope"},
+    )
+    assert bad_page2.status_code == 400
+    mgr_del = _call(
+        role_panel_permission_delete, "DELETE", "/api/v1/panels/role-permissions/1/",
+        manager, ["manager"], w["org"], perm_id=1,
+    )
+    assert mgr_del.status_code == 403
+    made = _call(
+        user_panel_overrides, "POST", "/api/v1/panels/user-overrides/",
+        owner, ["owner"], w["org"],
+        {"panel_id": _pid(w["tag"], "dashboard"), "user_id": w["users"]["worker"].pk, "allowed": True},
+    )
+    mgr_del2 = _call(
+        user_panel_override_delete, "DELETE",
+        f"/api/v1/panels/user-overrides/{made.data['id']}/",
+        manager, ["manager"], w["org"], override_id=made.data["id"],
+    )
+    assert mgr_del2.status_code == 403
+    bad_uid = _call(
+        user_panel_overrides, "POST", "/api/v1/panels/user-overrides/",
+        owner, ["owner"], w["org"],
+        {"panel_id": _pid(w["tag"], "dashboard"), "user_id": "x", "allowed": True},
+    )
+    assert bad_uid.status_code == 400
+    bad_allowed = _call(
+        user_panel_overrides, "POST", "/api/v1/panels/user-overrides/",
+        owner, ["owner"], w["org"],
+        {"panel_id": _pid(w["tag"], "dashboard"), "user_id": w["users"]["worker"].pk, "allowed": "y"},
+    )
+    assert bad_allowed.status_code == 400

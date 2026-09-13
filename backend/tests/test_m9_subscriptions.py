@@ -150,6 +150,11 @@ def test_unmute_revokes_and_unknown_is_404():
     assert gone.status_code == 200
     assert gone.data == {"metric_key": "temp", "muted": False}
     assert not AlertSubscription.objects.filter(org_id=w["org"].org_id).exists()
+    worker_denied = _call(
+        alert_subscription_unmute, "DELETE", "/api/v1/alert-subscriptions/temp/", w["worker"],
+        _claims(w["worker"], w["org"], ["worker"]), metric_key="temp",
+    )
+    assert worker_denied.status_code == 403
     missing = _call(
         alert_subscription_unmute, "DELETE", "/api/v1/alert-subscriptions/temp/", w["manager"],
         claims, metric_key="temp",
@@ -252,3 +257,54 @@ def test_velocity_pages_through_mute_without_digest(timescale_db, _fresh_redis):
     assert fired is not None  # Decision 10: velocity bypasses every mute
     assert AlertInstance.objects.filter(org_id=w["org"].org_id).exists()
     assert "nh3" not in submuted_today(rc, str(w["org"].org_id))
+
+
+@pytest.mark.django_db
+def test_list_without_org_and_blank_metric():
+    from apps.alerts.api_follow import alert_subscriptions
+    from rest_framework.test import APIRequestFactory, force_authenticate
+
+    w = _world()
+    request = APIRequestFactory().get("/api/v1/alert-subscriptions/", format="json")
+    force_authenticate(request, user=w["manager"])
+    request.jwt_claims = {}
+    assert alert_subscriptions(request).status_code == 403
+    blank = _call(
+        alert_subscriptions, "POST", "/api/v1/alert-subscriptions/", w["manager"],
+        _claims(w["manager"], w["org"], ["manager"]), {"metric_key": "  "},
+    )
+    assert blank.status_code == 400
+
+
+@pytest.mark.django_db
+def test_digest_failure_still_lists(monkeypatch):
+    from apps.alerts.api_follow import alert_subscriptions
+    from apps.alerts.models import AlertSubscription
+
+    w = _world()
+    AlertSubscription.objects.create(org=w["org"], metric_key="temp", muted_by=w["manager"])
+    monkeypatch.setattr(
+        "apps.alerts.services.subscriptions.submuted_today",
+        lambda *a, **k: (_ for _ in ()).throw(ConnectionError("redis down")),
+    )
+    listed = _call(
+        alert_subscriptions, "GET", "/api/v1/alert-subscriptions/", w["manager"],
+        _claims(w["manager"], w["org"], ["manager"]),
+    )
+    assert listed.status_code == 200
+    assert listed.data["results"][0]["suppressed_today"] == 0
+
+
+def test_digest_helpers_fail_soft():
+    from apps.alerts.services.subscriptions import note_sub_muted, submuted_today
+
+    class Broken:
+        def pipeline(self):
+            raise ConnectionError("down")
+
+        def keys(self, *a):
+            raise ConnectionError("down")
+
+    # Must never raise into evaluation or the list view:
+    assert note_sub_muted(Broken(), "org", "temp") is None
+    assert submuted_today(Broken(), "org") == {}

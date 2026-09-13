@@ -3,6 +3,20 @@
 All notable changes per version. Format follows the spiral-roadmap discipline:
 one section per version tag, each listing what risk the version killed.
 
+## [v0.9-backend] — 2026-09-12 — pilot backend half (field calendar parked)
+
+Everything a backend owner can finish without a farm: the Hardware Team
+write path (H0 register/retire x3, H3 replacement ceremony, H4 downlink
+backfill), the pilot numbers (B1 four daily aggregates + writers + backfill),
+and control/visibility surfaces (B2 org-wide alert mutes, B3 granular
+panels, B4 public status page, B5 reconciliation ledger). Contract
+1.7.3 → 1.7.8. Full CI 630 passed @ 90.01% + module gate GREEN +
+migrate-gate DEPLOYABLE; HIL sim + status + recon proven live on rehearsal.
+Deferred by design: read-path fallback rewiring (Tracker decision needed),
+per-user routing (v1.1), status domain + 14-day green (field). Release note
+`docs/releases/v0.9-backend.md`; tag `v0.9-backend` (push waived — no remote).
+Version `v0.9` itself stays OPEN for the shadow-run.
+
 ## [v0.8-DR] — 2026-09-12 — disaster recovery, backend half (M8-DR)
 
 Recovery is rehearsed, not documented: point-in-time restore and Redis-wipe

@@ -30,9 +30,14 @@ class CanonicalTaskNameTests(TestCase):
         missing = self.EXPECTED - set(app.tasks)
         self.assertEqual(missing, set())
 
-    def test_parked_rebuild_task_fails_loud(self):
-        with self.assertRaises(NotImplementedError):
-            alerts_tasks.rebuild_active_state_from_db()
+    def test_rebuild_task_unparked_returns_counts(self):
+        # M8-03 (2026-09-12) LIFTED the Q10 park: the task now materialises
+        # breach/active keys instead of raising. Pin the live contract, not
+        # the parked past.
+        result = alerts_tasks.rebuild_active_state_from_db()
+        self.assertEqual(
+            sorted(result), ["active_keys", "breach_keys", "skipped_los", "skipped_replay"]
+        )
 
 
 class RedisKeyShapeTests(TestCase):
