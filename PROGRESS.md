@@ -1,4 +1,6 @@
-# Progress — v0.8-DR CLOSED (backend half) / v0.7 Production Birth on the Laptop
+# Progress — v0.9-backend CLOSED (backend half) / v0.8-DR CLOSED / v0.7 Production Birth
+
+## v0.9-backend CLOSED — 2026-09-12 (on `v0.9-pilot-backend`, tag `v0.9-backend`; field calendar parked, full `v0.9` open)
 
 ## v0.8-DR CLOSED — 2026-09-12 (on `v0.8-m8`, tag `v0.8-DR`; hardware tail parked as `v0.8-HIL`)
 
