@@ -252,16 +252,22 @@ def test_review_approval_creates_slot_credentials_and_acl(provisioning_world, dj
     assert slot.provisioning_status == "PENDING_INSTALLATION"
     credential = MqttDeviceCredential.objects.get(username=slot.slot_id)
     assert credential.password_hash.startswith("$2b$")  # EMQX-native (C7)
-    # Allow rules pin the REAL publish topics (org/farm/gateway segments — the
-    # subscriber grammar); a rule on a topic the gateway never publishes would
-    # be dead weight under no_match=deny.
-    rules = list(MqttAclRule.objects.filter(username=credential.username).order_by("topic"))
-    assert len(rules) == 2
-    assert all(r.permission == "allow" and r.action == "publish" for r in rules)
-    assert {r.topic for r in rules} == {
-        f"{w['org'].org_id}/farms/{w['farm'].pk}/gateways/{slot.slot_id}/telemetry",
-        f"{w['org'].org_id}/farms/{w['farm'].pk}/gateways/{slot.slot_id}/status",
+    # Allow rules MUST name the topics the gateway actually uses (org/farm/
+    # gateway segments — the subscriber grammar; a rule on a topic the gateway
+    # never uses would be dead weight under no_match=deny). M8-04-H (C5):
+    # the full firmware contract — 5 publishes (telemetry T1, status T2,
+    # commands/response T4, ota/response T7, diagnostics/response T9) + 4
+    # subscriptions (commands T3, clock/sync T5, ota T6, diagnostics/request T8).
+    from apps.provisioning.api import gateway_acl_rule_items
+
+    expected = {
+        (r["topic"], r["action"])
+        for r in gateway_acl_rule_items(str(w["org"].org_id), w["farm"].pk, slot.slot_id)
     }
+    rules = list(MqttAclRule.objects.filter(username=credential.username))
+    assert len(rules) == len(expected) == 9
+    assert all(r.permission == "allow" for r in rules)
+    assert {(r.topic, r.action) for r in rules} == expected
     # The EMQX authn user was created with the one-time plaintext (broker-side
     # authn — EMQX 5.5 rejects pre-hashed password fields).
     assert any(

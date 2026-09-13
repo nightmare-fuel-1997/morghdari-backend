@@ -58,6 +58,32 @@ from apps.provisioning.services import (
 )
 from apps.system_config.models import SystemConfiguration
 
+
+def gateway_acl_rule_items(org_uuid, farm_id: int, slot_id: str) -> list[dict]:
+    """The gateway's FULL MQTT allow-rule set (approval-time, M5-07).
+
+    v0.8 M8-04-H (C5): the firmware contract needs more than telemetry/status
+    publish — the downlink topics (commands T3, clock/sync T5, ota T6,
+    diagnostics/request T8) and the uplink responses (commands/response T4,
+    ota/response T7, diagnostics/response T9). Under `no_match=deny` a rule
+    makes the topic; without these the real firmware is denied at the broker.
+    فارس: مجموعهٔ کاملِ قواعدِ MQTT گیت‌وی — فقط با این‌ها فریم‌ویر واقعی می‌تواند
+    زیرِ no_match=deny روی تاپیک‌های فرمان/ساعت/OTA/تشخیص پاسخ دهد.
+    """
+    base = f"{org_uuid}/farms/{farm_id}/gateways/{slot_id}"
+    publishes = [
+        ("telemetry", "T1"), ("status", "T2"),
+        ("commands/response", "T4"), ("ota/response", "T7"),
+        ("diagnostics/response", "T9"),
+    ]
+    subscribes = [
+        ("commands", "T3"), ("clock/sync", "T5"), ("ota", "T6"),
+        ("diagnostics/request", "T8"),
+    ]
+    items = [{"action": "publish", "topic": f"{base}/{suffix}"} for suffix, _ in publishes]
+    items += [{"action": "subscribe", "topic": f"{base}/{suffix}"} for suffix, _ in subscribes]
+    return [{"permission": "allow", **item} for item in items]
+
 User = get_user_model()
 REVIEW_PERMISSION = "gateway_review"
 REVIEW_ROLES = {"admin", "support"}
@@ -491,22 +517,19 @@ def review_gateway_request(request, request_id: int):
             username=slot.slot_id,
             password_hash=hash_password(password),  # $2b$ — EMQX-native (C7)
         )
-        # Allow rules MUST name the topics the gateway actually publishes
+        # Allow rules MUST name the topics the gateway actually uses
         # (`{org}/farms/{farm}/gateways/{slot}/...` — the subscriber's grammar,
         # verified against the live broker; the old `org/.../gateway/#` shape
-        # matched nothing and no_match=deny dropped every publish).
-        MqttAclRule.objects.create(
-            username=credential.username,
-            topic=f"{row.org_id}/farms/{slot.farm_id}/gateways/{slot.slot_id}/telemetry",
-            permission="allow",
-            action="publish",
-        )
-        MqttAclRule.objects.create(
-            username=credential.username,
-            topic=f"{row.org_id}/farms/{slot.farm_id}/gateways/{slot.slot_id}/status",
-            permission="allow",
-            action="publish",
-        )
+        # matched nothing and no_match=deny dropped every publish). M8-04-H:
+        # the full firmware contract — telemetry/status publish PLUS the
+        # downlink subscriptions (T3/T5/T6/T8) and response publishes (T4/T7/T9).
+        for rule in gateway_acl_rule_items(str(row.org_id), slot.farm_id, slot.slot_id):
+            MqttAclRule.objects.create(
+                username=credential.username,
+                topic=rule["topic"],
+                permission=rule["permission"],
+                action=rule["action"],
+            )
         # The broker's authn user — plaintext is in hand exactly here (one-time
         # issue). FNV-soft: a broker hiccup never fails the review; a missing
         # user is healed by the next credential rotation (404-heal in

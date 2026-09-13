@@ -64,5 +64,13 @@ def run_replay_alert_sweep(gateway_slot: str | None = None):
 
 @shared_task(name="alerts.rebuild_active_state_from_db")
 def rebuild_active_state_from_db():
-    """PARKED to M8 (owner decision Q10, Tracker §4l) — DR drill scope."""
-    raise NotImplementedError("parked to M8 DR drill (Tracker §4l Q10)")
+    """T3 drill (M8-03, DR §3.2 leg 1): re-materialise breach + active alert
+    keys from Postgres after a catastrophic Redis wipe.
+
+    PARK to M8 lifted (Tracker §4l Q10) by the v0.8 DR drill; must run right
+    after the Redis volume is restored and BEFORE the cache warmers, while
+    the LOS suppression window is still ticking.
+    """
+    from apps.alerts.services.rebuild_state import rebuild_active_state
+
+    return rebuild_active_state()

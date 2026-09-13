@@ -72,3 +72,14 @@ htmlcov/
 /certbot-www/
 /monitoring/prometheus.runtime.yml
 /.deploy_tag
+
+# --- Local MCP + sandbox scaffolds (never committed) ---
+.mcp.json
+.sim-scaffold3/
+.sim-scaffold*/
+
+# --- Agent scratch (root working notes, never committed) ---
+/findings.md
+/task_plan.md
+/HANDOFF.md
+*.patch

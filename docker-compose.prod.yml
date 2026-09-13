@@ -113,7 +113,9 @@ services:
     restart: always
 
   postgres:
-    image: timescale/timescaledb:2.29.2-pg16
+    # M8-01: timescale + wal-g base image (archive_mode on, hourly WAL push —
+    # DR §2.1/§3.3). Rehearsal builds it locally via the override below.
+    image: ghcr.io/morghdari/postgres-walg:${MORGHDARI_TAG}
     container_name: morghdari-postgres
     mem_limit: 4g
     stop_grace_period: 120s
@@ -124,6 +126,16 @@ services:
       # entirely; see the warning in §2.2).
       POSTGRES_USER: "${POSTGRES_ADMIN_USER}"
       POSTGRES_PASSWORD: "${POSTGRES_ADMIN_PASSWORD}"
+      # M8-01 — wal-g storage (S3 / S3-compatible). Read by the wal-g binary in
+      # the image; the archive_command itself is fixed in the image config.
+      # AWS_ENDPOINT + AWS_S3_FORCE_PATH_STYLE are the S3-compatible lever
+      # (rehearsal MinIO sets them via the override; leave them empty for AWS S3).
+      WALG_S3_PREFIX: "${WALG_S3_PREFIX:-}"
+      AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID:-}"
+      AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-}"
+      AWS_REGION: "${AWS_REGION:-auto}"
+      AWS_ENDPOINT: "${AWS_ENDPOINT:-}"
+      AWS_S3_FORCE_PATH_STYLE: "${AWS_S3_FORCE_PATH_STYLE:-false}"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./initdb:/docker-entrypoint-initdb.d:ro
