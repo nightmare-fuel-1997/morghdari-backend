@@ -132,6 +132,10 @@ class DrainTests(_NoFlush):
         assert _pending(self.redis, STREAM_REALTIME) == 0  # acked AFTER commit
 
     def test_crash_before_ack_redelivers_to_exactly_one_row(self):
+        # BUG-13 contract change (QA 17.1 port): batch failures are CONTAINED
+        # per-row, never propagated — the old `pytest.raises` expectation
+        # described the pre-quarantine behavior where a crash escaped the
+        # drain. At-least-once still holds via redelivery + quarantine.
         from unittest.mock import patch
 
         world = self._make_world()
@@ -147,14 +151,59 @@ class DrainTests(_NoFlush):
         with patch.object(
             consumers.SaloonTelemetry.objects, "bulk_create", side_effect=RuntimeError("crash")
         ):
-            with pytest.raises(RuntimeError):
-                drain_stream(STREAM_REALTIME, count=10)
+            drain_stream(STREAM_REALTIME, count=10)  # contained, not raised
         assert _pending(self.redis, STREAM_REALTIME) == 1  # at-least-once held
 
         acked = drain_stream(STREAM_REALTIME, count=10)
         assert acked == 1
         assert SaloonTelemetry.objects.filter(org_id=world["org"].org_id).count() == 1
         assert _pending(self.redis, STREAM_REALTIME) == 0
+
+    def test_malformed_entry_dead_letters_with_processing_error(self):
+        """BUG-13 follow-up (QA 17.1 port): unparseable fields must DLQ+ack,
+        never escape drain_stream into an infinite redelivery loop the
+        delivery-count quarantine cannot see (it only tracks batch-commit
+        failures)."""
+        import time
+
+        world = self._make_world()
+        marker = f"qa-malformed-{uuid.uuid4().hex[:8]}"
+        self.redis.xadd(STREAM_REALTIME, {
+            "org_id": str(world["org"].org_id), "farm_id": str(world["slot"].saloon.farm_id),
+            "gateway_slot_id": f"GW-{world['tag']}",
+            "device_ts": "2026-08-25T12:00:00Z", "is_buffered": "False",
+            "slot_id": world["slot"].slot_id,
+            "payload": json.dumps({"qa": marker}), "recv_ts": "not-a-float",
+            "trace_id": marker, "metrics": '{"temp": 20.0}', "clock_drift": "False",
+        })
+        assert drain_stream(STREAM_REALTIME, count=10) == 1  # returns, does not raise
+        assert _pending(self.redis, STREAM_REALTIME) == 0  # acked via normal path
+        time.sleep(0.2)
+        bodies = [f for _, f in self.redis.xrange("telemetry:dead_letter", min="-", max="+")]
+        assert any(b.get("reason") == "PROCESSING_ERROR" and marker in (b.get("payload") or "")
+                   for b in bodies)
+
+    def test_persistent_db_failure_quarantined_after_threshold(self):
+        """BUG-13 (QA 17.1): a well-formed but un-storable entry (NUMERIC
+        overflow) must DLQ with PROCESSING_FAILED + XACK once deliveries
+        cross realtime_dlq_after_deliveries (default 5) — never loop forever."""
+        world = self._make_world()
+        marker = f"qa-poison-{uuid.uuid4().hex[:8]}"
+        self.redis.xadd(STREAM_REALTIME, {
+            "org_id": str(world["org"].org_id), "farm_id": str(world["slot"].saloon.farm_id),
+            "gateway_slot_id": f"GW-{world['tag']}",
+            "device_ts": "2026-08-25T12:00:00Z", "is_buffered": "False",
+            "slot_id": world["slot"].slot_id,
+            "payload": json.dumps({"qa": marker}), "recv_ts": "9999999999.0",
+            "trace_id": marker, "metrics": '{"temp": 20.0}', "clock_drift": "False",
+        })
+        for _ in range(7):  # threshold 5 crossed with margin
+            drain_stream(STREAM_REALTIME, count=10)
+        assert _pending(self.redis, STREAM_REALTIME) == 0  # XACK'd by quarantine
+        bodies = [f for _, f in self.redis.xrange("telemetry:dead_letter", min="-", max="+")]
+        assert any(b.get("reason") == "PROCESSING_FAILED" and marker in (b.get("payload") or "")
+                   for b in bodies)
+        assert not SaloonTelemetry.objects.filter(org_id=world["org"].org_id).exists()
 
 
 @pytest.mark.use_migrations

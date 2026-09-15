@@ -66,6 +66,11 @@ class AccountActivityLog(models.Model):
     # BUG-10/BUG-18: SET_NULL (not RESTRICT) so an API-created farm/saloon
     # can be hard-deleted; the *_CREATED audit row survives with its details
     # JSON (history preserved) while the FK nulls out.
+    # BUG-10/BUG-18: SET_NULL (not RESTRICT) so an API-created farm/saloon
+    # can be hard-deleted; the *_CREATED audit row survives with its details
+    # JSON (history preserved) while the FK nulls out.
+    # فارسی (باگ ۱۰/۱۸): کلید خارجی تهی‌شونده تا موجودِ تازهٔ بدون سابقه
+    # واقعاً حذف شود؛ ردیف حسابرسی با جزئیاتِ سالم می‌ماند.
     farm = models.ForeignKey("farms.Farm", on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
     saloon = models.ForeignKey("farms.Saloon", on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
     details = models.JSONField(null=True, blank=True)

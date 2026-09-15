@@ -65,8 +65,11 @@ class SaloonTelemetryConsumer(JsonWebsocketConsumer):
     # ------------------------------------------------------------------
 
     def connect(self):
-        # Resolve BEFORE accept(): a rejected socket never sends bytes, so
-        # the close code arrives cleanly on the 4xxx handshake.
+        # BUG-6 (QA 15.2/15.3/15.4): accept-then-close. Closing BEFORE
+        # accept() is translated by Daphne into a bare HTTP 403 handshake -
+        # the 4xxx close code never reaches wire clients, so auth-failure
+        # (re-login) vs cap-full (retry later) is indistinguishable.
+        # فارسی: ابتدا accept سپس close تا کد ۴xxx واقعاً روی وایر برسد.
         verdict = self._authorize()
         if verdict is not None:
             logger.info(
@@ -74,10 +77,6 @@ class SaloonTelemetryConsumer(JsonWebsocketConsumer):
                 verdict,
                 self.scope.get("url_route", {}).get("kwargs", {}).get("saloon_id"),
             )
-            # BUG-6: accept() BEFORE close() so the deny code reaches the
-            # wire as a WebSocket close frame - Daphne translates a
-            # pre-accept close() into a bare HTTP 403 handshake and the
-            # 4000/4003 contract is lost (QA 15.2/15.3/15.4).
             self.accept()
             self.close(code=verdict)
             return
@@ -108,7 +107,7 @@ class SaloonTelemetryConsumer(JsonWebsocketConsumer):
         setup = self._post_auth_setup(cap, timeout=2.5)
         if setup.get("decision") == "close-4000":
             self.connection_id = setup.get("connection_id")
-            # BUG-6: accept-then-close so 4000 is delivered (see deny path).
+            # BUG-6: same accept-then-close rule as the deny branch above.
             self.accept()
             self.close(code=4000)
             return

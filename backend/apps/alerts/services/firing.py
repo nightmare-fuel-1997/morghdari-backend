@@ -26,6 +26,17 @@ def _active_key(saloon_id: int, metric: str) -> str:
     return active_alert_key(saloon_id, metric)
 
 
+def clear_active_blob(redis_client, saloon_id: int, metric: str) -> None:
+    """Drop the open-alert pointer (BUG-9b full lifecycle). Called by
+    force-resolve AND by the coalesce self-heal below — the sweep's resolve
+    branch keeps its own delete (untouched).
+    No TTL backstop by design: a TTL could expire mid-episode and a re-fire
+    would insert a SECOND active row for the same saloon+metric, violating
+    the one-active-row invariant the coalescer exists to protect.
+    فارسی: بدون TTL — انقضای میانهٔ دوره ردیفِ تکراری میسازد؛ ترمیم در نقطهٔ خواندن."""
+    redis_client.delete(active_alert_key(saloon_id, metric))
+
+
 def fire_or_coalesce(
     redis_client,
     org_id: str,
@@ -56,9 +67,21 @@ def fire_or_coalesce(
     with transaction.atomic():
         with tenant_context(org_id):
             if existing_json:
-                # Coalesce: refresh the existing open alert's value/tier.
+                # BUG-9b self-heal: the blob outlived its row (a closer that
+                # forgot the clear, or a crash between the DB commit and the
+                # Redis delete). A stale pointer must NEVER coalesce into a
+                # dead row — drop it and fall through to the fresh-fire
+                # branch so the metric pages again.
+                # فارسی: اگر اشاره‌گر به ردیفِ بسته‌شده اشاره کند، پاکش کن و
+                # ردیفِ تازه بساز؛ هرگز به ردیفِ مرده نچسب.
                 existing = json.loads(existing_json)
                 alert = AlertInstance.objects.get(id=existing["alert_id"])
+                if alert.resolved_at is not None:
+                    clear_active_blob(redis_client, saloon_id, metric)
+                    existing_json = None
+                    existing = None
+            if existing_json:
+                # Coalesce: refresh the existing open alert's value/tier.
                 alert.current_value = value
                 if existing.get("current_tier", 1) > alert.highest_tier_reached:
                     alert.highest_tier_reached = existing["current_tier"]

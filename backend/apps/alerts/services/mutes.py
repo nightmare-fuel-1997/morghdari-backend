@@ -31,6 +31,23 @@ DIGEST_LOOKBACK_DAYS = 2  # bounded scan for ended windows awaiting digest
 DIGEST_MARKER_TTL_SEC = 7 * 86400
 
 
+def _admin_alias() -> str:
+    """RLS-bypassing read alias for cross-org discovery (monitoring pattern).
+
+    BUG-9 family (QA 20.3a): the worker connects as morghdari_app under FORCE
+    RLS — a default-alias MaintenanceMute read sees ZERO rows and the digest
+    silently emits nothing. Discovery runs on the sanctioned admin alias (same
+    as sweeps.escalate_all / replay.run_replay_sweep / thresholds.recache /
+    rebuild_state / monitoring rollup); per-mute handling below is Redis-only
+    (no DB writes), so no tenant_context is needed.
+    فارسی: کشفِ میان‌سازمانی با اتصالِ ادمین؛ خروجیِ خلاصه فقط ردیس است و نیازی
+    به زمینهٔ سازمان نیست.
+    """
+    from django.db import connections
+
+    return "admin" if "admin" in connections.databases else "default"
+
+
 def system_redis():
     """Same lazy client convention as sweeps/replay (tests inject)."""
     import os
@@ -69,7 +86,10 @@ def write_maintenance_mute_digests(now_dt=None) -> list:
     now_dt = now_dt or dj_tz.now()
     client = system_redis()
     digested = []
-    ended = MaintenanceMute.objects.filter(
+    # BUG-9 family (QA 20.3a): cross-org discovery on the admin alias — a bare
+    # default-alias read sees zero rows as the app role under FORCE RLS.
+    # فارسی: فهرستِ پنجره‌های تمام‌شده با ادمین؛ پردازشِ هر پنجره فقط ردیس است.
+    ended = MaintenanceMute.objects.using(_admin_alias()).filter(
         ends_at__lte=now_dt,
         starts_at__gte=now_dt - timedelta(days=DIGEST_LOOKBACK_DAYS),
     ).iterator()

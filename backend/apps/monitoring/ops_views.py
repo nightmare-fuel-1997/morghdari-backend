@@ -1474,6 +1474,11 @@ def reconciliation(request):
         return _forbidden()
     raw_day = str(request.query_params.get("day") or "").strip()
     try:
+        # BUG-2 (QA 16.13): the OpenAPI contract promises "default: yesterday",
+        # but a missing ?day= was passed through as None and
+        # `_tehran_day_bounds(None)` raised TypeError -> HTTP 500. Absent now
+        # means yesterday in Tehran; a PRESENT but invalid value still 400s.
+        # فارسی: نبودِ ?day باید «دیروزِ تهران» شود، نه خطای ۵۰۰.
         day = svc.parse_recon_day(raw_day) if raw_day else svc.tehran_yesterday()
     except ValueError:
         return _bad_request("day must be YYYY-MM-DD")

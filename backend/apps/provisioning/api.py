@@ -15,6 +15,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
 from apps.accounts.permissions import _claims
+from apps.tenants.context import admin_alias
 from apps.common.schemas import (
     CONFLICT_RESPONSE,
     RATE_LIMITED_RESPONSE,
@@ -1013,34 +1014,27 @@ def gateway_config(request, gateway_slot_id: str):
     credential shape. Never echoes the one-time plaintext password.
     Authentication is resolved IN the view (device Basic vs manager JWT)
     because the two callers use different auth systems."""
-    from django.db import transaction
-
-    from apps.mqtt_auth.models import MqttDeviceCredential
-    from apps.mqtt_auth.services import gateway_config_payload
-    from apps.tenants.context import tenant_context
-
-    device = _basic_device(request)
-    claims = None if device is not None else _claims(request)
-    # BUG-11: gateway_slots is FORCE-RLS'd, so the slot MUST be resolved
-    # inside a bounded tenant context or the app role sees zero rows and
-    # EVERY non-JWT caller 404s (QA 12.7). Scope comes from the
-    # authenticated principal (device credential org, else manager JWT org),
-    # never from the URL argument.
-    if device is not None:
-        org_scope = getattr(device, "org_id", None)
-    else:
-        org_scope = (claims or {}).get("org_id")
-    if org_scope:
-        with transaction.atomic(), tenant_context(org_scope):
-            slot = GatewaySlot.objects.filter(pk=gateway_slot_id).first()
-    else:
-        slot = GatewaySlot.objects.filter(pk=gateway_slot_id).first()
+    # BUG-11 (QA 12.7): `gateway_slots` is FORCE-RLS'd, so a context-free
+    # lookup as the app role hides the row and EVERY non-JWT caller - a valid
+    # device Basic credential included - got 404 "gateway not found", which
+    # made the documented 401 unreachable. Discovery runs on the sanctioned
+    # admin alias (same pattern as replay.py / monitoring); authorization is
+    # unchanged below, so a caller must still prove the device credential or
+    # the manager/owner JWT org claim.
+    # فارسی: کشفِ اسلات با alias ادمین تا RLS آن را پنهان نکند؛ احراز هویت
+    # همچنان در همین ویو و بدون تغییر اعمال میشود.
+    slot = GatewaySlot.objects.using(admin_alias()).filter(pk=gateway_slot_id).first()
     if slot is None:
         return Response({"error": "gateway not found"}, status=404)
 
+    from apps.mqtt_auth.models import MqttDeviceCredential
+    from apps.mqtt_auth.services import gateway_config_payload
+
     credential = MqttDeviceCredential.objects.filter(username=slot.slot_id).first()
+    device = _basic_device(request)
     if device is None:
         # Manager/owner JWT path.
+        claims = _claims(request)
         org_id = claims.get("org_id") if claims else None
         roles = set(claims.get("roles", [])) if claims else set()
         if org_id is None and not request.user.is_authenticated:

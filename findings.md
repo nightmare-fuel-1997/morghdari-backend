@@ -24,11 +24,11 @@
 
 Why this section exists: the VPS deploy rehearsal (poultry_vps_deploy) ran the full 297-row QA plan against a live Docker stack; five FAILs plus deferred NAs produced product fixes that were applied HERE first (TDD) and mirrored byte-identical to the snapshot. Each code change carries an EN+FA why-comment naming its BUG id so future readers (human or AI) know why the code changed.
 
-- BUG-5 closed: LoginView now carries LoginRateThrottle (auth_login 60/min per attempted username; IP-keying rejected — shared test IP false-triggers). New ackend/tests/test_m2_11_login_throttle.py; throttle class in pps/monitoring/ops_throttles.py; rate in config/settings/base.py.
-- BUG-7 closed: compat consumer accepts both armSlug (route kwarg) and arm_slug (canonical) spellings — every compat WS connect used to KeyError (pps/compat/consumers_compat.py).
-- BUG-8 closed: WS connect no longer depends on redis timing — post-auth redis I/O under one 2.5s wall-clock bound, fail-open degrade, _authorize() redis-free; 1s socket knobs on the ws redis client (pps/telemetry/ws_consumer.py, pps/telemetry/ws.py).
-- BUG-20 fixed: muted 	hi crashed the drain (UnboundLocalError — 	hi computed only in the unmuted else while 	rack_breach ran either way). Muted = note+SKIP with lane-3 semantics (pps/alerts/services/evaluation.py); RED/GREEN 	est_thi_muted_suppresses_without_crashing in 	ests/test_m4_09_capability.py.
-- BUG-22 fixed (regression the BUG-8 fix introduced): socket_timeout: 1 on CHANNEL_LAYERS killed every idle WS ~2s after connect (channels_redis receive() is a brpop_timeout=5 long-poll). Layer now keeps only socket_connect_timeout: 1 (config/settings/base.py); pinned by 	ests/test_channel_layer_config.py.
+- BUG-5 closed: LoginView now carries LoginRateThrottle (auth_login 60/min per attempted username; IP-keying rejected — shared test IP false-triggers). New `backend/tests/test_m2_11_login_throttle.py`; throttle class in `apps/monitoring/ops_throttles.py`; rate in `config/settings/base.py`.
+- BUG-7 closed: compat consumer accepts both `farmSlug` (route kwarg) and `farm_slug` (canonical) spellings — every compat WS connect used to KeyError (`apps/compat/consumers_compat.py`).
+- BUG-8 closed: WS connect no longer depends on redis timing — post-auth redis I/O under one 2.5s wall-clock bound, fail-open degrade, _authorize() redis-free; 1s socket knobs on the ws redis client (`apps/telemetry/ws_consumer.py`, `apps/telemetry/ws.py`).
+- BUG-20 fixed: muted `thi` crashed the drain (UnboundLocalError — `thi` computed only in the unmuted else while `track_breach` ran either way). Muted = note+SKIP with lane-3 semantics (`apps/alerts/services/evaluation.py`); RED/GREEN `test_thi_muted_suppresses_without_crashing` in `tests/test_m4_09_capability.py`.
+- BUG-22 fixed (regression the BUG-8 fix introduced): socket_timeout: 1 on CHANNEL_LAYERS killed every idle WS ~2s after connect (channels_redis receive() is a brpop_timeout=5 long-poll). Layer now keeps only socket_connect_timeout: 1 (config/settings/base.py); pinned by `tests/test_channel_layer_config.py`.
 - BUG-21 filed (not fixed): Prometheus's Django job targets daphne:8000 but DJANGO_ALLOWED_HOSTS lacks daphne -> every scrape DisallowedHost; BeatHeartbeatStale unmonitorable in practice until the host list widens.
 - Full evidence and the remaining environment-leaning items (BUG-12 Docker Desktop restart quirk, BUG-18 farm/saloon RESTRICT-audit delete family, 8.15 v1.0 quota deferral) live in poultry_vps_deploy/BUGS.md; final tally 296 PASS / 0 FAIL / 1 NA of 297.
 
@@ -47,3 +47,20 @@ tests: `backend/tests/test_bugfix_2026_09_15.py`. Commits `6ebd61e` + `768840d`.
 - BUG-10/18: audit farm/saloon FK -> SET_NULL (+ migration).
 - BUG-13: drain dead-letters unprocessable entries.
 - BUG-14: `deploy.sh` nginx reload. BUG-15: wal-g creds. BUG-21: `.env.example` daphne. BUG-1: `DEPLOYMENT.md` migrate note.
+
+## 2026-09-15 open-bug fix round (all green)
+
+Why this section exists: the remaining open bugs from the VPS live-stack QA (BUG-1/2/4/6/9b/10/11/13/18/21 + BUG-9 proof) were fixed HERE first (TDD) and mirrored byte-identical to the snapshot, each with EN+FA why-comments. Final QA: 296 PASS / 0 FAIL / 1 NA (8.15, quota-engine deferral); parent full acceptance re-run 650 passed / 3 skipped / 0 failed.
+
+- BUG-9 closed: enforced-RLS proof tests (backend/tests/test_sweep_rls_enforced.py, module-scoped admin-alias fixture) + the last real gap found thereby — write_maintenance_mute_digests() now discovers via _admin_alias() (apps/alerts/services/mutes.py).
+- BUG-9b closed: clear_active_blob() + coalesce self-heal for stale pointers, no TTL by design (would duplicate the one-active-row invariant); force-resolve clears the blob (apps/alerts/services/firing.py, apps/accounts/views.py).
+- BUG-10/18 closed: AccountActivityLog farm/saloon FKs RESTRICT -> SET_NULL (+ reversible migration); fresh entities delete 200, history stays honestly 409.
+- BUG-6 closed: WS connect() accept-then-close — real 4003/4000 wire codes (apps/telemetry/ws_consumer.py); plan rows reworded from wire-403.
+- BUG-11 closed: DATABASE_ADMIN_URL added to the daphne service (docker-compose.prod.yml) — the admin alias previously existed only on celery-worker so device-config discovery 404'd in request traffic.
+- BUG-21 closed: scrape proven (django job up); DisallowedHost resolved via the daphne ALLOWED_HOSTS entry.
+- BUG-2/4/13 closed by re-probe on the verified-fresh image (default-yesterday 200; smoke-6; poison -> DLQ PROCESSING_FAILED + XACK).
+- BUG-13 port (2026-09-15, second pass): the drain quarantine lived only in the snapshot tree and was never mirrored here — ported byte-identical (apps/telemetry/consumers.py: per-row isolation + delivery-count quarantine) PLUS a parse guard the snapshot lacked (unparseable fields DLQ with PROCESSING_ERROR + ack, preserving this repo's older behavior instead of escaping into infinite redelivery). Tests: test_malformed_entry_dead_letters_with_processing_error + test_persistent_db_failure_quarantined_after_threshold (parent CI drain file 7/7); live-proven on the snapshot stack.
+- BUG-11 unification (2026-09-15): this repo's tenant-context gateway_config variant answered anonymous/bad-creds with 404, contradicting the documented 401. Unified onto the admin-alias version (apps/provisioning/api.py + new admin_alias() in apps/tenants/context.py); gateway-config tests 22/22 green. All 16 fix files now byte-identical across both repos (verified).
+- Test-hygiene incident (for future AI): a test module mutating settings.DATABASES at import flipped every _admin_alias() session-wide and failed 47 modules; fixed with module-scoped fixture lifecycle. Never mutate settings at import time.
+- Image-hygiene incident (for future AI): 'up -d --build' silently no-ops the build — always separate 'build [--no-cache]' + check Built + in-container content check by md5, never grep markers alone.
+- Still open: BUG-12 (needs Linux VPS kill-drill; runbook in snapshot DEPLOYMENT.md section 7).

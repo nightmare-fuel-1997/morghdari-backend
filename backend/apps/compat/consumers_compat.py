@@ -44,8 +44,9 @@ class FarmTelemetryConsumer(JsonWebsocketConsumer):
     def connect(self):
         verdict = self._authorize()
         if verdict is not None:
-            # BUG-6: accept() BEFORE close() so the 4003 reaches the wire
-            # (a pre-accept close is an HTTP 403 handshake under Daphne).
+            # BUG-6 (QA 15.2): accept-then-close - a close() before accept()
+            # becomes a bare HTTP 403 handshake and the 4xxx code is lost.
+            # فارسی: ابتدا accept سپس close تا کد ۴xxx تحویل شود.
             self.accept()
             self.close(code=verdict)
             return
@@ -53,7 +54,7 @@ class FarmTelemetryConsumer(JsonWebsocketConsumer):
         self.connection_id = ws.register_connection(self.user.pk)
         cap = ws.config_int("ws_max_connections_per_user", 10)
         if ws.active_count(self.user.pk) > cap:
-            # BUG-6: accept-then-close so 4000 is delivered.
+            # BUG-6: same accept-then-close rule as the deny branch above.
             self.accept()
             self.close(code=4000)
             return

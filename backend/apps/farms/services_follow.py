@@ -172,6 +172,14 @@ def saloon_delete_error(saloon) -> str | None:
       key, and `farms_saloons` has no soft-delete column to retire it with, so
       this is honestly a 409 rather than a silent archive;
     * telemetry — the saloon was measured, so its id anchors time-series rows.
+
+    BUG-10/BUG-18: audit rows are NOT in the list above on purpose — the
+    `AccountActivityLog` farm/saloon FKs are SET_NULL, so a fresh saloon (no
+    flock, no telemetry, no positions — audit lines only) IS truly deletable;
+    its *_CREATED row survives with a NULL FK and intact details.
+
+    فارسی (باگ ۱۰/۱۸): سطر حسابرسی مانع حذف نیست؛ موجودِ تازهٔ بدون سابقه
+    واقعاً حذف می‌شود.
     """
     from apps.telemetry.models import FlockCycle
 

@@ -46,6 +46,9 @@ logger = logging.getLogger(__name__)
 
 CONSUMER_GROUP = "telemetry_workers"   # Q2: contract name (Tracker Â§4k)
 BATCH_SIZE_DEFAULT = 50
+# BUG-13 (QA 17.1): after this many failed deliveries the realtime drain
+# dead-letters the entry instead of re-trying it for ever.
+DEFAULT_DLQ_AFTER_DELIVERIES = 5
 # F4 (2026-09-10 v0.7 re-verify): PEL entries orphaned by a DEAD consumer
 # (container recreation / stack swap mints a fresh SUBSCRIBER_CONSUMER_ID)
 # are reclaimed by drain_stream once they have been undelivered this long.
@@ -238,10 +241,16 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None,
     # same entry legitimately appears in both — countdown once per entry.
     buffered_by_gw: dict[str, int] = {}  # replay backlog countdown
     seen_ids: set[str] = set()
+    # BUG-13 (QA 17.1) quarantine bookkeeping: raw fields per entry (DLQ
+    # body) and the entries this cycle could not be stored - they stay
+    # unacked in the PEL and are dead-lettered once they keep failing.
+    fields_by_id: dict[str, dict] = {}
+    failed_ids: set[str] = set()
     for _stream, entries in batches:
         if not entries:
             continue
         by_org: dict[str, list[dict]] = {}
+        ids_by_org: dict[str, list[str]] = {}  # BUG-13: batch-failure attribution
         ids: list[str] = []
         raw_entries: list[tuple[str, dict]] = []  # (org_id_str, fields)
         for entry_id, fields in entries:
@@ -250,14 +259,22 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None,
             first_sight = entry_id not in seen_ids
             seen_ids.add(entry_id)
             ids.append(entry_id)
-            # BUG-13: one unprocessable entry must not poison the whole drain
-            # (retried forever with a stack trace every cycle). Dead-letter it
-            # with a reason and ack - it is poison, not retryable (QA 17.1).
+            fields_by_id[entry_id] = fields  # BUG-13: DLQ payload source
             try:
                 kwargs = _to_model_kwargs(fields)
             except Exception:
+                # BUG-13 follow-up (QA 17.1 port): unparseable fields would
+                # otherwise escape drain_stream entirely — the quarantine pass
+                # only sees batch-commit failures, so a malformed entry would
+                # redeliver forever outside it. Dead-letter with a reason and
+                # ack via the normal path — it is poison, not retryable.
+                # فارسی: ورودیِ ناقص همان‌جا به صندوق مرده می‌رود، نه چرخهٔ بی‌پایان.
                 from morghdari.subscriber.dlq import send_to_dlq
 
+                logger.exception(
+                    "realtime drain: unparseable entry dead-lettered (entry=%s)",
+                    entry_id,
+                )
                 send_to_dlq(
                     client,
                     fields.get("gateway_slot_id", "unknown-topic"),
@@ -280,7 +297,8 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None,
             else:
                 kwargs["saloon_id"] = saloon_id
                 by_org.setdefault(kwargs["org_id"], []).append(kwargs)
-                raw_entries.append((kwargs["org_id"], {"saloon_id": saloon_id, "fields": fields}))
+                ids_by_org.setdefault(kwargs["org_id"], []).append(entry_id)
+                raw_entries.append((kwargs["org_id"], {"saloon_id": saloon_id, "fields": fields, "entry_id": entry_id}))
             if fields.get("is_buffered") == "True" and first_sight:
                 # Count EVERY buffered entry (even DLQ'd ones — the slot was
                 # still processed), else the backlog never reaches zero.
@@ -292,48 +310,17 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None,
                 bump_buffered(client, kwargs["org_id"])
 
         for org, rows in by_org.items():
-            from apps.tenants.context import tenant_context
-
-            # FORCE RLS: one GUC per commit; mixed-org batches are impossible.
-            with transaction.atomic():
-                with tenant_context(org):
-                    SaloonTelemetry.objects.bulk_create(
-                        (SaloonTelemetry(**row) for row in rows),
-                        ignore_conflicts=True,  # same-entry redelivery ⇒ no-op
-                    )
-
-                    # M4-04: inline alert evaluation AFTER telemetry commit.
-                    # Runs inside the SAME tenant_context for RLS consistency.
-                    from apps.alerts.services.evaluation import evaluate_entry
-
-                    for entry_org, raw in raw_entries:
-                        if entry_org != org:
-                            continue  # only evaluate entries belonging to THIS org
-                        try:
-                            metrics_data = json.loads(
-                                raw["fields"].get("metrics", "{}")
-                            )
-                            _eval_started = time.perf_counter()
-                            evaluate_entry(
-                                redis_client=client,
-                                saloon_id=raw["saloon_id"],
-                                org_id=entry_org,
-                                farm_id=int(raw["fields"].get("farm_id") or 0),
-                                slot_id=raw["fields"].get("slot_id", ""),
-                                metrics=metrics_data,
-                                device_ts=raw["fields"].get("device_ts", ""),
-                            )
-                            # M7-04 observability: eval latency ring (runbook §3.1).
-                            from apps.monitoring.metrics import note_alert_eval_latency
-
-                            note_alert_eval_latency(
-                                client, time.perf_counter() - _eval_started
-                            )
-                        except Exception:
-                            logger.exception(
-                                "alert evaluation failed for saloon=%s",
-                                entry_org,
-                            )
+            failed_here = _persist_org_batch(
+                client, org, rows, raw_entries, ids_by_org.get(org, [])
+            )
+            if failed_here:
+                # BUG-13 (QA 17.1): this org's batch could not be committed.
+                # Leave those entries unacked (redelivered next cycle) and let
+                # the quarantine pass below dead-letter the persistent ones.
+                # فارسی: ورودیهای ناموفق در PEL میمانند و در صورت تکرار به DLQ
+                # میروند - نه ackِ کورکورانه.
+                failed_ids.update(failed_here)
+                continue
 
             processed += len(rows)
 
@@ -394,9 +381,11 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None,
         # THE rule: acknowledge only after the DB commit above succeeded.
         # Same entry may appear in BOTH the '>' read and the PEL read within
         # one cycle — ack counts ENTRIES, so the return value stays honest.
-        if ids:
-            client.xack(stream, CONSUMER_GROUP, *ids)
-            acked.update(ids)
+        # BUG-13: never ack what we did not store.
+        ackable = [entry for entry in ids if entry not in failed_ids]
+        if ackable:
+            client.xack(stream, CONSUMER_GROUP, *ackable)
+            acked.update(ackable)
             if pacer is not None:
                 time.sleep(pacer.sleep_seconds(org))
                 pacer.wait_for_org(org)
@@ -413,6 +402,14 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None,
     # drain call, AFTER the batches loop (the '>' read and the PEL read are
     # separate tuples — per-batch dispatch would double-decrement), and only
     # after every batch's DB commit above.
+    # BUG-13 (QA 17.1): after the batch loop, dead-letter any entry that has
+    # crossed the delivery threshold (it was deliberately left unacked above).
+    # فارسی: قرنطینهٔ ورودیهای پیاپی-ناموفق با DLQ + ack تا حلقهٔ خطا بسته شود.
+    if failed_ids:
+        acked.update(
+            _quarantine_repeated_failures(client, stream, failed_ids, fields_by_id)
+        )
+
     for gw, count in buffered_by_gw.items():
         from apps.alerts.services.replay import note_buffered_processed
 
@@ -420,6 +417,149 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None,
 
     trim_streams(client)  # M3-07: bounded streams on every touch
     return len(acked)  # unique entries acknowledged; row count may be lower
+
+
+def _evaluate_org_entries(client, org, raw_entries, only_ids=None):
+    """M4-04: inline alert evaluation for one org's entries (post-commit).
+
+    Extracted from drain_stream for BUG-13 so a poisoned batch can re-evaluate
+    only the rows it actually managed to store.
+    """
+    from apps.alerts.services.evaluation import evaluate_entry
+
+    for entry_org, raw in raw_entries:
+        if entry_org != org:
+            continue  # only evaluate entries belonging to THIS org
+        if only_ids is not None and raw.get("entry_id") not in only_ids:
+            continue
+        try:
+            metrics_data = json.loads(raw["fields"].get("metrics", "{}"))
+            _eval_started = time.perf_counter()
+            evaluate_entry(
+                redis_client=client,
+                saloon_id=raw["saloon_id"],
+                org_id=entry_org,
+                farm_id=int(raw["fields"].get("farm_id") or 0),
+                slot_id=raw["fields"].get("slot_id", ""),
+                metrics=metrics_data,
+                device_ts=raw["fields"].get("device_ts", ""),
+            )
+            # M7-04 observability: eval latency ring (runbook 3.1).
+            from apps.monitoring.metrics import note_alert_eval_latency
+
+            note_alert_eval_latency(client, time.perf_counter() - _eval_started)
+        except Exception:
+            logger.exception("alert evaluation failed for saloon=%s", entry_org)
+
+
+def _persist_org_batch(client, org, rows, raw_entries, entry_ids) -> set:
+    """Insert one org's telemetry batch + inline eval; return UNSTORED entry ids.
+
+    BUG-13 (QA 17.1): the realtime drain had NO poison-message quarantine. An
+    entry that raised during processing (observed: a NUMERIC(10,2) overflow from
+    an absurd recv_ts, but any unprocessable shape qualifies) was retried on
+    EVERY drain cycle for ever - 47 deliveries observed - with a stack trace
+    every 2s, and was never dead-lettered. On batch failure the rows are
+    therefore retried ONE BY ONE so a single poison entry is quarantined
+    without discarding the healthy rows that shared its batch.
+    فارسی: در صورت خطا ردیفها یکبهیک درج میشوند تا فقط پیامِ سمی قرنطینه شود و
+    دادهٔ سالم از دست نرود.
+    """
+    from apps.tenants.context import tenant_context
+
+    try:
+        with transaction.atomic():
+            with tenant_context(org):
+                SaloonTelemetry.objects.bulk_create(
+                    (SaloonTelemetry(**row) for row in rows),
+                    ignore_conflicts=True,  # same-entry redelivery -> no-op
+                )
+                _evaluate_org_entries(client, org, raw_entries)
+        return set()
+    except Exception:
+        logger.exception(
+            "realtime drain: batch insert failed for org=%s - isolating rows", org
+        )
+
+    failed: set = set()
+    stored_ids: set = set()
+    for index, row in enumerate(rows):
+        entry_id = entry_ids[index] if index < len(entry_ids) else None
+        try:
+            with transaction.atomic():
+                with tenant_context(org):
+                    SaloonTelemetry.objects.bulk_create(
+                        [SaloonTelemetry(**row)], ignore_conflicts=True
+                    )
+        except Exception:
+            logger.exception(
+                "realtime drain: poison entry quarantined (org=%s entry=%s)",
+                org, entry_id,
+            )
+            if entry_id is not None:
+                failed.add(entry_id)
+        else:
+            if entry_id is not None:
+                stored_ids.add(entry_id)
+
+    if stored_ids:
+        try:
+            with transaction.atomic():
+                with tenant_context(org):
+                    _evaluate_org_entries(client, org, raw_entries, only_ids=stored_ids)
+        except Exception:
+            logger.exception("realtime drain: post-isolation eval failed org=%s", org)
+    return failed
+
+
+def _quarantine_repeated_failures(client, stream, failed_ids, fields_by_id) -> set:
+    """DLQ + XACK entries whose delivery count crossed the quarantine limit.
+
+    BUG-13 (QA 17.1). Returns the entry ids actually quarantined this cycle.
+    The threshold is config-driven (`realtime_dlq_after_deliveries`) with a
+    sane default so an operator can tune it without a code change.
+    فارسی: پیامهایی که چند بار پیاپی شکست خوردهاند با دلیل به DLQ میروند و ack
+    میشوند تا حلقهٔ بیپایانِ خطا متوقف شود.
+    """
+    if not hasattr(client, "xpending_range"):
+        return set()  # test double without XPENDING support
+    threshold = max(
+        _config_int("realtime_dlq_after_deliveries", DEFAULT_DLQ_AFTER_DELIVERIES), 1
+    )
+    quarantined: set = set()
+    for entry_id in sorted(failed_ids):
+        try:
+            pending = client.xpending_range(
+                stream, CONSUMER_GROUP, min=entry_id, max=entry_id, count=1
+            )
+        except Exception:
+            logger.exception("BUG-13: XPENDING failed for entry %s", entry_id)
+            continue
+        deliveries = 0
+        if pending:
+            row = pending[0] or {}
+            deliveries = row.get("times_delivered") or row.get("delivery_count") or 0
+        if deliveries < threshold:
+            continue
+        fields = fields_by_id.get(entry_id, {})
+        try:
+            from morghdari.subscriber.dlq import send_to_dlq
+
+            send_to_dlq(
+                client,
+                fields.get("gateway_slot_id", "unknown-topic"),
+                fields.get("payload", ""),
+                "PROCESSING_FAILED",
+            )
+        except Exception:
+            logger.exception("BUG-13: DLQ write failed for entry %s", entry_id)
+            continue
+        client.xack(stream, CONSUMER_GROUP, entry_id)
+        logger.warning(
+            "BUG-13: quarantined entry %s after %s deliveries", entry_id, deliveries
+        )
+        quarantined.add(entry_id)
+    return quarantined
 
 
 def discard_pending_for_gateway(client, gateway_slot: str, reason: str = "gateway_rejected") -> int:

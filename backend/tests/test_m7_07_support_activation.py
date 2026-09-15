@@ -446,3 +446,84 @@ class SupportSessionAppRoleTests(TestCase):
             format="json",
         )
         self.assertEqual(garbage.status_code, 400, garbage.data)
+
+
+class SupportForceResolveRefireTests(TestCase):
+    """BUG-9b full lifecycle: force-resolve must clear the coalesce blob so
+    the next breach on the same saloon+metric fires a NEW row (no blackhole).
+
+    Wiring: the firing service takes an explicit redis client while the
+    support view resolves `system_redis()` internally, so the test patches
+    `apps.alerts.services.sweeps.system_redis` onto the SAME real-Redis
+    handle the firing calls use (CI REDIS_URL + /11, the firing-suite
+    convention) — otherwise the test would compare two different logical
+    DBs instead of the lifecycle.
+    فارسی: پس از بستنِ اجباری، نقضِ بعدی باید ردیفِ تازه بسازد."""
+
+    def setUp(self):
+        import redis as redis_lib
+
+        from tests.conftest import INTEGRATION_REDIS_URL
+
+        self.client = APIClient()
+        self.org = _make_org("REFIRE-ORG")
+        self.staff = _make_staff("refirestaff", mfa_code="enrolled")
+        province = Province.objects.create(name="P-REFIRE")
+        city = City.objects.create(province=province, name="C-REFIRE")
+        self.farm = Farm.objects.create(
+            org=self.org, name="F-REFIRE", province=province, city=city
+        )
+        self.saloon = Saloon.objects.create(
+            org=self.org, farm=self.farm, name="S-REFIRE"
+        )
+        self.rc = redis_lib.Redis.from_url(
+            INTEGRATION_REDIS_URL, decode_responses=True
+        )
+        self.rc.flushdb()
+
+    def tearDown(self):
+        self.rc.flushdb()
+
+    def _session(self):
+        token = _login(
+            self.client, "refirestaff",
+            mfa_code=pyotp.TOTP(self.staff.platform_mfa.secret).now(),
+        )
+        self.assertEqual(token.status_code, 200, token.data)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token.data['access_token']}")
+        opened = self.client.post(
+            reverse("accounts:support-session"),
+            {"org_id": str(self.org.org_id), "incident_id": "INC-9b"},
+            format="json",
+        )
+        self.assertEqual(opened.status_code, 200, opened.data)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {opened.data['access_token']}")
+
+    def test_force_resolve_then_rebreach_fires_new_row(self):
+        from apps.alerts.services.firing import fire_or_coalesce
+
+        self._session()
+        with mock.patch(
+            "apps.alerts.services.sweeps.system_redis", lambda: self.rc
+        ):
+            first = fire_or_coalesce(
+                self.rc, self.org.org_id, self.farm.id,
+                self.saloon.id, "temp", 35.0,
+            )
+            self.assertEqual(first["action"], "fired")
+            url = reverse(
+                "accounts:support-alert-force-resolve", args=[first["alert_id"]]
+            )
+            resp = self.client.post(
+                url, {"reason": "BUG-9b refire drill INC-9b"}, format="json"
+            )
+            self.assertEqual(resp.status_code, 200, resp.data)
+            second = fire_or_coalesce(
+                self.rc, self.org.org_id, self.farm.id,
+                self.saloon.id, "temp", 36.5,
+            )
+            self.assertEqual(second["action"], "fired")
+            self.assertNotEqual(second["alert_id"], first["alert_id"])
+            self.assertEqual(
+                AlertInstance.objects.filter(saloon=self.saloon).count(), 2
+            )

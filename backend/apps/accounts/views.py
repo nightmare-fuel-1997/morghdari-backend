@@ -877,14 +877,17 @@ def support_alert_force_resolve(request, alert_id):
     alert.current_status = "RESOLVED"
     alert.save(update_fields=["resolved_at", "current_status"])
 
-    # BUG-9b: clearing the coalesce blob is what lets the metric page again;
-    # a force-resolved alert that leaves `alert:active:*` behind blackholes
-    # every future episode (QA 8.1/8.2b/8.8). Redis down must not fail the
-    # runbook op, so the clear is best-effort.
+    # BUG-9b full lifecycle: clearing the coalesce blob is what lets the
+    # metric page again; a force-resolved alert that leaves `alert:active:*`
+    # behind blackholes every future episode (QA 8.1/8.2b/8.8). Redis down
+    # must not fail the runbook op, so the clear is best-effort.
+    # فارسی: پاک‌سازیِ اشاره‌گرِ فعال تا سنجه دوباره هشدار بدهد؛ خطای ردیس
+    # نباید عملیاتِ بستنِ اجباری را بشکند.
     try:
-        from apps.alerts.services.sweeps import clear_active_pointer
+        from apps.alerts.services.firing import clear_active_blob
+        from apps.alerts.services.sweeps import system_redis
 
-        clear_active_pointer(saloon_id=alert.saloon_id, metric=alert.metric_type)
+        clear_active_blob(system_redis(), alert.saloon_id, alert.metric_type)
     except Exception:
         import logging
 

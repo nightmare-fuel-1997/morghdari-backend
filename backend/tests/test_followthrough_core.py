@@ -449,6 +449,84 @@ def test_saloon_delete_refuses_when_measured():
     assert _audit("SALOON_DELETED", world["org"].org_id).count() == 0
 
 
+def test_fresh_api_created_farm_and_saloon_delete_cleanly_audit_survives():
+    """BUG-10/BUG-18: a farm+saloon created via the API (zero history) hard-
+    deletes with 200s; the *_CREATED audit rows survive with NULL FKs and
+    intact details. Pre-fix this 409'd: the CREATED rows' RESTRICT FKs blocked
+    the very delete they record.
+
+    فارسی: موجودِ تازهٔ بدون سابقه باید واقعاً حذف شود؛ ردیف‌های *_CREATED با
+    کلیدِ تهی و جزئیاتِ سالم می‌مانند.
+    """
+    world = _make_world()
+    owner = _as(world, "owner")
+    manager = _as(world, "manager")
+
+    res = owner.post(
+        "/api/v1/farms/",
+        {
+            "name": f"Doomed-{world['tag']}",
+            "province_id": world["province"].pk,
+            "city_id": world["city"].pk,
+            "village_id": world["village"].pk,
+        },
+        format="json",
+    )
+    assert res.status_code == 201, res.content
+    farm_id = res.data["farm_id"]
+    farm_details = {
+        "name": f"Doomed-{world['tag']}",
+        "province_id": world["province"].pk,
+        "city_id": world["city"].pk,
+    }
+
+    res = manager.post(
+        f"/api/v1/farms/{farm_id}/saloons/",
+        {"name": f"DoomedSaloon-{world['tag']}"},
+        format="json",
+    )
+    assert res.status_code == 201, res.content
+    saloon_id = int(res.data["saloon_id"])
+    saloon_details = {"name": f"DoomedSaloon-{world['tag']}"}
+
+    # While the entities exist, the CREATED rows point at them.
+    farm_created = AccountActivityLog.objects.get(
+        action="FARM_CREATED", org_id=world["org"].org_id, farm_id=farm_id
+    )
+    assert farm_created.details == farm_details
+    saloon_created = AccountActivityLog.objects.get(
+        action="SALOON_CREATED", org_id=world["org"].org_id, saloon_id=saloon_id
+    )
+    assert saloon_created.farm_id == farm_id
+    assert saloon_created.details == saloon_details
+
+    # Zero history → both deletes succeed (sqlite cannot verify the unmanaged
+    # history tables, so it refuses instead of deleting blindly — the same
+    # pragmatism as the farm/saloon delete tests above).
+    res = manager.delete(f"/api/v1/saloons/{saloon_id}/")
+    if connection.vendor != "postgresql":
+        assert res.status_code == 409, res.content
+        assert "cannot be verified" in res.data["error"]
+        return
+    assert res.status_code == 200, res.content
+    assert not Saloon.objects.filter(pk=saloon_id).exists()
+
+    res = owner.delete(f"/api/v1/farms/{farm_id}/")
+    assert res.status_code == 200, res.content
+    assert not Farm.objects.filter(pk=farm_id).exists()
+
+    # The audit trail survives its entities: FKs nulled, details intact.
+    farm_created.refresh_from_db()
+    assert farm_created.farm_id is None
+    assert farm_created.details == farm_details
+    saloon_created.refresh_from_db()
+    assert saloon_created.saloon_id is None
+    assert saloon_created.farm_id is None
+    assert saloon_created.details == saloon_details
+    assert _audit("SALOON_DELETED", world["org"].org_id).count() == 1
+    assert _audit("FARM_DELETED", world["org"].org_id).count() == 1
+
+
 # ---------------------------------------------------------------------------
 # F7/F8 — positions
 # ---------------------------------------------------------------------------

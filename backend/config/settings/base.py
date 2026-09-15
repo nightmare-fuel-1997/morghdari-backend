@@ -68,9 +68,20 @@ DATABASES = (
 # runtime connection is morghdari_app — FORCE-RLS fail-closed on purpose. The
 # doc-sanctioned bypass is the admin role (BYPASSRLS; the same role
 # scripts/prod_bootstrap.sh uses for platform paths), wired as an OPTIONAL
-# second alias: prod compose sets DATABASE_ADMIN_URL on the worker, CI/laptop
-# leave it unset (their connect user is the DB superuser already) and the
-# task falls back to "default". Never used by request traffic.
+# second alias: prod compose sets DATABASE_ADMIN_URL on the worker + daphne
+# (BUG-11: daphne needs it too — see below), CI/laptop leave it unset (their
+# connect user is the DB superuser already) and the task falls back to
+# "default". Never used by request traffic EXCEPT the BUG-11 device-config
+# discovery: the gateway_config endpoint IS request traffic but can carry no
+# org context (anonymous gateway Basic + slot lookup pre-auth), so DISCOVERY
+# runs on the admin alias while authorization stays in-view and every
+# per-tenant read/write stays on "default" inside tenant_context.
+# Discovery-only use.
+# فارسی (BUG-11): «هرگز در ترافیک درخواستی استفاده نمی‌شود» یک استثنا دارد —
+# کشف device-config در gateway_config: این اندپوینت ترافیک درخواستی است اما
+# هیچ زمینهٔ سازمانی نمی‌تواند داشته باشد (Basic گیت‌وی + جست‌وجوی اسلات پیش
+# از احراز هویت)؛ فقط «کشف» روی alias ادمین انجام می‌شود، مجوزدهی داخل ویو
+# می‌ماند و خواندن/نوشتن هر سازمان همچنان روی پیش‌فرض داخل tenant_context است.
 DATABASE_ADMIN_URL = os.environ.get("DATABASE_ADMIN_URL")
 if DATABASE_ADMIN_URL:
     DATABASES["admin"] = _database_from_url(DATABASE_ADMIN_URL)

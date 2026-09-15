@@ -163,3 +163,40 @@ def test_coalesce_refreshes_open_alert_instead_of_new_row():
     assert third["action"] == "coalesced"
     alert.refresh_from_db()
     assert alert.highest_tier_reached == 3
+
+
+@pytest.mark.django_db
+def test_stale_blob_pointing_at_resolved_row_fires_fresh():
+    """BUG-9b: a blob left pointing at a RESOLVED row must self-heal — the
+    next breach fires a FRESH row and replaces the blob (never coalesces
+    into the dead row, never blackholes the metric).
+
+    Regression shape: fire → resolve the row directly (blob still points
+    at it, the way a force-resolve/sweep path that forgot the clear leaves
+    it) → re-breach must `fired`, not `coalesced`.
+    فارسی: اگر اشاره‌گرِ ردیس به ردیفِ بسته‌شده اشاره کند، نقضِ بعدی باید
+    ردیفِ تازه بسازد نه اینکه به ردیفِ مرده بچسبد."""
+    from django.utils import timezone
+
+    from apps.alerts.services.firing import fire_or_coalesce
+    from apps.alerts.services.redis_keys import active_alert_key
+
+    world = _make_world()
+    rc = world["redis"]
+    org_id, saloon = world["org"].org_id, world["saloon"]
+
+    first = fire_or_coalesce(rc, org_id, saloon.farm_id, saloon.id, "temp", 35.0)
+    assert first["action"] == "fired"
+
+    alert = AlertInstance.objects.get(pk=first["alert_id"])
+    alert.current_status = "RESOLVED"
+    alert.resolved_at = timezone.now()
+    alert.save(update_fields=["current_status", "resolved_at"])
+    # Blob still points at the now-resolved row (stale-pointer shape).
+
+    second = fire_or_coalesce(rc, org_id, saloon.farm_id, saloon.id, "temp", 36.5)
+    assert second["action"] == "fired"
+    assert second["alert_id"] != first["alert_id"]
+    assert AlertInstance.objects.filter(saloon=saloon).count() == 2
+    blob = json.loads(rc.get(active_alert_key(saloon.id, "temp")))
+    assert blob["alert_id"] == second["alert_id"]

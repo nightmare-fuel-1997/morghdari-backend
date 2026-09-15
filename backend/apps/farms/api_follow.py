@@ -129,9 +129,14 @@ def _conflict(msg: str):
 def _audit(request, action, *, org_id, farm=None, saloon=None, details=None):
     """One immutable audit row per accepted write (same transaction).
 
-    `farm`/`saloon` are passed only when the row SURVIVES the request — the FKs
-    are RESTRICT, so an audit row naming a deleted farm would block the very
-    delete it records. Deletions therefore carry the ids in `details` instead.
+    BUG-10/BUG-18: `farm`/`saloon` are passed whenever the row SURVIVES the
+    request — the FKs are SET_NULL, so an audit row never blocks the delete
+    of the entity it records (it stays behind with a NULL FK and intact
+    `details`). Deletions still carry the ids in `details` instead, because
+    the entity row is already gone when the *_DELETED line is written.
+
+    فارسی (باگ ۱۰/۱۸): سطر حسابرسی حذفِ موجود را سد نمی‌کند؛ با کلیدِ تهی و
+    جزئیاتِ سالم باقی می‌ماند.
     """
     AccountActivityLog.objects.create(
         actor=request.user,
@@ -374,9 +379,10 @@ def farm_delete(request, farm_id: int):
     refused = delete_row(farm)
     if refused:
         return _conflict(refused)
-    # Audited AFTER the delete: the row's FKs are RESTRICT, so a FARM_DELETED
-    # line names the farm only in `details` — and a REFUSED delete leaves no
-    # line at all (it returns before this point).
+    # Audited AFTER the delete: the *_DELETED line names the farm only in
+    # `details` (the row is already gone — a SET_NULL FK could not point at
+    # it anyway, BUG-10/BUG-18) — and a REFUSED delete leaves no line at
+    # all (it returns before this point).
     _audit(
         request,
         ACTION_FARM_DELETED,
