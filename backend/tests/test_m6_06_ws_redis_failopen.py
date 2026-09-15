@@ -87,8 +87,10 @@ def test_redis_down_bad_token_still_denied_4003(_ws_isolated):
         ):
             with _spy_close(codes):
                 connected, _ = await communicator.connect()
-            assert connected is False
+            assert connected is True  # BUG-6: accept-then-close
+            close_msg = await communicator.receive_output()
+            assert close_msg["type"] == "websocket.close"
+            assert close_msg["code"] == 4003
             await communicator.disconnect()
 
     _run(scenario())
-    assert codes == [4003]

@@ -234,11 +234,13 @@ def test_missing_token_closes_4003(_ws_stack):
         communicator.scope["url_route"] = {"kwargs": {"saloon_id": world["saloon"].pk}}
         with _spy_close(codes):
             connected, _ = await communicator.connect()
-        assert connected is False
+        assert connected is True  # BUG-6: accept-then-close
+        close_msg = await communicator.receive_output()
+        assert close_msg["type"] == "websocket.close"
+        assert close_msg["code"] == 4003
         await communicator.disconnect()  # let the parked app task finish
 
     _run(scenario())
-    assert codes == [4003]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -250,11 +252,13 @@ def test_bad_token_closes_4003(_ws_stack):
     async def scenario():
         with _spy_close(codes):
             connected, _ = await communicator.connect()
-        assert connected is False
+        assert connected is True  # BUG-6: accept-then-close
+        close_msg = await communicator.receive_output()
+        assert close_msg["type"] == "websocket.close"
+        assert close_msg["code"] == 4003
         await communicator.disconnect()  # let the parked app task finish
 
     _run(scenario())
-    assert codes == [4003]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -268,11 +272,13 @@ def test_cross_org_user_closes_4003(_ws_stack):
         # the saloon invisible (fail-closed RLS), the same 4003 as missing.
         with _spy_close(codes):
             connected, _ = await foreign.connect()
-        assert connected is False
+        assert connected is True  # BUG-6: accept-then-close
+        close_msg = await foreign.receive_output()
+        assert close_msg["type"] == "websocket.close"
+        assert close_msg["code"] == 4003
         await foreign.disconnect()  # let the parked app task finish
 
     _run(scenario())
-    assert codes == [4003]
 
 
 # ---------------------------------------------------------------------------
@@ -296,8 +302,10 @@ def test_cap_closes_4000_then_frees(_ws_stack):
             client.sadd(ws.active_set_key(user.pk), f"ghost-{index}")
         with _spy_close(codes):
             connected, _ = await full.connect()
-        assert connected is False  # cap full — close, never hang
-        assert codes == [4000]
+        assert connected is True  # BUG-6: cap close is accept-then-close
+        close_msg = await full.receive_output()
+        assert close_msg["type"] == "websocket.close"
+        assert close_msg["code"] == 4000
         await full.disconnect()  # let the parked app task finish
 
         client.srem(ws.active_set_key(user.pk), "ghost-0")  # one slot frees
@@ -762,8 +770,11 @@ def test_compat_ws_farmSlug_spelling_does_not_raise_keyerror(_ws_stack):
                 return_value=(None, None),
             ):
                 connected, _ = await communicator.connect()
-        assert connected is False
+        # BUG-6: accept-then-close -> the socket connects, then closes 4003.
+        assert connected is True
+        close_msg = await communicator.receive_output()
+        assert close_msg["type"] == "websocket.close"
+        assert close_msg["code"] == 4003
         await communicator.disconnect()
 
     _run(scenario())
-    assert codes == [4003]

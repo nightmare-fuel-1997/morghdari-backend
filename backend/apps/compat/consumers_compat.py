@@ -44,12 +44,17 @@ class FarmTelemetryConsumer(JsonWebsocketConsumer):
     def connect(self):
         verdict = self._authorize()
         if verdict is not None:
+            # BUG-6: accept() BEFORE close() so the 4003 reaches the wire
+            # (a pre-accept close is an HTTP 403 handshake under Daphne).
+            self.accept()
             self.close(code=verdict)
             return
 
         self.connection_id = ws.register_connection(self.user.pk)
         cap = ws.config_int("ws_max_connections_per_user", 10)
         if ws.active_count(self.user.pk) > cap:
+            # BUG-6: accept-then-close so 4000 is delivered.
+            self.accept()
             self.close(code=4000)
             return
 

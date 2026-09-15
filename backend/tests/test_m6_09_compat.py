@@ -445,29 +445,37 @@ def test_c16_shim_close_codes_4003_and_4000(_compat_stack):
     async def scenario():
         with mock.patch.object(FarmTelemetryConsumer, "close", spy):
             connected, _ = await foreign.connect()
-        assert connected is False
+        assert connected is True  # BUG-6: accept-then-close
+        close_msg = await foreign.receive_output()
+        assert close_msg["type"] == "websocket.close"
+        assert close_msg["code"] == 4003
         await foreign.disconnect()
-        assert codes == [4003]  # another org's farm slug
 
         with mock.patch.object(FarmTelemetryConsumer, "close", spy):
             connected, _ = await unknown.connect()
-        assert connected is False
+        assert connected is True  # BUG-6: accept-then-close
+        close_msg = await unknown.receive_output()
+        assert close_msg["type"] == "websocket.close"
+        assert close_msg["code"] == 4003
         await unknown.disconnect()
-        assert codes == [4003, 4003]
 
         for index in range(cap):
             client.sadd(ws.active_set_key(user.pk), f"ghost-{index}")
         with mock.patch.object(FarmTelemetryConsumer, "close", spy):
             connected, _ = await full.connect()
-        assert connected is False
+        assert connected is True  # BUG-6: accept-then-close
+        close_msg = await full.receive_output()
+        assert close_msg["type"] == "websocket.close"
+        assert close_msg["code"] == 4000
         await full.disconnect()
-        assert codes == [4003, 4003, 4000]  # cap full
 
         with mock.patch.object(FarmTelemetryConsumer, "close", spy):
             connected, _ = await no_token.connect()
-        assert connected is False
+        assert connected is True  # BUG-6: accept-then-close
+        close_msg = await no_token.receive_output()
+        assert close_msg["type"] == "websocket.close"
+        assert close_msg["code"] == 4003
         await no_token.disconnect()
-        assert codes == [4003, 4003, 4000, 4003]
 
     _run(scenario())
 
