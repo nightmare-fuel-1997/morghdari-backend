@@ -19,3 +19,15 @@
 ## Baseline risk
 
 - Because the working tree is dirty, all edits must be narrow and tracked independently. Validation should focus on files changed for v0.5 and avoid commands that rewrite generated/runtime artifacts.
+
+## 2026-09-14 QA fix round (poultry_vps_deploy live-stack validation; fixes mirrored here)
+
+Why this section exists: the VPS deploy rehearsal (poultry_vps_deploy) ran the full 297-row QA plan against a live Docker stack; five FAILs plus deferred NAs produced product fixes that were applied HERE first (TDD) and mirrored byte-identical to the snapshot. Each code change carries an EN+FA why-comment naming its BUG id so future readers (human or AI) know why the code changed.
+
+- BUG-5 closed: LoginView now carries LoginRateThrottle (auth_login 60/min per attempted username; IP-keying rejected — shared test IP false-triggers). New ackend/tests/test_m2_11_login_throttle.py; throttle class in pps/monitoring/ops_throttles.py; rate in config/settings/base.py.
+- BUG-7 closed: compat consumer accepts both armSlug (route kwarg) and arm_slug (canonical) spellings — every compat WS connect used to KeyError (pps/compat/consumers_compat.py).
+- BUG-8 closed: WS connect no longer depends on redis timing — post-auth redis I/O under one 2.5s wall-clock bound, fail-open degrade, _authorize() redis-free; 1s socket knobs on the ws redis client (pps/telemetry/ws_consumer.py, pps/telemetry/ws.py).
+- BUG-20 fixed: muted 	hi crashed the drain (UnboundLocalError — 	hi computed only in the unmuted else while 	rack_breach ran either way). Muted = note+SKIP with lane-3 semantics (pps/alerts/services/evaluation.py); RED/GREEN 	est_thi_muted_suppresses_without_crashing in 	ests/test_m4_09_capability.py.
+- BUG-22 fixed (regression the BUG-8 fix introduced): socket_timeout: 1 on CHANNEL_LAYERS killed every idle WS ~2s after connect (channels_redis receive() is a brpop_timeout=5 long-poll). Layer now keeps only socket_connect_timeout: 1 (config/settings/base.py); pinned by 	ests/test_channel_layer_config.py.
+- BUG-21 filed (not fixed): Prometheus's Django job targets daphne:8000 but DJANGO_ALLOWED_HOSTS lacks daphne -> every scrape DisallowedHost; BeatHeartbeatStale unmonitorable in practice until the host list widens.
+- Full evidence and the remaining environment-leaning items (BUG-12 Docker Desktop restart quirk, BUG-18 farm/saloon RESTRICT-audit delete family, 8.15 v1.0 quota deferral) live in poultry_vps_deploy/BUGS.md; final tally 296 PASS / 0 FAIL / 1 NA of 297.

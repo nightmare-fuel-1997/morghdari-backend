@@ -31,6 +31,23 @@ from apps.alerts.services.redis_keys import (
 logger = logging.getLogger(__name__)
 
 
+def _admin_alias() -> str:
+    """RLS-bypassing read alias for cross-org discovery (monitoring pattern).
+
+    BUG-9 family (QA 20.3a): the worker connects as morghdari_app under FORCE
+    RLS — a default-alias SaloonTelemetry(is_buffered=True) read sees ZERO rows
+    and the sweep silently returns [] after a correct dispatch. Discovery runs
+    on the sanctioned admin alias (same as thresholds.recache / rebuild_state /
+    monitoring rollup); every per-org read+write below still runs inside
+    tenant_context on the default alias.
+    فارسی: کشفِ میان‌سازمانی با اتصالِ ادمین؛ خواندن/نوشتنِ هر سازمان همچنان
+    داخل tenant_context انجام می‌شود تا RLS دور زده نشود.
+    """
+    from django.db import connections
+
+    return "admin" if "admin" in connections.databases else "default"
+
+
 def system_redis():
     """Same client convention as sweeps (tests inject the integration client)."""
     import os
@@ -108,13 +125,27 @@ def run_replay_sweep(gateway_slot: str | None = None) -> list:
     client = system_redis()
     try:
         created = []
-        buffered = SaloonTelemetry.objects.filter(is_buffered=True)
-        for slot_id in buffered.values_list("slot_id", flat=True).distinct().iterator():
-            rows_qs = buffered.filter(slot_id=slot_id).order_by("device_ts")
-            covered = client.get(replay_covered_key(slot_id))
-            if covered:
-                rows_qs = rows_qs.filter(device_ts__gt=parse_datetime(covered))
-            rows = list(rows_qs)
+        # BUG-9 family (QA 20.3a): cross-org discovery on the admin alias, then
+        # per-(slot, org) reads+writes inside tenant_context on default — a bare
+        # default-alias buffered read sees zero rows as the app role under FORCE RLS.
+        # فارسی: فهرستِ اسلات‌ها با ادمین، پردازشِ هر پنجره داخل زمینهٔ سازمان.
+        pairs = list(
+            SaloonTelemetry.objects.using(_admin_alias())
+            .filter(is_buffered=True)
+            .values_list("slot_id", "org_id")
+            .distinct()
+            .iterator()
+        )
+        for slot_id, org_raw in pairs:
+            org_hint = str(org_raw)
+            with transaction.atomic(), tenant_context(org_hint):
+                rows_qs = SaloonTelemetry.objects.filter(
+                    is_buffered=True, slot_id=slot_id
+                ).order_by("device_ts")
+                covered = client.get(replay_covered_key(slot_id))
+                if covered:
+                    rows_qs = rows_qs.filter(device_ts__gt=parse_datetime(covered))
+                rows = list(rows_qs)
             if not rows:
                 continue
 

@@ -728,3 +728,42 @@ def test_gap_fill_respects_row_ceiling(timescale_db):
         await communicator.disconnect()
 
     _run(scenario())
+
+
+@pytest.mark.django_db(transaction=True)
+def test_compat_ws_farmSlug_spelling_does_not_raise_keyerror(_ws_stack):
+    """BUG-7 (QA 15.7): compat route passes farmSlug but consumer read farm_slug.
+
+    Connect-level: the real route kwarg arrives as farmSlug; the consumer must
+    accept it (canonical stays farm_slug) instead of raising KeyError.
+    """
+    from apps.compat.consumers_compat import FarmTelemetryConsumer
+
+    world = _make_world()
+    token = _token_for(world, "owner")
+    codes = []
+    original = FarmTelemetryConsumer.close
+
+    def spy(consumer_self, code=None):
+        codes.append(code)
+        return original(consumer_self, code=code)
+
+    communicator = WebsocketCommunicator(
+        FarmTelemetryConsumer.as_asgi(),
+        f"/ws/farms/no-such-farm/telemetry?token={token}",
+    )
+    # Real route spelling (urls_compat FARM group): farmSlug, not farm_slug.
+    communicator.scope["url_route"] = {"kwargs": {"farmSlug": "no-such-farm"}}
+
+    async def scenario():
+        with mock.patch.object(FarmTelemetryConsumer, "close", spy):
+            with mock.patch(
+                "apps.compat.consumers_compat.svc.compat_resolve_farm",
+                return_value=(None, None),
+            ):
+                connected, _ = await communicator.connect()
+        assert connected is False
+        await communicator.disconnect()
+
+    _run(scenario())
+    assert codes == [4003]

@@ -39,6 +39,22 @@ logger = logging.getLogger(__name__)
 DELIVERY_SINKS = {1: "push_workers", 2: "sms_engineer", 3: "manager_and_doctor"}
 
 
+def _admin_alias() -> str:
+    """BUG-9: RLS-bypassing read alias for CROSS-ORG discovery only.
+
+    The worker connects as `morghdari_app` under FORCE RLS; a default-alias
+    read with no `tenant_context` sees ZERO rows, so the escalation sweep and
+    the LOS watchdog silently did nothing (QA 8.4b/9.x/10.9). Discovery runs
+    on the sanctioned admin alias - the SAME pattern as
+    alerts.services.replay._admin_alias / rebuild_state / thresholds.recache.
+    Every per-alert read/write below still runs inside tenant_context on the
+    default (RLS-governed) alias, so isolation is preserved.
+    """
+    from django.db import connections
+
+    return "admin" if "admin" in connections.databases else "default"
+
+
 def _config_int(key: str, default: int) -> int:
     from apps.system_config.models import SystemConfiguration
 
@@ -67,6 +83,18 @@ def system_redis():
 
     url = os.environ.get("REDIS_URL", "redis://:dev_redis_password@localhost:6379")
     return redis_lib.Redis.from_url(url, decode_responses=True)
+
+
+def clear_active_pointer(*, saloon_id, metric, client=None) -> None:
+    """BUG-9b: drop the `alert:active:*` coalesce blob for (saloon, metric).
+
+    Must run on EVERY path that closes an alert (sweep recovery AND the
+    support force-resolve). The blob is the only record the engine keeps of
+    an OPEN alert: a stale blob makes the next breach "coalesce" into a dead
+    row, so that metric never pages again (QA 8.1/8.2b/8.8).
+    """
+    client = client or system_redis()
+    client.delete(active_alert_key(saloon_id, metric))
 
 
 def _save_alert(alert, fields: list[str]) -> None:
@@ -98,7 +126,7 @@ def escalate_all(now_dt=None) -> int:
     tier3_sec = max(_config_int("escalation_tier3_min", 30), 1) * 60
 
     active = (
-        AlertInstance.objects
+        AlertInstance.objects.using(_admin_alias())  # BUG-9: cross-org discovery
         .filter(resolved_at__isnull=True)
         .exclude(source="REPLAY_ANALYSIS")
         # M4-07: LOS rows have NO breach key ever — the branch below would
@@ -121,7 +149,7 @@ def escalate_all(now_dt=None) -> int:
             alert.current_status = "RESOLVED"
             alert.resolved_at = now
             _save_alert(alert, ["current_status", "resolved_at"])
-            client.delete(active_alert_key(alert.saloon_id, alert.metric_type))
+            clear_active_pointer(saloon_id=alert.saloon_id, metric=alert.metric_type, client=client)
             # M7-04 observability: resolved counter (Redis bridge — runbook §3.1).
             from apps.monitoring.metrics import bump_alert_resolved
 
@@ -212,7 +240,8 @@ def los_watchdog(now_dt=None) -> int:
     # Plain cross-org reads match escalate_all's pattern; writes run inside
     # the saloon's tenant context for RLS consistency.
     by_saloon: dict = {}
-    for slot in SaloonSensorSlot.objects.filter(is_active=True).iterator():
+    # BUG-9: cross-org discovery on the admin alias (see _admin_alias).
+    for slot in SaloonSensorSlot.objects.using(_admin_alias()).filter(is_active=True).iterator():
         by_saloon.setdefault(slot.saloon_id, []).append(slot)
 
     # GS-CORRELATION pre-pass (M4-10): farms already inside their paging-

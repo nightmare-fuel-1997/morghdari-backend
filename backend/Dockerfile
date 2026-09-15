@@ -26,6 +26,9 @@ RUN pip wheel --no-cache-dir --wheel-dir /wheels-base  -r requirements/base.txt 
 
 # -----------------------------------------------------------------------------
 FROM python:3.12-slim AS test
+# BUG-17 (QA 19.7): trivy GATE3 failed on 12 fixable HIGH/CRITICAL in debian 13.6 slim (perl-base, libsqlite3-0, libpcre2-8-0, gzip). Upgrade at build time until the upstream slim digest incorporates the deb13u1/u2 fixes; re-check each rebuild.
+# فارسی: آسیب‌پذیری‌های قابل‌رفع ایمیج پایه با ارتقا در زمان بیلد رفع می‌شود تا دایجست بالادستی اصلاح شود.
+RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 # install -d makes /app itself appuser-owned (WORKDIR alone would create it
 # root-owned; pytest-cov then cannot create its .coverage file inside it).
@@ -41,6 +44,8 @@ USER appuser
 
 # -----------------------------------------------------------------------------
 FROM python:3.12-slim AS runtime
+# BUG-17 (QA 19.7): trivy GATE3 failed on 12 fixable HIGH/CRITICAL in debian 13.6 slim (perl-base, libsqlite3-0, libpcre2-8-0, gzip). Upgrade at build time until the upstream slim digest incorporates the deb13u1/u2 fixes; re-check each rebuild.
+# فارسی: آسیب‌پذیری‌های قابل‌رفع ایمیج پایه با ارتقا در زمان بیلد رفع می‌شود تا دایجست بالادستی اصلاح شود.
 LABEL org.opencontainers.image.source="https://github.com/morghdari/backend"
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 # Non-root runner (Blueprint §8): the container process never needs root.

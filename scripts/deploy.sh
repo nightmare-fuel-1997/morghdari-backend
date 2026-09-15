@@ -64,6 +64,15 @@ if ! MORGHDARI_TAG="$TAG" docker compose "${COMPOSE[@]}" up -d "${APP_SERVICES[@
 fi
 
 if gate; then
+  # BUG-14: app containers were just recreated with new IPs; nginx holds a
+  # STATIC upstream (`server daphne:8000`) that the `resolver` line does NOT
+  # re-resolve, so without this reload every API/WS request 502s while the
+  # container health gate stays green. Best-effort, but reported.
+  if docker exec morghdari-nginx nginx -s reload 2>/dev/null; then
+    echo "==> nginx reloaded (fresh upstream IPs)"
+  else
+    echo "!! nginx reload failed - API/WS may 502 until a manual reload" >&2
+  fi
   echo "$TAG" > "$STATE_FILE"
   echo "==> OK: all 9 containers healthy on tag $TAG"
   exit 0

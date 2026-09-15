@@ -63,8 +63,11 @@ class AccountActivityLog(models.Model):
     action = models.CharField(max_length=100)
     ip_address = models.GenericIPAddressField(null=True, blank=True)  # INET on postgres
     org = models.ForeignKey("tenants.Organization", on_delete=models.RESTRICT, related_name="+")
-    farm = models.ForeignKey("farms.Farm", on_delete=models.RESTRICT, null=True, blank=True, related_name="+")
-    saloon = models.ForeignKey("farms.Saloon", on_delete=models.RESTRICT, null=True, blank=True, related_name="+")
+    # BUG-10/BUG-18: SET_NULL (not RESTRICT) so an API-created farm/saloon
+    # can be hard-deleted; the *_CREATED audit row survives with its details
+    # JSON (history preserved) while the FK nulls out.
+    farm = models.ForeignKey("farms.Farm", on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
+    saloon = models.ForeignKey("farms.Saloon", on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
     details = models.JSONField(null=True, blank=True)
 
     class Meta:

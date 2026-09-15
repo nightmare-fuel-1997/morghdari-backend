@@ -358,6 +358,11 @@ def parse_recon_day(raw: str):
     return _date.fromisoformat(raw.strip())
 
 
+def tehran_yesterday():
+    """BUG-2: the contract-documented default for `?day=` (yesterday Tehran)."""
+    return _datetime.now(TEHRAN).date() - _timedelta(days=1)
+
+
 def _tehran_day_bounds(day):
     start = _datetime.combine(day, _time.min, tzinfo=TEHRAN)
     return start, start + _timedelta(days=1)

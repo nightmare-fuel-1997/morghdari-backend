@@ -1474,7 +1474,7 @@ def reconciliation(request):
         return _forbidden()
     raw_day = str(request.query_params.get("day") or "").strip()
     try:
-        day = svc.parse_recon_day(raw_day) if raw_day else None
+        day = svc.parse_recon_day(raw_day) if raw_day else svc.tehran_yesterday()
     except ValueError:
         return _bad_request("day must be YYYY-MM-DD")
     return Response(svc.recon_day_report(day, org_id=org_claim))

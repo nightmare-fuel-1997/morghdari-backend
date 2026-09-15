@@ -62,7 +62,16 @@ WS_ACTIVE_TTL_SEC_DEFAULT = 300
 def ws_redis():
     global _redis_client
     if _redis_client is None:
-        _redis_client = redis.Redis.from_url(WS_REDIS_URL, decode_responses=True)
+        # BUG-8 (QA 15.8): bound every sync redis touch — a stopped redis
+        # blackholes TCP (no RST), and one hanging command holds the WS
+        # handshake past Daphne's ~5s guillotine (live: measured 8s ping,
+        # nginx 502). 1s knobs turn hangs into fast raises, and every caller
+        # already degrades on raise (fail-open cap, {} bands).
+        # فارسی: مکث اتصال ردیس محدود شد تا قطع آن، اتصال زنده را نگه ندارد.
+        _redis_client = redis.Redis.from_url(
+            WS_REDIS_URL, decode_responses=True,
+            socket_connect_timeout=1, socket_timeout=1,
+        )
     return _redis_client
 
 

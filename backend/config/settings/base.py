@@ -230,7 +230,11 @@ REST_FRAMEWORK = {
 # M6-10 (O10): the ONE strict throttle lane — deliberately NO default
 # throttle (v1.5.0 paths stay untouched; nginx owns coarse limits).
 # auth_strict = 3/min per user, wired ONLY to the password-change view.
-REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"] = {"auth_strict": "3/min"}
+# BUG-5 (QA 1.26): auth_login = 60/min per attempted username, wired ONLY to
+# the login view — generous on purpose: the densest suite module does 43 total
+# logins (densest single username 13), so 60 never false-triggers legit bursts.
+# فارسی: نرخِ ورود ۶۰ در دقیقه برای هر نامِ کاربری؛ عمداً گشاده تا آزمون‌ها خطا ندهند.
+REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"] = {"auth_strict": "3/min", "auth_login": "60/min"}
 
 # ---------------------------------------------------------------------------
 # JWT (SimpleJWT) — Security Architecture §3.2; owner decision Tracker §4i.
@@ -439,7 +443,23 @@ CELERY_BEAT_SCHEDULE = {
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
-        "CONFIG": {"hosts": [REDIS_URL + "/2"]},  # db2 = channels (never the broker db)
+        # BUG-8 (QA 15.8): bound the async layer's CONNECT — group_add on a
+        # dead redis must raise fast (the consumer degrades to no-push), never
+        # hold the WS handshake past Daphne's ~5s guillotine (live nginx 502).
+        # Extra host-dict keys flow into the redis ConnectionPool (see
+        # channels_redis.utils.create_pool). db2 = channels (never broker db).
+        #
+        # BUG-22 (QA 15.9): NO socket_timeout here — channels_redis receive()
+        # is a brpop_timeout=5 long-poll (core.py); a 1s read timeout raised
+        # into the ASGI app and Daphne closed every otherwise-idle WS ~2s
+        # after connect (live with redis UP: WSCONNECT→WSDISCONNECT 2s, the
+        # 15.9 idle-close drill caught it). Only the CONNECT is bounded.
+        # فارسی: فقط مکثِ «اتصال» لایهٔ کانال محدود است؛ خواندن، نظرسنجیِ
+        # بلندِ BRPOP است و سقفِ خواندن روی آن، اتصال‌های بی‌کار را می‌کُشد.
+        "CONFIG": {"hosts": [{
+            "address": REDIS_URL + "/2",
+            "socket_connect_timeout": 1,
+        }]},
     }
 }
 

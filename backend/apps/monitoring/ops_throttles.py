@@ -24,3 +24,31 @@ class UserRateThrottle3PerMinute(SimpleRateThrottle):
         user = getattr(request, "user", None)
         ident = user.get_username() if (user and user.is_authenticated) else self.get_ident(request)
         return self.cache_format % {"scope": self.scope, "ident": ident}
+
+
+class LoginRateThrottle(SimpleRateThrottle):
+    """BUG-5 (QA 1.26): login brute-force gate — auth_login 60/min per ATTEMPTED username.
+
+    WHY: POST /auth/login/ carried no DRF throttle, so one account could be
+    bombed without limit. Keyed by the attempted username (NOT the shared
+    client IP) so the test suite's distinct-user bursts — densest module 43
+    total logins, densest single username 13 (ops-engineer in m6_10) — never
+    collide with the 60/min lane, while a single-account burst still 429s.
+
+    فارسی: نرخ‌گیرِ ورود — ۶۰ در دقیقه به‌ازای نامِ کاربریِ تلاش‌شده (نه IP) تا
+    انفجارِ آزمون‌ها خطا ندهد ولی حمله به یک حساب بسته شود.
+    """
+
+    scope = "auth_login"
+
+    def get_cache_key(self, request, view):
+        username = ""
+        try:
+            data = getattr(request, "data", None)
+            getter = getattr(data, "get", None)
+            if callable(getter):
+                username = str(getter("username") or "").strip().lower()
+        except Exception:
+            username = ""
+        ident = f"login:{username}" if username else self.get_ident(request)
+        return self.cache_format % {"scope": self.scope, "ident": ident}

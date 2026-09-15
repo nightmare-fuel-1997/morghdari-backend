@@ -39,6 +39,8 @@ what makes the merge trivially testable (TUTORIAL §3.5).
 """
 
 import logging
+import threading
+import uuid
 
 from channels.generic.websocket import JsonWebsocketConsumer
 
@@ -72,22 +74,105 @@ class SaloonTelemetryConsumer(JsonWebsocketConsumer):
                 verdict,
                 self.scope.get("url_route", {}).get("kwargs", {}).get("saloon_id"),
             )
+            # BUG-6: accept() BEFORE close() so the deny code reaches the
+            # wire as a WebSocket close frame - Daphne translates a
+            # pre-accept close() into a bare HTTP 403 handshake and the
+            # 4000/4003 contract is lost (QA 15.2/15.3/15.4).
+            self.accept()
             self.close(code=verdict)
             return
 
         self.saloon_id = self.scope["url_route"]["kwargs"]["saloon_id"]
+        # BUG-8 (QA 15.8): redis-down must never kill a valid WS connect.
+        # Every redis touch below runs inside _post_auth_setup under ONE
+        # wall-clock bound and degrades on timeout/failure (cap passes open,
+        # snapshot skipped, group-join best-effort): a dead redis HANGS
+        # instead of raising (8s DNS blackhole measured live — socket knobs
+        # cannot bound getaddrinfo), and the sync consumer shares ONE thread,
+        # so any unbounded wait stalls every socket AND holds the handshake
+        # past Daphne's ~5s guillotine (live nginx 502). Auth denies above
+        # stay fail-closed — the deny path touches no redis at all.
+        # فارسی: همهٔ تماس‌های ردیس پس از احراز هویت با یک سقف زمانی اجرا و
+        # در صورت خطا باز عبور می‌کنند؛ رد احراز هویت همچنان بسته می‌ماند.
+        # The cap default comes from DB (fast) — never from the bounded block.
+        try:
+            cap = ws.config_int("ws_max_connections_per_user", 10)
+        except Exception:
+            logger.exception("WS config read degraded — default cap")
+            cap = 10
         # Register FIRST, then re-check the cap with our own membership
-        # counted: between _authorize's scard and this sadd another tab may
-        # have taken the last slot — the re-check catches the race and the
-        # over-cap socket closes itself with 4000 (disconnect removes it).
-        self.connection_id = ws.register_connection(self.user.pk)
-        cap = ws.config_int("ws_max_connections_per_user", 10)
-        if ws.active_count(self.user.pk) > cap:
+        # counted (both inside the bounded block): between the pre-check's
+        # scard and this sadd another tab may have taken the last slot — the
+        # re-check catches the race and the over-cap socket closes itself
+        # with 4000 (disconnect removes it).
+        setup = self._post_auth_setup(cap, timeout=2.5)
+        if setup.get("decision") == "close-4000":
+            self.connection_id = setup.get("connection_id")
+            # BUG-6: accept-then-close so 4000 is delivered (see deny path).
+            self.accept()
             self.close(code=4000)
             return
+        self.connection_id = setup.get("connection_id") or uuid.uuid4().hex
         self.accept()
-        self._join_saloon_group()
-        self._send_threshold_snapshot()
+        self.send_json({
+            "type": "telemetry.hello",
+            "saloon_id": self.saloon_id,
+            "org_id": self.org_id,
+            "thresholds": setup.get("thresholds", {}),
+        })
+
+    def _post_auth_setup(self, cap, timeout=2.5):
+        """Run the whole post-auth redis block under ONE wall-clock bound.
+
+        Pre-checks the cap, registers, re-checks (race guard), joins the
+        saloon group and reads the threshold snapshot. Returns a decision
+        dict — ``{"decision": "accept", "connection_id", "thresholds"}`` or
+        ``{"decision": "close-4000", ...}`` — and NEVER raises: any
+        timeout/failure degrades open (cap passes, snapshot {}, join
+        best-effort, late join lands whenever redis answers).
+        """
+        box = {}
+
+        def _target():
+            try:
+                if ws.active_count(self.user.pk) >= cap:
+                    box["result"] = {"decision": "close-4000", "connection_id": None}
+                    return
+                connection_id = ws.register_connection(self.user.pk)
+                if ws.active_count(self.user.pk) > cap:
+                    box["result"] = {
+                        "decision": "close-4000", "connection_id": connection_id,
+                    }
+                    return
+                try:
+                    self._join_once()
+                except Exception as exc:
+                    logger.exception(
+                        "WS group-join degraded — socket stays up without push: %s",
+                        exc,
+                    )
+                try:
+                    bands = ws.ws_redis().hgetall(thresholds_hash(self.saloon_id))
+                except Exception:
+                    bands = {}
+                box["result"] = {
+                    "decision": "accept",
+                    "connection_id": connection_id,
+                    "thresholds": bands,
+                }
+            except Exception as exc:  # noqa: BLE001 — ANY redis failure degrades open
+                logger.exception("WS post-auth setup degraded open: %s", exc)
+                box["result"] = {"decision": "accept", "connection_id": None, "thresholds": {}}
+            finally:
+                box["done"] = True
+
+        worker = threading.Thread(target=_target, daemon=True)
+        worker.start()
+        worker.join(timeout)
+        if not box.get("done"):
+            logger.error("WS post-auth setup timed out after %.1fs — degraded open", timeout)
+            return {"decision": "accept", "connection_id": None, "thresholds": {}}
+        return box.get("result") or {"decision": "accept", "connection_id": None, "thresholds": {}}
 
     def disconnect(self, code):
         # Clean up the cap membership — but only our own: a pre-auth close
@@ -153,7 +238,7 @@ class SaloonTelemetryConsumer(JsonWebsocketConsumer):
     # ------------------------------------------------------------------
 
     def _authorize(self):
-        """Set self.user/self.org_id, or return the close code (4003/4000).
+        """Set self.user/self.org_id, or return the deny code 4003.
 
         A deactivated membership fails here: the token's org claim must match
         an ACTIVE OrgMember row, so a fired worker's still-fresh JWT cannot
@@ -204,10 +289,9 @@ class SaloonTelemetryConsumer(JsonWebsocketConsumer):
         self.user = user
         self.org_id = str(org_claim)
 
-        # Cap LAST — failed auth must never consume a cap slot. 4000 = full.
-        cap = ws.config_int("ws_max_connections_per_user", 10)
-        if ws.active_count(self.user.pk) >= cap:
-            return 4000
+        # No redis touched here by design (BUG-8): auth verdicts must resolve
+        # fast while redis is down — the cap check lives in _post_auth_setup
+        # under the wall-clock bound. Failed auth still never consumes a slot.
         return None
 
     @staticmethod
@@ -239,7 +323,9 @@ class SaloonTelemetryConsumer(JsonWebsocketConsumer):
             return None, None
         return user, dict(access.payload)
 
-    def _join_saloon_group(self):
+    def _join_once(self):
+        """One raw group-join (raises on failure) — the caller
+        (_post_auth_setup) bounds it by wall-clock and degrades it."""
         from asgiref.sync import async_to_sync
         from channels.layers import get_channel_layer
 
@@ -257,21 +343,6 @@ class SaloonTelemetryConsumer(JsonWebsocketConsumer):
             )
         except Exception:
             logger.exception("group_discard failed — membership dies with the socket")
-
-    def _send_threshold_snapshot(self):
-        """One-shot band snapshot on accept so a fresh tab renders guard bands
-        before the first push. Degrades to {} when Redis is down; the bands
-        also ride every telemetry.update push (see ws payload builder)."""
-        try:
-            bands = ws.ws_redis().hgetall(thresholds_hash(self.saloon_id))
-        except Exception:
-            bands = {}
-        self.send_json({
-            "type": "telemetry.hello",
-            "saloon_id": self.saloon_id,
-            "org_id": self.org_id,
-            "thresholds": bands,
-        })
 
     @staticmethod
     def _parse_since(raw):

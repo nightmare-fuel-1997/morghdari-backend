@@ -250,7 +250,21 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None,
             first_sight = entry_id not in seen_ids
             seen_ids.add(entry_id)
             ids.append(entry_id)
-            kwargs = _to_model_kwargs(fields)
+            # BUG-13: one unprocessable entry must not poison the whole drain
+            # (retried forever with a stack trace every cycle). Dead-letter it
+            # with a reason and ack - it is poison, not retryable (QA 17.1).
+            try:
+                kwargs = _to_model_kwargs(fields)
+            except Exception:
+                from morghdari.subscriber.dlq import send_to_dlq
+
+                send_to_dlq(
+                    client,
+                    fields.get("gateway_slot_id", "unknown-topic"),
+                    fields.get("payload", ""),
+                    "PROCESSING_ERROR",
+                )
+                continue
             saloon_id = resolve_saloon(fields)
             if saloon_id is None:
                 # Stale slot (deleted/reset): poison → DLQ with reason,

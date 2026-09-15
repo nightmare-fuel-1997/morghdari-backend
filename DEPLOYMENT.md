@@ -106,3 +106,21 @@ location /api/compat/                { limit_req zone=compat burst=10 nodelay; p
 # WebSocket: Django closes 4003 (auth/org) BEFORE 4000 (cap) — a 4003 spike
 # means a bad client build, not an outage; never log ?token= ($uri only).
 ```
+
+
+## Migrate on a fresh volume (BUG-1)
+
+On a fresh volume the app role (`morghdari_app`) has no `CREATE` on schema
+`public` (PG15+), so the first `manage.py migrate` must run with an
+admin-equivalent URL - the same sanctioned path as `scripts/prod_bootstrap.sh`
+(the app-role migrate dies at `alerts.0006` with `permission denied for
+schema public`):
+
+```bash
+DATABASE_URL=postgres://<admin>:<pw>@<host>:5432/<db> \
+  docker compose -f docker-compose.prod.yml -p morghdari run --rm daphne \
+  python manage.py migrate
+```
+
+The CI migrate-gate uses admin-equivalent credentials, so it does NOT catch
+this - use the admin URL for first-time migration.

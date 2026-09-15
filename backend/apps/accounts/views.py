@@ -81,6 +81,7 @@ from apps.common.schemas import (
     error_responses,
 )
 from apps.auditing.models import AccountActivityLog
+from apps.monitoring.ops_throttles import LoginRateThrottle
 from apps.tenants.context import tenant_context
 from apps.tenants.models import Organization
 from apps.tenants.models import Organization
@@ -97,7 +98,17 @@ User = get_user_model()
 
 
 class LoginView(TokenObtainPairView):
+    """POST /api/v1/auth/login/ — brute-force gated (BUG-5, QA 1.26).
+
+    BUG-5 (QA 1.26): auth_login 60/min per attempted username — generous on
+    purpose so the suite's legit login bursts (densest module 43 total, 13 on
+    one username) never 429; a single-account bombing run still does.
+    فارسی: نرخ‌گیرِ ورود ۶۰ در دقیقه برای هر نامِ کاربری تا حمله مهار شود و
+    ورودهای سالمِ آزمون‌ها بسته نشوند.
+    """
+
     serializer_class = LoginSerializer
+    throttle_classes = [LoginRateThrottle]
 
     @extend_schema(
         tags=[TAG_AUTH],
@@ -865,6 +876,21 @@ def support_alert_force_resolve(request, alert_id):
     alert.resolved_at = timezone.now()
     alert.current_status = "RESOLVED"
     alert.save(update_fields=["resolved_at", "current_status"])
+
+    # BUG-9b: clearing the coalesce blob is what lets the metric page again;
+    # a force-resolved alert that leaves `alert:active:*` behind blackholes
+    # every future episode (QA 8.1/8.2b/8.8). Redis down must not fail the
+    # runbook op, so the clear is best-effort.
+    try:
+        from apps.alerts.services.sweeps import clear_active_pointer
+
+        clear_active_pointer(saloon_id=alert.saloon_id, metric=alert.metric_type)
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).exception(
+            "force-resolve active-pointer clear degraded"
+        )
 
     _audit_support_op(
         request, org_id, "SUPPORT_OP_ALERT_FORCE_RESOLVE", incident_id,

@@ -1013,18 +1013,34 @@ def gateway_config(request, gateway_slot_id: str):
     credential shape. Never echoes the one-time plaintext password.
     Authentication is resolved IN the view (device Basic vs manager JWT)
     because the two callers use different auth systems."""
-    slot = GatewaySlot.objects.filter(pk=gateway_slot_id).first()
-    if slot is None:
-        return Response({"error": "gateway not found"}, status=404)
+    from django.db import transaction
 
     from apps.mqtt_auth.models import MqttDeviceCredential
     from apps.mqtt_auth.services import gateway_config_payload
+    from apps.tenants.context import tenant_context
+
+    device = _basic_device(request)
+    claims = None if device is not None else _claims(request)
+    # BUG-11: gateway_slots is FORCE-RLS'd, so the slot MUST be resolved
+    # inside a bounded tenant context or the app role sees zero rows and
+    # EVERY non-JWT caller 404s (QA 12.7). Scope comes from the
+    # authenticated principal (device credential org, else manager JWT org),
+    # never from the URL argument.
+    if device is not None:
+        org_scope = getattr(device, "org_id", None)
+    else:
+        org_scope = (claims or {}).get("org_id")
+    if org_scope:
+        with transaction.atomic(), tenant_context(org_scope):
+            slot = GatewaySlot.objects.filter(pk=gateway_slot_id).first()
+    else:
+        slot = GatewaySlot.objects.filter(pk=gateway_slot_id).first()
+    if slot is None:
+        return Response({"error": "gateway not found"}, status=404)
 
     credential = MqttDeviceCredential.objects.filter(username=slot.slot_id).first()
-    device = _basic_device(request)
     if device is None:
         # Manager/owner JWT path.
-        claims = _claims(request)
         org_id = claims.get("org_id") if claims else None
         roles = set(claims.get("roles", [])) if claims else set()
         if org_id is None and not request.user.is_authenticated:

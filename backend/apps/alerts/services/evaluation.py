@@ -179,22 +179,28 @@ def evaluate_entry(
     thi_max_str = thresholds.get("thi_max")
     if thi_max_str is not None and metric_is_live(metrics, "temp") \
             and metric_is_live(metrics, "humidity"):
+        # BUG-20 (QA 8.13): a muted 'thi' used to fall through to
+        # track_breach with `thi` unbound (computed only in the unmuted
+        # else) → UnboundLocalError crashed the drain on every THI-capable
+        # reading. Muted means note + SKIP — the same semantics as lane ③:
+        # no phantom breach episode, digest still fed (D24-6).
+        # فارسی: بی‌صدا شدنِ thi باید مثل بند ③ کامل رد شود، نه سقوطِ زنجیره.
         if "thi" in muted:
             note_sub_muted(redis_client, org_id, "thi")
         else:
             thi = compute_thi(float(metrics["temp"]["avg"]),
                               float(metrics["humidity"]["avg"]))
-        result = track_breach(
-            redis_client, saloon_id, "thi", thi,
-            float(thi_max_str), hysteresis, duration_sec, clock_now=clock_now,
-        )
-        if result == "breaching" and consume_fire(
-            redis_client, saloon_id, "thi", duration_sec, clock_now=clock_now
-        ):
-            fire = fire_or_coalesce(
-                redis_client, org_id, farm_id, saloon_id,
-                metric="thi", value=thi, clock_now=clock_now,
+            result = track_breach(
+                redis_client, saloon_id, "thi", thi,
+                float(thi_max_str), hysteresis, duration_sec, clock_now=clock_now,
             )
-            fired = {**fire, "metric": "thi", "tier": 1}
+            if result == "breaching" and consume_fire(
+                redis_client, saloon_id, "thi", duration_sec, clock_now=clock_now
+            ):
+                fire = fire_or_coalesce(
+                    redis_client, org_id, farm_id, saloon_id,
+                    metric="thi", value=thi, clock_now=clock_now,
+                )
+                fired = {**fire, "metric": "thi", "tier": 1}
 
     return fired

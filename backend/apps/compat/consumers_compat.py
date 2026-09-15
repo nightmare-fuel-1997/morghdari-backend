@@ -99,7 +99,10 @@ class FarmTelemetryConsumer(JsonWebsocketConsumer):
         if not org_claim:
             return 4003
 
-        farm_slug = self.scope["url_route"]["kwargs"]["farm_slug"]
+        kwargs = self.scope["url_route"]["kwargs"]
+        # BUG-7 (QA 15.7): compat route passes farmSlug but consumer read farm_slug → KeyError on every connect. Accept both spellings; canonical name stays farm_slug.
+        # فارسی: ناهماهنگی نام پارامتر باعث سقوط هر اتصال سازگاری بود.
+        farm_slug = kwargs.get("farm_slug", kwargs.get("farmSlug"))
         from django.db import transaction
         from apps.farms.models import Saloon
         from apps.tenants.context import tenant_context

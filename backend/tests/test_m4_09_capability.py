@@ -154,6 +154,44 @@ def test_thi_rule_absent_means_no_derivation(timescale_db, _fresh_redis):
     ).exists()
 
 
+@pytest.mark.use_migrations
+@pytest.mark.django_db(transaction=True)
+def test_thi_muted_suppresses_without_crashing(timescale_db, _fresh_redis):
+    """BUG-20 (QA 8.13): a muted 'thi' category with co-present temp +
+    humidity used to raise NameError — `thi` was only computed inside the
+    unmuted else-branch while track_breach referenced it either way, so
+    every THI-capable reading crashed the drain task. Muted must mean:
+    note + skip (same semantics as lane ③), never a crash, never a
+    phantom breach episode, digest still fed (D24-6)."""
+    import datetime as dt
+
+    from apps.accounts.models import User
+    from apps.alerts.models import AlertSubscription
+
+    world = _make_world()
+    _seed_thresholds(_fresh_redis, world["saloon"], {"thi_max": "78"})
+    user = User.objects.create_user(username=f"mu-{uuid.uuid4().hex[:8]}")
+    AlertSubscription.objects.create(
+        org=world["org"], metric_key="thi", muted_by=user, reason="qa bug-20"
+    )
+    thi = compute_thi(35.0, 70.0)  # ≈ 88.9 — would fire were it not muted
+    _seed_sustained_breach(_fresh_redis, world["saloon"], "thi", thi)
+
+    result = _evaluate(
+        _fresh_redis, world,
+        {"temp": {"avg": 35.0}, "humidity": {"avg": 70.0}},
+    )
+    assert result is None
+    assert not AlertInstance.objects.filter(
+        org_id=world["org"].org_id, metric_type="thi"
+    ).exists()
+    # the suppressed fire fed the digest (D24-6 mitigation)
+    tehran = dt.timezone(dt.timedelta(hours=3, minutes=30))
+    day = dt.datetime.now(tehran).date().isoformat()
+    digest = _fresh_redis.get(f"submuted:{world['org'].org_id}:thi:{day}")
+    assert int(digest or 0) >= 1
+
+
 # ── ③ capability-gated co / power sources ────────────────────────────────────
 
 @pytest.mark.use_migrations

@@ -16,9 +16,14 @@ set -euo pipefail
 CONTAINER="${CONTAINER:-morghdari-postgres}"
 
 echo "== 1. wal-g base backup (backup-push)"
-docker exec -i "$CONTAINER" wal-g backup-push
+# BUG-15: wal-g connects as the OS user unless PG creds are supplied, which
+# fails with `FATAL: role "root" does not exist`.
+PGUSER="${PGUSER:-${POSTGRES_ADMIN_USER:-postgres}}"; export PGUSER
+PGDATABASE="${PGDATABASE:-${POSTGRES_DB:-morghdari}}"; export PGDATABASE
+PGPASSWORD="${PGPASSWORD:-${POSTGRES_ADMIN_PASSWORD:-}}"; export PGPASSWORD
+docker exec -i -e PGUSER="$PGUSER" -e PGPASSWORD="$PGPASSWORD" -e PGDATABASE="$PGDATABASE" "$CONTAINER" wal-g backup-push
 
 echo "== 2. evidence — backups on the archive (wal-g backup-list)"
-docker exec -i "$CONTAINER" wal-g backup-list
+docker exec -i -e PGUSER="$PGUSER" -e PGPASSWORD="$PGPASSWORD" -e PGDATABASE="$PGDATABASE" "$CONTAINER" wal-g backup-list
 
 echo "wal-g base backup complete"
