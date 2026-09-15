@@ -31,3 +31,19 @@ Why this section exists: the VPS deploy rehearsal (poultry_vps_deploy) ran the f
 - BUG-22 fixed (regression the BUG-8 fix introduced): socket_timeout: 1 on CHANNEL_LAYERS killed every idle WS ~2s after connect (channels_redis receive() is a brpop_timeout=5 long-poll). Layer now keeps only socket_connect_timeout: 1 (config/settings/base.py); pinned by 	ests/test_channel_layer_config.py.
 - BUG-21 filed (not fixed): Prometheus's Django job targets daphne:8000 but DJANGO_ALLOWED_HOSTS lacks daphne -> every scrape DisallowedHost; BeatHeartbeatStale unmonitorable in practice until the host list widens.
 - Full evidence and the remaining environment-leaning items (BUG-12 Docker Desktop restart quirk, BUG-18 farm/saloon RESTRICT-audit delete family, 8.15 v1.0 quota deferral) live in poultry_vps_deploy/BUGS.md; final tally 296 PASS / 0 FAIL / 1 NA of 297.
+
+
+## 2026-09-15 bug-sweep fix round (branch `fix/bug-sweep-2026-09-15`)
+
+Closes BUG-1, BUG-2, BUG-6, BUG-9, BUG-9b, BUG-10, BUG-11, BUG-13, BUG-14,
+BUG-15, BUG-18, BUG-21. Full ledger: `BUGS.md` at the repo root. Regression
+tests: `backend/tests/test_bugfix_2026_09_15.py`. Commits `6ebd61e` + `768840d`.
+
+- BUG-9: sweeps cross-org reads now use the `admin` (BYPASSRLS) alias.
+- BUG-9b: `clear_active_pointer()` clears `alert:active:*` on force-resolve and sweep-resolve.
+- BUG-2: `/reconciliation/` defaults to yesterday Tehran.
+- BUG-6: WS deny/cap accept-before-close.
+- BUG-11: `gateway_config` resolves the slot in a tenant context.
+- BUG-10/18: audit farm/saloon FK -> SET_NULL (+ migration).
+- BUG-13: drain dead-letters unprocessable entries.
+- BUG-14: `deploy.sh` nginx reload. BUG-15: wal-g creds. BUG-21: `.env.example` daphne. BUG-1: `DEPLOYMENT.md` migrate note.
