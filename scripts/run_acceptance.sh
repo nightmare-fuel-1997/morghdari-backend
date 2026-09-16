@@ -33,6 +33,9 @@ set -euo pipefail
 
 PROJ="morghdari_ci"
 COMPOSE=(docker compose -f docker-compose.ci.yml -p "$PROJ")
+# -T on every `run`: no TTY, so one-shot gate containers exit when their
+# command ends (a Windows/PowerShell TTY kept the pytest container alive).
+# ponytail: stall ceiling is the 1800s bound in docker-compose.ci.yml (test).
 
 banner() { printf '\n=== %s ===\n' "$1"; }
 
@@ -43,13 +46,13 @@ if docker ps --format '{{.Names}}' | grep -q "^${PROJ}-"; then
 fi
 
 banner "GATE 1/3 — migrate-gate (deployability)"
-"${COMPOSE[@]}" run --rm --build migrate-gate
+"${COMPOSE[@]}" run -T --rm --build migrate-gate
 
 banner "GATE 2/3 — test (pytest + coverage)"
-"${COMPOSE[@]}" run --rm --build test
+"${COMPOSE[@]}" run -T --rm --build test
 
 banner "GATE 3/3 — image-scan (trivy CRITICAL/HIGH, fixable)"
-"${COMPOSE[@]}" run --rm image-scan
+"${COMPOSE[@]}" run -T --rm image-scan
 
 banner "teardown"
 "${COMPOSE[@]}" down --remove-orphans >/dev/null

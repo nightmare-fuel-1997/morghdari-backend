@@ -117,7 +117,9 @@ services:
     # DR §2.1/§3.3). Rehearsal builds it locally via the override below.
     image: ghcr.io/morghdari/postgres-walg:${MORGHDARI_TAG}
     container_name: morghdari-postgres
-    mem_limit: 4g
+    # ponytail: 1200m cap for a 2-core/4 GB VPS - a 4g ceiling let Postgres
+    # grow until the kernel OOM-killed daphne/redis instead; ~6x measured use.
+    mem_limit: 1200m
     stop_grace_period: 120s
     environment:
       POSTGRES_DB: "${DATABASE_NAME}"
@@ -274,7 +276,8 @@ services:
     # settings' task_routes send telemetry/alerts work to telemetry_realtime,
     # telemetry_historical and alerts; a default-queue-only worker leaves all
     # of it stranded (telemetry drained nothing, silently).
-    command: celery -A config worker -l info --concurrency=4 -Q celery,telemetry_realtime,telemetry_historical,alerts
+    # ponytail: --concurrency=2 for a 2-core box (one worker process per core).
+    command: celery -A config worker -l info --concurrency=2 -Q celery,telemetry_realtime,telemetry_historical,alerts
     environment:
       DJANGO_SETTINGS_MODULE: "config.settings.production"
       DJANGO_ALLOWED_HOSTS: "${DJANGO_ALLOWED_HOSTS}"

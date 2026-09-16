@@ -157,7 +157,9 @@ services:
       - -c
       - |
         set -e
-        pytest --cov=apps --cov-report=term-missing --cov-report=json:coverage.json --cov-fail-under=80
+        # ponytail: 1800s bound so a wedged pytest FAILS the gate instead of
+        # hanging forever; raise it if the suite legitimately needs longer.
+        timeout 1800 pytest --cov=apps --cov-report=term-missing --cov-report=json:coverage.json --cov-fail-under=80
         python scripts/check_module_coverage.py
 
   # Migration deployability gate — the --nomigrations hole closer. Runs BEFORE
