@@ -1,0 +1,38 @@
+# Gateway simulator — opt-in ONLY, never part of the prod stack:
+#
+#   docker compose -p morghdari -f docker-compose.prod.yml \
+#     -f docker-compose.vps.yml -f docker-compose.sim.yml up -d simulator
+#
+# Publishes schema-2.0 telemetry for the PROVISIONED SIM gateways using the
+# credentials minted by the review-approve flow (/opt/morghdari/.sim.env).
+# Stop it any time: ... stop simulator / rm simulator. Prod is untouched.
+
+services:
+  simulator:
+    image: ghcr.io/morghdari/backend:${MORGHDARI_TAG}
+    container_name: morghdari-simulator
+    mem_limit: 256m
+    stop_grace_period: 10s
+    command: python /sim/sim.py
+    # The backend image bakes a daphne healthcheck (port 8000); the simulator
+    # serves nothing, so disable it — otherwise the container shows
+    # (unhealthy) forever despite publishing fine.
+    healthcheck:
+      disable: true
+    environment:
+      MQTT_HOST: "emqx"
+      MQTT_PORT: "8883"
+      MQTT_TLS_CA: "/app/certs/ca.crt"
+      SIM_ORG_UUID: "ac1d1186-b30d-40ff-a924-82e1022fe9e9"
+      SIM_INTERVAL_SEC: "10"
+      DJANGO_SETTINGS_MODULE: "config.settings.production"
+      DJANGO_SECRET_KEY: "${DJANGO_SECRET_KEY}"
+      DJANGO_ALLOWED_HOSTS: "${DJANGO_ALLOWED_HOSTS}"
+    volumes:
+      - ./certs:/app/certs:ro
+      - ./simulator/sim.py:/sim/sim.py:ro
+      - ./.sim.env:/sim/creds.json:ro
+    depends_on:
+      - emqx
+      - redis
+    restart: "no"

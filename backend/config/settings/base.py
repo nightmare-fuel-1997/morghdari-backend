@@ -218,8 +218,14 @@ TIME_ZONE = "Asia/Tehran"          # farm-local time; USE_TZ=True keeps DB in UT
 USE_I18N = True
 USE_TZ = True                       # dual-timestamp audit math depends on this
 
-STATIC_URL = "static/"
-STATIC_ROOT = BASE_DIR / "staticfiles"
+STATIC_URL = "/static/"
+# PROD-FIX 2026-09-19 (admin CSS 404, live on VPS 82.115.17.252): STATIC_ROOT
+# must be /app/static, the path docker-compose.prod.yml mounts static_volume
+# on (and nginx serves from /static). It was BASE_DIR/"staticfiles"
+# (/app/config/staticfiles) — an ephemeral container path nothing served, so
+# the volume stayed empty and every /static/admin/* answered 404. Same
+# BASE_DIR.parent pattern as MEDIA_ROOT.
+STATIC_ROOT = BASE_DIR.parent / "static"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # ---------------------------------------------------------------------------

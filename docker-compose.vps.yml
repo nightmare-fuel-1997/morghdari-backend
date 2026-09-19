@@ -1,0 +1,51 @@
+# VPS build override — used WITH docker-compose.prod.yml, never alone:
+#
+#   docker compose -p morghdari \
+#     -f docker-compose.prod.yml -f docker-compose.vps.yml up -d --build
+#
+# Why this file exists:
+# - prod.yml pulls ghcr.io/morghdari/* images, and this project has no registry
+#   yet — the VPS must build the images locally from the cloned tree.
+# - docker-compose.rehearsal.yml is LAPTOP-ONLY (loopback port publishes for
+#   the laptop test loop + a MinIO service for WAL drills). It must NEVER be
+#   used on the VPS. This override adds the same local build contexts with
+#   none of the rehearsal extras — every other setting stays byte-identical
+#   prod.
+#
+# 4 GB VPS topology: the full stack (postgres, redis, emqx, daphne,
+# subscriber-01/02, celery-worker, celery-beat). No MinIO — real S3 variables
+# (or empty for short API tests, see README_VPS.md) come from .env.
+
+services:
+  daphne:
+    build:
+      context: ./backend
+      args:
+        # optional: pip index override for hosts that cannot reach pypi.org
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-}
+  subscriber-01:
+    build:
+      context: ./backend
+      args:
+        # optional: pip index override for hosts that cannot reach pypi.org
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-}
+  subscriber-02:
+    build:
+      context: ./backend
+      args:
+        # optional: pip index override for hosts that cannot reach pypi.org
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-}
+  celery-worker:
+    build:
+      context: ./backend
+      args:
+        # optional: pip index override for hosts that cannot reach pypi.org
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-}
+  celery-beat:
+    build:
+      context: ./backend
+      args:
+        # optional: pip index override for hosts that cannot reach pypi.org
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-}
+  postgres:
+    build: ./docker/postgres-walg

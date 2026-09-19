@@ -1,3 +1,5 @@
-from django.contrib import admin  # noqa: F401
+"""Farms admin — full superuser CRUD (2026-09-19)."""
 
-# Admin registrations arrive with real models at M1.
+from apps.common.admin_support import register_app_models
+
+register_app_models("farms")

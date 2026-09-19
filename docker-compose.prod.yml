@@ -163,6 +163,17 @@ services:
       DATABASE_ADMIN_URL: "postgres://${POSTGRES_ADMIN_USER}:${POSTGRES_ADMIN_PASSWORD}@postgres:5432/${DATABASE_NAME}"
       REDIS_URL: "redis://:${REDIS_PASSWORD}@redis:6379"
       EMQX_HOST: "emqx"
+      # PROD-FIX 2026-09-19 (EMQX mgmt unreachable, live on VPS 82.115.17.252):
+      # mqtt_auth.services pushes gateway users to the broker's built-in DB
+      # via EMQX_API_URL, which defaulted to http://127.0.0.1:18083 — the
+      # daphne container's OWN loopback, so every push died with Connection
+      # refused (FNV-soft warnings; postgres authn kept logins working).
+      # Point at the broker service (dashboard binds 0.0.0.0 inside its
+      # container; the host publish stays loopback-only) with the real
+      # dashboard credentials.
+      EMQX_API_URL: "http://emqx:18083"
+      EMQX_API_USER: "admin"
+      EMQX_API_PASSWORD: "${EMQX_DASHBOARD_PASSWORD}"
       # M7 rehearsal 2026-09-07: production.py reads DJANGO_SECRET_KEY — the
       # docs-repo §2.1 listing passed SECRET_KEY (KeyError → crash loop).
       DJANGO_SECRET_KEY: "${DJANGO_SECRET_KEY}"

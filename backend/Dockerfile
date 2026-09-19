@@ -20,6 +20,22 @@
 
 FROM python:3.12-slim AS builder
 WORKDIR /build
+# Optional package-index override (2026-09-16, VPS day-1 finding on
+# 185.8.175.150): pypi.org is effectively unreachable from some hosts — the
+# index answered after 45 s and then timed out, so `pip wheel` failed with
+# "Could not find a version that satisfies the requirement Django<5.2".
+# Point the build at a reachable index instead of changing anything else:
+#   docker compose ... build --build-arg PIP_INDEX_URL=https://<mirror>/simple/
+# (docker-compose.vps.yml forwards the value from .env's PIP_INDEX_URL).
+# Unset or empty keeps the stock PyPI behaviour, so CI and other hosts are
+# unaffected. NOTE: a third-party mirror serves the packages — only set this
+# when the default index is genuinely unreachable, and prefer a mirror you
+# trust or an internal one.
+ARG PIP_INDEX_URL=""
+RUN if [ -n "$PIP_INDEX_URL" ]; then \
+      printf '[global]\nindex-url = %s\ntimeout = 60\nretries = 5\n' "$PIP_INDEX_URL" > /etc/pip.conf; \
+      echo "pip index override:"; cat /etc/pip.conf; \
+    fi
 COPY requirements/ requirements/
 RUN pip wheel --no-cache-dir --wheel-dir /wheels-base  -r requirements/base.txt && \
     pip wheel --no-cache-dir --wheel-dir /wheels-test  -r requirements/test.txt
@@ -60,7 +76,16 @@ COPY . .
 # PermissionDenied while every gate stays green (tests use a tempdir MEDIA_ROOT
 # and never touch this path). Prod must additionally mount a named volume on
 # /app/media (see DEPLOYMENT.md) or uploads die with the container.
-RUN mkdir -p /app/media && chown appuser:appuser /app/media
+RUN mkdir -p /app/media /app/static && chown appuser:appuser /app/media /app/static
+# PROD-FIX 2026-09-19 (admin CSS 404, live on VPS 82.115.17.252): bake
+# collected static into the image so a FRESH static_volume is pre-populated
+# on first mount (Docker copies image contents into a new named volume), and
+# appuser owns /app/static so runtime `collectstatic` never fails with
+# PermissionDenied (the volume is root-owned at creation; daphne runs as
+# appuser). Uses development defaults — no secrets needed, static output is
+# settings-independent.
+USER appuser
+RUN python manage.py collectstatic --noinput --clear -v1
 # Blueprint §8: healthcheck targets the platform health endpoint. M7 rehearsal
 # 2026-09-07: probe is a RAW-SOCKET liveness check — SECURE_SSL_REDIRECT=True
 # turns an http probe into a 301 whose https follow times out (urllib hung the
@@ -69,5 +94,4 @@ RUN mkdir -p /app/media && chown appuser:appuser /app/media
 # /api/v1/health/ exists since v0.6.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD python -c "import socket; s=socket.create_connection(('127.0.0.1',8000),4); s.sendall(b'GET /api/v1/health/ HTTP/1.0\r\nHost: localhost\r\n\r\n'); assert s.recv(64).startswith(b'HTTP/')" || exit 1
-USER appuser
 CMD ["daphne", "-b", "0.0.0.0", "-p", "8000", "config.asgi:application"]

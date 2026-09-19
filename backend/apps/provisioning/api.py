@@ -15,7 +15,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
 from apps.accounts.permissions import _claims
-from apps.tenants.context import admin_alias
+from apps.tenants.context import admin_alias, tenant_context
 from apps.common.schemas import (
     CONFLICT_RESPONSE,
     RATE_LIMITED_RESPONSE,
@@ -484,7 +484,24 @@ def review_gateway_request(request, request_id: int):
     if not _can_review(request):
         return Response({"error": "platform review permission required"}, status=403)
 
-    with transaction.atomic():
+    # PROD-FIX 2026-09-19 (live on VPS 82.115.17.252): staff reviewers are
+    # org-less by design (D15) — without an org claim the middleware sets no
+    # GUC and the FORCE'd policy hides EVERY request row, so review always
+    # 404'd for staff on RLS stacks (same masking class as M7-06/M7-10 — the
+    # suite runs BYPASSRLS and never sees it). Discover the request's org over
+    # the admin alias (reviewers-only past the gate above), then run the
+    # review inside that org's tenant context; per-tenant reads/writes stay
+    # RLS-scoped, cross-org isolation untouched.
+    org_id = (
+        GatewayRequest.objects.using(admin_alias())
+        .filter(pk=request_id)
+        .values_list("org_id", flat=True)
+        .first()
+    )
+    if org_id is None:
+        return Response({"error": "request not found"}, status=404)
+
+    with transaction.atomic(), tenant_context(org_id):
         row = GatewayRequest.objects.select_for_update().filter(pk=request_id).first()
         if row is None:
             return Response({"error": "request not found"}, status=404)
@@ -619,7 +636,17 @@ def provisioning_sync(request):
             if hardware is None:
                 return Response({"error": "active gateway hardware not registered"}, status=400)
 
-            zones = request.data.get("zones") or request.data.get("zone_assignments") or []
+            # PROD-FIX 2026-09-19 (live on VPS 82.115.17.252): accept both
+            # ints and {"saloon_id": N} objects (the documented serializer
+            # shape); anything else is a 400, never a 500.
+            raw_zones = request.data.get("zones") or request.data.get("zone_assignments") or []
+            zones = []
+            for _z in raw_zones:
+                _zid = _z.get("saloon_id") if isinstance(_z, dict) else _z
+                try:
+                    zones.append(int(_zid))
+                except (TypeError, ValueError):
+                    return Response({"error": "each zone must be a saloon id"}, status=400)
             mappings = request.data.get("sensor_slot_mappings") or []
 
             # M5-03 replacements — a hardware unit swap on this gateway slot:

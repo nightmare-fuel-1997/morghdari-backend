@@ -27,7 +27,6 @@ bcrypt_sha256 wrappers from earlier flows are still accepted by
 تعلیق/رد، و چرخش پلکانی اعتبارنامه که فقط با تأیید دستگاه اعمال می‌شود.
 """
 
-import base64
 import json
 import logging
 import os
@@ -113,34 +112,71 @@ def _emqx_base_url() -> str:
     return os.environ.get("EMQX_API_URL", "http://127.0.0.1:18083").rstrip("/")
 
 
+_emqx_token = {"value": None}  # process-cached dashboard JWT
+
+
+def _emqx_login() -> str | None:
+    """POST /api/v5/login with the dashboard credentials (EMQX 5.x accepts
+    no Basic auth on /api/v5 — dashboard users trade password for a JWT).
+    Cached per process; cleared and retried once on 401."""
+    if _emqx_token["value"]:
+        return _emqx_token["value"]
+    body = json.dumps(
+        {
+            "username": os.environ.get("EMQX_API_USER", "admin"),
+            "password": os.environ.get("EMQX_API_PASSWORD", ""),
+        }
+    ).encode()
+    req = urllib.request.Request(
+        _emqx_base_url() + "/api/v5/login",
+        data=body,
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            _emqx_token["value"] = json.loads(resp.read()).get("token")
+    except OSError as exc:
+        logger.warning("EMQX unreachable (%s): login", exc)
+    return _emqx_token["value"]
+
+
 def _emqx_request(method: str, path: str, body=None, timeout: int = 5):
     """Minimal stdlib EMQX management-API client (same dialect as
     scripts/emqx_provision.py). Returns (status, payload); never raises for
     HTTP errors — callers decide what a 404 means for idempotency."""
-    url = _emqx_base_url() + path
-    data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(url, data=data, method=method)
-    token = base64.b64encode(
-        f"{os.environ.get('EMQX_API_USER', 'demo-admin')}:"
-        f"{os.environ.get('EMQX_API_PASSWORD', 'dev_password')}".encode()
-    ).decode()
-    req.add_header("Authorization", f"Basic {token}")
-    if body is not None:
-        req.add_header("Content-Type", "application/json")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read()
-            return resp.status, (json.loads(raw) if raw else None)
-    except urllib.error.HTTPError as exc:
-        raw = exc.read()
-        try:
-            payload = json.loads(raw) if raw else None
-        except ValueError:
-            payload = raw.decode(errors="replace") if raw else None
-        return exc.code, payload
-    except OSError as exc:
-        logger.warning("EMQX unreachable (%s): %s %s", exc, method, path)
+    token = _emqx_login()
+    if token is None:
         return 0, None
+    def _do(jwt):
+        url = _emqx_base_url() + path
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(url, data=data, method=method)
+        req.add_header("Authorization", f"Bearer {jwt}")
+        if body is not None:
+            req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read()
+                return resp.status, (json.loads(raw) if raw else None)
+        except urllib.error.HTTPError as exc:
+            raw = exc.read()
+            try:
+                payload = json.loads(raw) if raw else None
+            except ValueError:
+                payload = raw.decode(errors="replace") if raw else None
+            return exc.code, payload
+        except OSError as exc:
+            logger.warning("EMQX unreachable (%s): %s %s", exc, method, path)
+            return 0, None
+
+    status, payload = _do(token)
+    if status == 401:  # expired/revoked JWT — re-login once and retry
+        _emqx_token["value"] = None
+        token = _emqx_login()
+        if token is not None:
+            return _do(token)
+    return status, payload
 
 
 def _rules_endpoint(username: str) -> str:
@@ -163,6 +199,35 @@ def _users_endpoint(username: str | None = None) -> str:
 
 AUTHN_CHAIN_ID = "password_based:built_in_database"
 
+_builtin_chain = {"known": None}  # None=unprobed; EMQX mgmt probe is cached
+
+
+def builtin_chain_exists() -> bool:
+    """Whether the broker actually has the built-in-DB authn chain.
+
+    PROD-FIX 2026-09-19: production EMQX is postgres-only by design
+    (emqx.conf: authn + authz both postgresql; the built_in_database chain
+    exists only under the dev-only compose override). Pushing users/rules to
+    a nonexistent chain 400s forever, so every built-in-DB sync below is
+    skipped quietly when the chain is absent — postgres stays the single
+    source of truth and enforcement moves to the DB rows (see suspend/
+    reject in provisioning/services.py).
+    """
+    if _builtin_chain["known"] is None:
+        status, payload = _emqx_request("GET", "/api/v5/authentication")
+        ids = set()
+        if status == 200:
+            chains = payload if isinstance(payload, list) else [payload]
+            ids = {c.get("id") for c in chains if isinstance(c, dict)}
+        _builtin_chain["known"] = AUTHN_CHAIN_ID in ids
+        if not _builtin_chain["known"]:
+            logger.info(
+                "EMQX has no %s chain (postgres-only authn); built-in-DB "
+                "user/ACL sync skipped",
+                AUTHN_CHAIN_ID,
+            )
+    return _builtin_chain["known"]
+
 
 def ensure_gateway_user(username: str, plaintext: str) -> bool:
     """Create the gateway's EMQX authn user with the PLAINTEXT password.
@@ -173,7 +238,11 @@ def ensure_gateway_user(username: str, plaintext: str) -> bool:
     approval (one-time issue) and rotation ACK (the device presents the new
     password). The app DB keeps the $2b$ hash for HTTP Basic verification;
     the broker derives its own hash from the same plaintext — one credential,
-    two verifiers (C7). FNV-soft: a broker outage never blocks approval."""
+    two verifiers (C7). FNV-soft: a broker outage never blocks approval.
+    Skipped entirely when the broker has no built-in-DB chain (postgres-only
+    production authn)."""
+    if not builtin_chain_exists():
+        return True
     status, _payload = _emqx_request(
         "POST", _users_endpoint(),
         {"user_id": username, "password": plaintext},
@@ -194,7 +263,10 @@ def update_gateway_user_password(username: str, plaintext: str) -> bool:
     """Push a rotated password to EMQX (rotation commit's broker step).
     PUT updates the existing user; on 404 (user was never created or was
     wiped) fall back to POST, which heals the missing user — a rotation ACK
-    therefore self-converges a broken broker state."""
+    therefore self-converges a broken broker state. Skipped when the broker
+    has no built-in-DB chain (postgres-only production authn)."""
+    if not builtin_chain_exists():
+        return True
     status, _payload = _emqx_request(
         "PUT", _users_endpoint(username), {"password": plaintext},
     )
@@ -215,10 +287,15 @@ def sync_gateway_acls(slot) -> dict:
     the DB rules remain the source of truth (logged, never raised). Also
     probes the authn user: an absent user (approval-time broker hiccup or a
     wiped broker) is logged — the next credential rotation recreates it via
-    update_gateway_user_password's 404-heal."""
+    update_gateway_user_password's 404-heal. On postgres-only brokers the
+    DB allow-rows ARE the enforcement (no built-in chain to push to), so the
+    count is affirmed without a broker round-trip."""
     credential = MqttDeviceCredential.objects.filter(username=slot.slot_id).first()
     if credential is None:
         return {"synced": 0, "reachable": True}
+    if not builtin_chain_exists():
+        rules = MqttAclRule.objects.filter(username=credential.username).count()
+        return {"synced": rules, "reachable": True}
     probe_status, _ = _emqx_request("GET", _users_endpoint(credential.username))
     if probe_status == 404:
         logger.warning(
@@ -250,9 +327,15 @@ def revoke_gateway_acls(slot) -> bool:
     it (the password is issued exactly once), and a kept user without rules
     cannot publish — while rotation's 404-heal can still repair a wiped
     broker. (Broker ACL-cache TTL, default 1m, bounds revocation latency for
-    an already-connected client — documented in TASKS M5-07.)"""
+    an already-connected client — documented in TASKS M5-07.)
+
+    On postgres-only brokers there is no built-in chain to empty; enforcement
+    is the DB allow-rows, deleted by the caller (provisioning/services
+    suspend/reject) — this push is then skipped."""
     credential = MqttDeviceCredential.objects.filter(username=slot.slot_id).first()
     if credential is None:
+        return True
+    if not builtin_chain_exists():
         return True
     status, _payload = _emqx_request(
         "PUT", _rules_endpoint(credential.username),

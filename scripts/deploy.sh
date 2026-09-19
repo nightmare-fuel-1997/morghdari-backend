@@ -53,26 +53,36 @@ gate() {  # wait up to 120s for every container to report healthy
   return 1
 }
 
+reload_nginx() {
+  # BUG-14 (QA 17.10 / 19.1, live on VPS 82.115.17.252): nginx resolves the
+  # static `upstream daphne_cluster` DNS ONCE at config load. Any `up -d`
+  # that recreates the app containers hands them NEW IPs while nginx keeps
+  # proxying to the dead address — every API/WS request 502s indefinitely —
+  # and the container health gate above stays GREEN the whole time (each
+  # container really is healthy). Reload after every up -d so nginx
+  # re-resolves.
+  # Always returns 0: a reload hiccup must never mask the deploy result.
+  # فارسی: بعد از هر up -d، nginx ریلود میشود تا آدرسِ تازهٔ کانتینرها را
+  # حل کند؛ وگرنه ترافیک API/WS تا ابد 502 میدهد.
+  docker exec morghdari-nginx nginx -s reload 2>/dev/null \
+    || echo "!! nginx reload skipped (container down?)" >&2
+  return 0
+}
+
 echo "==> deploying tag: $TAG (previous: ${PREV:-<none recorded>})"
 if ! MORGHDARI_TAG="$TAG" docker compose "${COMPOSE[@]}" up -d "${APP_SERVICES[@]}"; then
   echo "!! compose up failed for tag $TAG" >&2
   if [[ -n "$PREV" ]]; then
     echo "==> rolling back to $PREV" >&2
     MORGHDARI_TAG="$PREV" docker compose "${COMPOSE[@]}" up -d "${APP_SERVICES[@]}"
+    reload_nginx
   fi
   exit 1
 fi
 
+reload_nginx   # BUG-14: re-resolve the app containers' new IPs
+
 if gate; then
-  # BUG-14: app containers were just recreated with new IPs; nginx holds a
-  # STATIC upstream (`server daphne:8000`) that the `resolver` line does NOT
-  # re-resolve, so without this reload every API/WS request 502s while the
-  # container health gate stays green. Best-effort, but reported.
-  if docker exec morghdari-nginx nginx -s reload 2>/dev/null; then
-    echo "==> nginx reloaded (fresh upstream IPs)"
-  else
-    echo "!! nginx reload failed - API/WS may 502 until a manual reload" >&2
-  fi
   echo "$TAG" > "$STATE_FILE"
   echo "==> OK: all 9 containers healthy on tag $TAG"
   exit 0
@@ -84,7 +94,7 @@ if [[ -z "$PREV" ]]; then
   exit 1
 fi
 echo "==> AUTOMATIC ROLLBACK to $PREV" >&2
-if MORGHDARI_TAG="$PREV" docker compose "${COMPOSE[@]}" up -d "${APP_SERVICES[@]}" && gate; then
+if MORGHDARI_TAG="$PREV" docker compose "${COMPOSE[@]}" up -d "${APP_SERVICES[@]}" && reload_nginx && gate; then
   echo "==> ROLLED BACK: stack healthy again on $PREV"
   exit 1   # deploy failed even though rollback succeeded — loud, always
 fi

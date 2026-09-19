@@ -125,6 +125,40 @@ def approve_gateway(slot_id: str, by_user) -> GatewaySlot:
     return slot
 
 
+def _delete_db_acl_rules(slot) -> int:
+    """Delete the gateway's DB allow-rows (postgres-authoritative brokers).
+
+    PROD-FIX 2026-09-19 (live on VPS 82.115.17.252): production EMQX
+    authorizes straight from mqtt_acl_rules (no built-in-DB chain), so
+    revoking only at the broker left an already-connected gateway publishing
+    indefinitely. Deleting the rows makes no_match=deny bite at the next
+    authz check; the authn query already rejects the new status at CONNECT.
+    Returns the deleted count.
+    """
+    from apps.mqtt_auth.models import MqttAclRule
+
+    username = slot.slot_id
+    n, _ = MqttAclRule.objects.filter(username=username).delete()
+    if n:
+        logger.info("deleted %d DB ACL rows for suspended gateway %s", n, username)
+    return n
+
+
+def _restore_db_acl_rules(slot) -> int:
+    """Regenerate the gateway's DB allow-rows (resume path). Idempotent:
+    delete-then-recreate from the canonical rule set."""
+    from apps.mqtt_auth.models import MqttAclRule
+    from apps.provisioning.api import gateway_acl_rule_items
+
+    username = slot.slot_id
+    MqttAclRule.objects.filter(username=username).delete()
+    items = gateway_acl_rule_items(str(slot.org_id), slot.farm_id, slot.slot_id)
+    MqttAclRule.objects.bulk_create(
+        [MqttAclRule(username=username, **item) for item in items]
+    )
+    return len(items)
+
+
 def reject_gateway(slot_id: str, by_user, *, reason: str | None = None) -> GatewaySlot:
     """Reject a PENDING_APPROVAL gateway: transition to REJECTED, archive the
     held telemetry to the DLQ (discarded but never silently lost) and revoke
@@ -137,6 +171,7 @@ def reject_gateway(slot_id: str, by_user, *, reason: str | None = None) -> Gatew
     from apps.telemetry.consumers import _redis, discard_pending_for_gateway
 
     revoke_gateway_acls(slot)
+    _delete_db_acl_rules(slot)
     try:
         discard_pending_for_gateway(_redis(), slot_id, reason="gateway_rejected")
     except Exception:
@@ -147,7 +182,9 @@ def reject_gateway(slot_id: str, by_user, *, reason: str | None = None) -> Gatew
 def suspend_gateway(slot_id: str, by_user, *, reason: str | None = None) -> GatewaySlot:
     """Suspend a gateway's traffic without destroying its configuration: the
     EMQX ACLs are revoked (no_match=deny applies) so nothing publishes until
-    resume re-syncs them."""
+    resume re-syncs them. On postgres-only brokers the DB allow-rows are
+    deleted instead (same deny outcome at the next authz check); the authn
+    query already rejects SUSPENDED at CONNECT."""
     slot = _transition_guarded(
         slot_id, "SUSPENDED", {"PROVISIONED"},
         by_user, reason=reason or "suspended by farm manager",
@@ -155,13 +192,15 @@ def suspend_gateway(slot_id: str, by_user, *, reason: str | None = None) -> Gate
     from apps.mqtt_auth.services import revoke_gateway_acls
 
     revoke_gateway_acls(slot)
+    _delete_db_acl_rules(slot)
     return slot
 
 
 def resume_gateway(slot_id: str, by_user) -> GatewaySlot:
     """Resume a suspended gateway back to PROVISIONED and restore its EMQX
     allow-rules; any telemetry that was held while suspended follows the
-    normal realtime/historical lanes from here on."""
+    normal realtime/historical lanes from here on. On postgres-only brokers
+    the DB allow-rows are regenerated (they were deleted at suspend)."""
     slot = _transition_guarded(
         slot_id, "PROVISIONED", {"SUSPENDED"},
         by_user, reason="farm manager resume",
@@ -169,6 +208,7 @@ def resume_gateway(slot_id: str, by_user) -> GatewaySlot:
     from apps.mqtt_auth.services import sync_gateway_acls
 
     sync_gateway_acls(slot)
+    _restore_db_acl_rules(slot)
     return slot
 
 

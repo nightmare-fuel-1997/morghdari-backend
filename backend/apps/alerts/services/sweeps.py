@@ -39,6 +39,9 @@ logger = logging.getLogger(__name__)
 DELIVERY_SINKS = {1: "push_workers", 2: "sms_engineer", 3: "manager_and_doctor"}
 
 
+from apps.tenants.context import admin_alias
+
+
 def _admin_alias() -> str:
     """BUG-9: RLS-bypassing read alias for CROSS-ORG discovery only.
 
@@ -49,10 +52,12 @@ def _admin_alias() -> str:
     alerts.services.replay._admin_alias / rebuild_state / thresholds.recache.
     Every per-alert read/write below still runs inside tenant_context on the
     default (RLS-governed) alias, so isolation is preserved.
-    """
-    from django.db import connections
 
-    return "admin" if "admin" in connections.databases else "default"
+    Thin wrapper over the shared apps.tenants.context.admin_alias (unified
+    2026-09-15; server 2026-09-19 runs the shared import directly) — kept so
+    existing tests and callers keep working.
+    """
+    return admin_alias()
 
 
 def _config_int(key: str, default: int) -> int:
@@ -104,7 +109,13 @@ def _save_alert(alert, fields: list[str]) -> None:
 
     with transaction.atomic():
         with tenant_context(str(alert.org_id)):
-            alert.save(update_fields=fields)
+            # PROD-FIX 2026-09-19 (live on VPS 82.115.17.252): an alert
+            # discovered on the admin alias carries _state.db="admin" — a bare
+            # save() would then write over the admin alias, outside the
+            # RLS-enforced default path this fix exists to preserve. Pin the
+            # write to the default alias.
+            # فارسی: نوشتن روی alias پیشفرض تا GUC و RLS معتبر بماند.
+            alert.save(update_fields=fields, using="default")
 
 
 def escalate_all(now_dt=None) -> int:
@@ -126,7 +137,7 @@ def escalate_all(now_dt=None) -> int:
     tier3_sec = max(_config_int("escalation_tier3_min", 30), 1) * 60
 
     active = (
-        AlertInstance.objects.using(_admin_alias())  # BUG-9: cross-org discovery
+        AlertInstance.objects.using(admin_alias())  # BUG-9: cross-org discovery
         .filter(resolved_at__isnull=True)
         .exclude(source="REPLAY_ANALYSIS")
         # M4-07: LOS rows have NO breach key ever — the branch below would
@@ -240,8 +251,15 @@ def los_watchdog(now_dt=None) -> int:
     # Plain cross-org reads match escalate_all's pattern; writes run inside
     # the saloon's tenant context for RLS consistency.
     by_saloon: dict = {}
-    # BUG-9: cross-org discovery on the admin alias (see _admin_alias).
-    for slot in SaloonSensorSlot.objects.using(_admin_alias()).filter(is_active=True).iterator():
+    # BUG-9 (QA 9.x, LOS family): `saloon_sensor_slots` is FORCE-RLS'd too —
+    # the context-free read returned ZERO slots, so the watchdog never fired.
+    # Discovery runs on the admin alias; writes stay tenant-scoped below.
+    # فارسی: کشفِ اسلاتهای فعال با alias ادمین.
+    for slot in (
+        SaloonSensorSlot.objects.using(admin_alias())
+        .filter(is_active=True)
+        .iterator()
+    ):
         by_saloon.setdefault(slot.saloon_id, []).append(slot)
 
     # GS-CORRELATION pre-pass (M4-10): farms already inside their paging-

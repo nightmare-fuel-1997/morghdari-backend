@@ -27,9 +27,34 @@ $PSQL -c "ALTER ROLE morghdari_exporter PASSWORD '$POSTGRES_EXPORTER_PASSWORD';"
 
 echo "== 2. grants (tables were created by migrations, after initdb)"
 $PSQL -c "GRANT USAGE ON SCHEMA public TO morghdari_app, emqx_auth, morghdari_exporter;"
-$PSQL -c "GRANT SELECT ON mqtt_device_credentials, mqtt_acl_rules, gateway_slots TO emqx_auth;"
 $PSQL -c "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO morghdari_app;"
 $PSQL -c "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO morghdari_app;"
+# BUG-25 (VPS 2026-09-16/17, live on 82.115.17.252): migrations have not run
+# on a FRESH volume yet, so the mqtt tables do not exist and an unconditional
+# grant killed the whole bootstrap (set -e). Guard each table grant with
+# to_regclass and defer what is missing to the post-migrate pass; the script
+# must exit 0 both passes.
+$PSQL <<'SQL'
+DO $$
+BEGIN
+  IF to_regclass('public.mqtt_device_credentials') IS NOT NULL THEN
+    GRANT SELECT ON mqtt_device_credentials TO emqx_auth;
+  ELSE
+    RAISE NOTICE 'deferred: mqtt_device_credentials does not exist yet (pre-migrate pass)';
+  END IF;
+  IF to_regclass('public.mqtt_acl_rules') IS NOT NULL THEN
+    GRANT SELECT ON mqtt_acl_rules TO emqx_auth;
+  ELSE
+    RAISE NOTICE 'deferred: mqtt_acl_rules does not exist yet (pre-migrate pass)';
+  END IF;
+  IF to_regclass('public.gateway_slots') IS NOT NULL THEN
+    GRANT SELECT ON gateway_slots TO emqx_auth;
+  ELSE
+    RAISE NOTICE 'deferred: gateway_slots does not exist yet (pre-migrate pass)';
+  END IF;
+END
+$$;
+SQL
 
 echo "== 3. subscriber tier credentials (shared-subscription group members)"
 # Runs as morghdari_admin: seeding PLATFORM infrastructure (org + slots)
@@ -41,7 +66,17 @@ run_seed () {  # client-id username password
     daphne python manage.py \
     seed_subscriber_credentials --client-id "$1" --username "$2" --password "$3"
 }
-run_seed subscriber-01 "$SUBSCRIBER_USERNAME" "$SUBSCRIBER_PASSWORD"
-run_seed subscriber-02 "$SUBSCRIBER_USERNAME_2" "$SUBSCRIBER_PASSWORD_2"
+# BUG-25: the seeds need migrated tables (organizations, gateway_slots, ...).
+# On a fresh pre-migrate volume they cannot run — defer them, exit 0.
+# NOTE: on the VPS (82.115.17.252) the compose override is
+# -f docker-compose.vps.yml instead of the rehearsal file above; re-run this
+# script AFTER manage.py migrate in both environments.
+SEEDS_READY=$($PSQL -tAc "SELECT to_regclass('public.gateway_slots') IS NOT NULL")
+if [ "$SEEDS_READY" = "t" ]; then
+  run_seed subscriber-01 "$SUBSCRIBER_USERNAME" "$SUBSCRIBER_PASSWORD"
+  run_seed subscriber-02 "$SUBSCRIBER_USERNAME_2" "$SUBSCRIBER_PASSWORD_2"
+else
+  echo "deferred: subscriber seeds need migrated tables — re-run prod_bootstrap.sh AFTER manage.py migrate"
+fi
 
 echo "== bootstrap complete"
