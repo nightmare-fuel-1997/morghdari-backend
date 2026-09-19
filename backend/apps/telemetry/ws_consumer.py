@@ -40,6 +40,7 @@ what makes the merge trivially testable (TUTORIAL §3.5).
 
 import logging
 import threading
+import time
 import uuid
 
 from channels.generic.websocket import JsonWebsocketConsumer
@@ -55,6 +56,12 @@ logger = logging.getLogger(__name__)
 # windows if it was offline for an era; unbounded queries behind an innocent
 # reconnect are the TUTORIAL §6 "unbounded KPI range" trap in WS form.
 GAP_FILL_MAX_ROWS = 200
+
+# BUG-8 residual (2026-09-19): minimum seconds between late group-join
+# attempts on a degraded socket. Rapid-fire inbound messages must collapse
+# into one attempt — a still-dead layer answers each attempt with a fast
+# raise (1s connect knob), but there is no reason to pay it per message.
+REJOIN_COOLDOWN_SEC = 10.0
 
 
 class SaloonTelemetryConsumer(JsonWebsocketConsumer):
@@ -112,6 +119,14 @@ class SaloonTelemetryConsumer(JsonWebsocketConsumer):
             self.close(code=4000)
             return
         self.connection_id = setup.get("connection_id") or uuid.uuid4().hex
+        # BUG-8 residual (2026-09-19): a degraded hello (redis down during
+        # setup) leaves the socket outside its saloon group — no push until
+        # the client reconnects. Remember the join outcome so the next
+        # inbound message can late-join (see _try_rejoin).
+        # فارسی: اگر اتصالِ گروه در handshake موفق نبود، اولین پیامِ ورودیِ
+        # بعدی اتصال را به گروه برمیگرداند.
+        self._group_joined = bool(setup.get("joined", False))
+        self._last_rejoin_attempt = 0.0
         self.accept()
         self.send_json({
             "type": "telemetry.hello",
@@ -145,7 +160,9 @@ class SaloonTelemetryConsumer(JsonWebsocketConsumer):
                     return
                 try:
                     self._join_once()
+                    box["joined"] = True
                 except Exception as exc:
+                    box["joined"] = False
                     logger.exception(
                         "WS group-join degraded — socket stays up without push: %s",
                         exc,
@@ -164,6 +181,10 @@ class SaloonTelemetryConsumer(JsonWebsocketConsumer):
                 box["result"] = {"decision": "accept", "connection_id": None, "thresholds": {}}
             finally:
                 box["done"] = True
+                # The join outcome lives on the box, but connect() reads the
+                # RESULT — copy it over (missing = not joined = rejoin later).
+                if "result" in box:
+                    box["result"]["joined"] = box.get("joined", False)
 
         worker = threading.Thread(target=_target, daemon=True)
         worker.start()
@@ -185,10 +206,46 @@ class SaloonTelemetryConsumer(JsonWebsocketConsumer):
     # Inbound (client → server)
     # ------------------------------------------------------------------
 
+    def _try_rejoin(self):
+        """Late group-join for a degraded socket (BUG-8 residual, 2026-09-19).
+
+        Runs on inbound traffic: by the time the client speaks, the layer may
+        be back. Joins the saloon group once and regreets with a fresh
+        threshold snapshot (best-effort — {} bands when redis still answers
+        nothing). Never raises: a still-dead layer only defers to the next
+        cooldown window, and the socket stays up either way.
+        """
+        now = time.monotonic()
+        if now - getattr(self, "_last_rejoin_attempt", 0.0) < REJOIN_COOLDOWN_SEC:
+            return
+        self._last_rejoin_attempt = now
+        try:
+            self._join_once()
+        except Exception:
+            logger.debug("WS rejoin deferred — channel layer still down")
+            return
+        self._group_joined = True
+        try:
+            thresholds = ws.ws_redis().hgetall(thresholds_hash(self.saloon_id))
+        except Exception:
+            thresholds = {}
+        try:
+            self.send_json({
+                "type": "telemetry.rejoined",
+                "saloon_id": self.saloon_id,
+                "org_id": self.org_id,
+                "thresholds": thresholds,
+            })
+        except Exception:
+            logger.exception("WS rejoined hello failed")
+
     def receive_json(self, content=None, **kwargs):
         # EVERY inbound message is a liveness proof: refresh the zombie-guard
         # TTL first, regardless of the payload's validity.
         ws.refresh_connection_ttl(self.user.pk)
+        # BUG-8 residual: a degraded socket rejoins its group on next traffic.
+        if not getattr(self, "_group_joined", True):
+            self._try_rejoin()
         content = content or {}
         if content.get("action") == "gap_fill":
             self._handle_gap_fill(content)

@@ -13,9 +13,10 @@
 | Status | Count |
 |---|---|
 | Fixed this round | 12 |
-| Open / blocked | 4 |
+| Fixed 2026-09-19 sweep | 1 |
+| Open / blocked | 0 |
 | Deferred by design | 2 |
-| Already closed (carried) | 8 |
+| Already closed (carried + 2026-09-19 review) | 11 |
 
 ## Fixed this round
 
@@ -36,12 +37,13 @@
 
 ## Open / blocked
 
-| ID | Sev | Area | Status | Reason | Workaround | Next action |
-|---|---|---|---|---|---|---|
-| BUG-12 | MED | infra | Open (env-leaning) | `docker kill morghdari-daphne` leaves the container exited with RestartCount 0 - a Docker Desktop quirk; not lastingly fixable without the Linux VPS | operator runs `docker start` manually (gap is a bounded 502/429) | re-verify on the real Linux VPS; a watchdog service was rejected (YAGNI) |
-| BUG-4 | LOW | QA harness | Open (sibling repo) | `vps_smoke.sh` calls bare `python3`, which resolves to the Windows Store stub - lives in `poultry_vps_deploy`, outside this repo | run via a `python3` shim | fix in the QA project |
-| BUG-8 residual | LOW | telemetry WS | Open | after a redis-down fail-open degrade the socket closes soon after the degraded hello (the channel layer's receive needs redis) | clients reconnect automatically | implement a rejoin-fallback task |
-| BUG-13 (batch) | LOW | telemetry drain | Partially open | the new guard wraps `_to_model_kwargs`; a metric value that overflows the DB column would still fail the whole per-org `bulk_create` batch | - | add a per-row fallback on `bulk_create` failure |
+None — BUG-8 residual (the last one) closed below on 2026-09-19.
+
+## Fixed 2026-09-19 sweep
+
+| ID | Sev | Area | Fix | Files | Verification |
+|---|---|---|---|---|---|
+| BUG-8 residual | LOW | telemetry WS | late group-join on next inbound message after a degraded hello (`telemetry.rejoined` + fresh thresholds, 10 s cooldown, never raises) + `joined` outcome plumbed through `_post_auth_setup` so healthy sockets never regreet | `backend/apps/telemetry/ws_consumer.py`, `backend/tests/test_ws_rejoin_fallback.py` | 3 new tests green + `test_m6_06_ws` (18) + failopen/hang + drain/bugfix/recon/channel-layer all green on the CI PG/Timescale stack (24 + 20 in the two runs) |
 
 ## Deferred by design
 
@@ -53,6 +55,27 @@
 ## Already closed (carried on this branch)
 
 BUG-5, BUG-7, BUG-8, BUG-16, BUG-17, BUG-19, BUG-20, BUG-22.
+
+## Closed 2026-09-19 review (no farm / no S3 needed — evidence cited, no code change)
+
+- **BUG-12 — CLOSED (drill was wrong).** Sibling `BUGS.md:112`: three controlled
+  Linux tests showed `docker kill` (user-initiated stop) suppresses the restart
+  policy on every platform, `kill -9 1` inside the container is ignored
+  (PID-namespace init), and `kill -9 <host pid>` recovers in ~4 s with API 200.
+  `DEPLOYMENT.md` A7 documents the host-PID drill. VPS-2 `FINAL_STATUS.md` adds
+  5 host-PID kill drills + 2 real reboots, all self-recovered. The Desktop-only
+  quirk needs no watchdog (YAGNI stands).
+- **BUG-4 — CLOSED (sibling repo).** Sibling `BUGS.md:14`: fixed 2026-09-15 —
+  `vps_smoke.sh:44-48` resolves the interpreter via
+  `command -v python3 || command -v python`, plus the `qa_smoke.sh` shim.
+  Nothing in this repo to change.
+- **BUG-13 (batch) — CLOSED (already implemented).** The ledger row predates the
+  2026-09-15 second-pass port: `_persist_org_batch`
+  (`backend/apps/telemetry/consumers.py:455-512`) already retries a failed
+  per-org `bulk_create` row-by-row and quarantines only the poison entries,
+  `_quarantine_repeated_failures` DLQs after the delivery threshold, and
+  `test_m3_05_drain.py::test_persistent_db_failure_quarantined_after_threshold`
+  pins the NUMERIC-overflow case (DLQ + XACK). Row retired, not re-fixed.
 
 ## Verification log (2026-09-15)
 
