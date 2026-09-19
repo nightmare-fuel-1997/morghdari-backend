@@ -211,8 +211,13 @@ services:
       MQTT_USERNAME: "${SUBSCRIBER_USERNAME}"
       MQTT_PASSWORD: "${SUBSCRIBER_PASSWORD}"
       # M7: TLS is mandatory against the prod listener (emqx.conf tcp disabled).
-      # MQTT_TLS_INSECURE=1 is STAGING-ONLY (self-signed cert, hostname "emqx"
-      # not in its SAN) — never set it on the VPS.
+      # MQTT_TLS_INSECURE=1 ACCEPTED-RISK (2026-09-19 review): subscribers dial
+      # the internal hostname "emqx", which is in no public SAN — LE issued
+      # for farmplus/mqtt.farmplus only, so full verification is impossible
+      # without a second internal listener/cert. Traffic never leaves the
+      # docker bridge (a MITM there already owns the host); encryption still
+      # defeats passive sniffing, and auth/ACLs still enforced per credential.
+      # Proper fix (internal CA or dual-listener) is a standalone task.
       MQTT_TLS: "1"
       MQTT_TLS_CA: "/app/certs/ca.crt"
       MQTT_TLS_INSECURE: "1"
@@ -259,7 +264,7 @@ services:
       MQTT_PASSWORD: "${SUBSCRIBER_PASSWORD_2}"
       MQTT_TLS: "1"
       MQTT_TLS_CA: "/app/certs/ca.crt"
-      MQTT_TLS_INSECURE: "1"     # STAGING-ONLY — see subscriber-01
+      MQTT_TLS_INSECURE: "1"     # ACCEPTED-RISK — see subscriber-01
       REDIS_URL: "redis://:${REDIS_PASSWORD}@redis:6379"
       DJANGO_SETTINGS_MODULE: "config.settings.production"   # M7-06 fix — see subscriber-01
       DATABASE_URL: "postgres://${DATABASE_USER}:${DATABASE_PASSWORD}@postgres:5432/${DATABASE_NAME}"

@@ -86,8 +86,10 @@ def _apply_tls(client) -> None:
 
     MQTT_TLS=1 enables. MQTT_TLS_CA names a CA bundle (unset = the system
     trust store — the VPS-day Let's Encrypt path). MQTT_TLS_INSECURE=1 relaxes
-    hostname verification for the SELF-SIGNED laptop rehearsal only — never
-    set it on a VPS.
+    hostname verification: accepted-risk for the INTERNAL subscriber→emqx leg
+    (2026-09-19 review — hostname "emqx" is in no public SAN; traffic never
+    leaves the docker bridge; encryption still defeats passive sniffing and
+    broker auth/ACLs still apply). External gateways verify normally.
     """
     if os.environ.get("MQTT_TLS", "").strip().lower() not in {"1", "true", "yes"}:
         return
