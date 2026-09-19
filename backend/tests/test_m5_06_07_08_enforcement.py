@@ -238,17 +238,32 @@ def test_config_requires_manager_role_and_same_org(world):
 
 
 def _capture_emqx(monkeypatch, responses=None):
-    """Replace the EMQX HTTP client with an in-process recorder."""
+    """Replace the EMQX HTTP client with an in-process recorder.
+
+    Emulates a broker WITH the built-in-DB chain behind JWT login (the
+    2026-09-19 production shape): the dashboard login is stubbed to a token
+    and the chain probe is answered present WITHOUT recording, so the
+    recorded calls stay exactly the operational ones the assertions pin.
+    Process-cached probe/token state is reset so tests never leak a verdict
+    into each other.
+    """
+    import apps.mqtt_auth.services as svc
+
     calls = []
     responses = responses or []
 
     def fake(method, path, body=None, timeout=5):
+        if method == "GET" and path == "/api/v5/authentication":
+            return 200, [{"id": svc.AUTHN_CHAIN_ID}]
         calls.append((method, path, body))
         if responses:
             return responses.pop(0)
         return 204, None
 
-    monkeypatch.setattr("apps.mqtt_auth.services._emqx_request", fake)
+    monkeypatch.setattr(svc, "_emqx_request", fake)
+    monkeypatch.setattr(svc, "_emqx_login", lambda: "test-jwt")
+    svc._builtin_chain["known"] = None
+    svc._emqx_token["value"] = None
     return calls
 
 

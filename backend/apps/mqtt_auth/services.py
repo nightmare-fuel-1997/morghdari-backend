@@ -212,9 +212,17 @@ def builtin_chain_exists() -> bool:
     skipped quietly when the chain is absent — postgres stays the single
     source of truth and enforcement moves to the DB rows (see suspend/
     reject in provisioning/services.py).
+
+    An UNREACHABLE broker (probe status 0) is never a chain verdict: it is
+    not cached, and callers keep their pre-2026-09-19 FNV-soft paths — so a
+    down dev broker still reads as failure, while an answering postgres-only
+    broker reads as skip. `api_hardware` relies on this: `reachable` stays
+    honest for the replacement ceremony's broker_synced flag.
     """
     if _builtin_chain["known"] is None:
         status, payload = _emqx_request("GET", "/api/v5/authentication")
+        if status == 0:
+            return False
         ids = set()
         if status == 200:
             chains = payload if isinstance(payload, list) else [payload]

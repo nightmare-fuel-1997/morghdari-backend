@@ -44,6 +44,7 @@ None — BUG-8 residual (the last one) closed below on 2026-09-19.
 | ID | Sev | Area | Fix | Files | Verification |
 |---|---|---|---|---|---|
 | BUG-8 residual | LOW | telemetry WS | late group-join on next inbound message after a degraded hello (`telemetry.rejoined` + fresh thresholds, 10 s cooldown, never raises) + `joined` outcome plumbed through `_post_auth_setup` so healthy sockets never regreet | `backend/apps/telemetry/ws_consumer.py`, `backend/tests/test_ws_rejoin_fallback.py` | 3 new tests green + `test_m6_06_ws` (18) + failopen/hang + drain/bugfix/recon/channel-layer all green on the CI PG/Timescale stack (24 + 20 in the two runs) |
+| EMQX JWT harness | MED | mqtt_auth tests | synced JWT-login + chain-probe broke 10 EMQX-path tests; unreachable probes are no longer cached as verdicts (soft-fail preserved, `reachable` stays honest for the ceremony) + fakes emulate login/token + present chain | `backend/apps/mqtt_auth/services.py`, `backend/tests/test_m5_06_07_08_enforcement.py`, `backend/tests/test_m5_02_03_provisioning_api.py` | full gate: **655 passed / 3 skipped @ 90.12%** + module gate GREEN + migrate-gate (reached via ritual order); image-scan env-blocked (trivy DB download EOFs on this network, twice) |
 
 ## Deferred by design
 

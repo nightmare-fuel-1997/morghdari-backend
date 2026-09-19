@@ -224,11 +224,19 @@ def test_review_approval_creates_slot_credentials_and_acl(provisioning_world, dj
     w = provisioning_world
     emqx_calls = []
 
+    import apps.mqtt_auth.services as svc
+
     def fake_emqx(method, path, body=None, timeout=5):
+        # Chain probe (2026-09-19 JWT shape): answered present, not recorded.
+        if method == "GET" and path == "/api/v5/authentication":
+            return 200, [{"id": svc.AUTHN_CHAIN_ID}]
         emqx_calls.append((method, path, body))
         return 201, None
 
-    monkeypatch.setattr("apps.mqtt_auth.services._emqx_request", fake_emqx)
+    monkeypatch.setattr(svc, "_emqx_request", fake_emqx)
+    monkeypatch.setattr(svc, "_emqx_login", lambda: "test-jwt")
+    svc._builtin_chain["known"] = None
+    svc._emqx_token["value"] = None
     reviewer = django_user_model.objects.create_user(username=f"reviewer-{role}", password="x")
     reviewer.is_platform_staff = True
     reviewer.staff_role = role
