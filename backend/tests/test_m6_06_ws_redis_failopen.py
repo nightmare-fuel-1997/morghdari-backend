@@ -15,6 +15,7 @@ from apps.telemetry.ws_consumer import SaloonTelemetryConsumer
 from tests.conftest import INTEGRATION_REDIS_URL
 from tests.test_m6_06_ws import (
     _comm,
+    _expect_deny_close,
     _make_world,
     _run,
     _spy_close,
@@ -86,11 +87,8 @@ def test_redis_down_bad_token_still_denied_4003(_ws_isolated):
             "apps.telemetry.ws.ws_redis", side_effect=ConnectionError("redis down")
         ):
             with _spy_close(codes):
-                connected, _ = await communicator.connect()
-            assert connected is True  # BUG-6: accept-then-close
-            close_msg = await communicator.receive_output()
-            assert close_msg["type"] == "websocket.close"
-            assert close_msg["code"] == 4003
+                await _expect_deny_close(communicator, 4003)
             await communicator.disconnect()
 
     _run(scenario())
+    assert codes == [4003]

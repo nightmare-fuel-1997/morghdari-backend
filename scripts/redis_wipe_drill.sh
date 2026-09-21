@@ -119,7 +119,7 @@ ELAPSED_MINS=$(( (END_EPOCH - START_EPOCH) / 60 ))
 ELAPSED_SECS=$(( END_EPOCH - START_EPOCH ))
 echo "== Phase 5. T3 drill complete — RTO observed: ${ELAPSED_MINS} min (${ELAPSED_SECS}s), plan ≤ ${RTO_TARGET_MINS} min"
 
-ROW="| $(date -u +%Y-%m-%d) | T3 Redis wipe (staging$([ "$REHEARSAL" == 1 ] && echo ' rehearsal')) — volume rm → rebuild + warmer + LOS window | PASS — ${OPEN_ALERTS_BEFORE} open alerts re-armed from ledger; threshold hashes recached; no false-LOS wave | RTO ${ELAPSED_MINS} min (plan ≤ ${RTO_TARGET_MINS}); RPO ≈ 0 (AOF/volume) | T2 PITR repeat at next schema change |"
+ROW="| $(date -u +%Y-%m-%d) | T3 Redis wipe (staging$([ "${REHEARSAL:-0}" == 1 ] && echo ' rehearsal'; true)) — volume rm → rebuild + warmer + LOS window | PASS — ${OPEN_ALERTS_BEFORE} open alerts re-armed from ledger; threshold hashes recached; no false-LOS wave | RTO ${ELAPSED_MINS} min (plan ≤ ${RTO_TARGET_MINS}); RPO ≈ 0 (AOF/volume) | T2 PITR repeat at next schema change |"
 if [[ ! -f "$DR_LOG_FILE" ]]; then
   mkdir -p "$(dirname "$DR_LOG_FILE")"
   printf '%s\n' "# v0.8 — Disaster Recovery Testing Log (DR Plan §6 mirror)" \

@@ -48,6 +48,9 @@ docker compose -f docker-compose.ci.yml -p morghdari_ci run --rm --build live-ve
 2. Run `manage.py migrate` on the new environment **before** switching
    traffic — the migrate-gate proved it is forward-safe, idempotent, and
    (informationally) reversible per app.
+   On a FRESH volume this migrate must run with the ADMIN DSN after
+   `scripts/prod_bootstrap.sh` created the roles - see "Migrate on a fresh
+   volume (BUG-1)" below; the app role has no CREATE on schema public (PG15+).
 3. Roll workers (Daphne/ASGI behind nginx) instance by instance; health check
    between instances (image HEALTHCHECK probes `/api/v1/health/`: DB + Redis).
 4. Restart the MQTT subscriber; watch it reconnect (2 s retry loop, FNV-soft).
@@ -124,3 +127,31 @@ DATABASE_URL=postgres://<admin>:<pw>@<host>:5432/<db> \
 
 The CI migrate-gate uses admin-equivalent credentials, so it does NOT catch
 this - use the admin URL for first-time migration.
+
+---
+
+## 7. VPS-day daphne kill drill (BUG-12, RESOLVED 2026-09-16 on 185.8.175.150)
+
+**Resolved on the VPS, and the drill itself was wrong.** Three controlled tests
+on Ubuntu 24.04 / Docker 29.7.2:
+
+| test | result |
+| --- | --- |
+| `docker kill morghdari-daphne` | container stays `exited`, RestartCount 0 — **by design**: a user-initiated stop suppresses the restart policy on every platform, so this drill can never pass |
+| `docker exec -u root morghdari-daphne sh -c 'kill -9 1'` | no effect, `kill` exits 0 — a PID-namespace init ignores signals sent from inside its own namespace |
+| `kill -9 $(docker inspect -f '{{.State.Pid}}' morghdari-daphne)` | `die` -> `start` in **4 s**, RestartCount 1, health healthy, API 200 |
+
+So `restart: always` works; the desktop observation was the drill, not the
+engine. Use the host-PID form:
+
+```bash
+kill -9 $(docker inspect -f '{{.State.Pid}}' morghdari-daphne)
+# expect: status=restarting -> running within seconds, RestartCount +1
+# gap traffic: 502/429 bounded, never an infinite timeout (nginx still answers)
+```
+
+- Verdict: closed as a drill-methodology issue (4 s auto-restart measured). No
+  watchdog was added - the engine already does the job.
+- Still worth fixing in the *application*: a container that is killed and comes
+  back has an empty in-memory state, and nginx keeps proxying to the old IP
+  until a reload (see BUG-14 in scripts/deploy.sh).

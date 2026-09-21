@@ -17,7 +17,14 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source .env
 
-COMPOSE="docker compose -p morghdari -f docker-compose.prod.yml -f docker-compose.rehearsal.yml"
+# Which compose override to layer on prod.yml -- environment-specific, so it is
+# selected here instead of hardcoded to one host:
+#   VPS / server        : COMPOSE_OVERRIDE="-f docker-compose.vps.yml"       (default)
+#   laptop rehearsal    : COMPOSE_OVERRIDE="-f docker-compose.rehearsal.yml"
+# docker-compose.rehearsal.yml publishes loopback ports and adds MinIO; it must
+# NEVER be used on the VPS.
+COMPOSE_OVERRIDE="${COMPOSE_OVERRIDE:--f docker-compose.vps.yml}"
+COMPOSE="docker compose -p morghdari -f docker-compose.prod.yml $COMPOSE_OVERRIDE"
 PSQL="$COMPOSE exec -T postgres psql -U $POSTGRES_ADMIN_USER -d $DATABASE_NAME -v ON_ERROR_STOP=1"
 
 echo "== 1. role passwords (from .env, never hardcoded)"

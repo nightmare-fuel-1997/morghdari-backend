@@ -443,38 +443,41 @@ def test_c16_shim_close_codes_4003_and_4000(_compat_stack):
     no_token.scope["url_route"] = {"kwargs": {"farm_slug": world["slugs"]["farm"]}}
 
     async def scenario():
+        # BUG-6: deny/cap paths accept, then close with the verdict code.
+        # ponytail: inlined rather than importing _expect_deny_close (one call
+        # site here); import it if a third shim test appears.
         with mock.patch.object(FarmTelemetryConsumer, "close", spy):
             connected, _ = await foreign.connect()
-        assert connected is True  # BUG-6: accept-then-close
-        close_msg = await foreign.receive_output()
-        assert close_msg["type"] == "websocket.close"
-        assert close_msg["code"] == 4003
+            assert connected is True
+            message = await foreign.receive_output()
+            assert message["type"] == "websocket.close" and message.get("code") == 4003
+            assert codes == [4003]  # another org's farm slug
         await foreign.disconnect()
 
         with mock.patch.object(FarmTelemetryConsumer, "close", spy):
             connected, _ = await unknown.connect()
-        assert connected is True  # BUG-6: accept-then-close
-        close_msg = await unknown.receive_output()
-        assert close_msg["type"] == "websocket.close"
-        assert close_msg["code"] == 4003
+            assert connected is True
+            message = await unknown.receive_output()
+            assert message["type"] == "websocket.close" and message.get("code") == 4003
+            assert codes == [4003, 4003]
         await unknown.disconnect()
 
         for index in range(cap):
             client.sadd(ws.active_set_key(user.pk), f"ghost-{index}")
         with mock.patch.object(FarmTelemetryConsumer, "close", spy):
             connected, _ = await full.connect()
-        assert connected is True  # BUG-6: accept-then-close
-        close_msg = await full.receive_output()
-        assert close_msg["type"] == "websocket.close"
-        assert close_msg["code"] == 4000
+            assert connected is True
+            message = await full.receive_output()
+            assert message["type"] == "websocket.close" and message.get("code") == 4000
+            assert codes == [4003, 4003, 4000]  # cap full
         await full.disconnect()
 
         with mock.patch.object(FarmTelemetryConsumer, "close", spy):
             connected, _ = await no_token.connect()
-        assert connected is True  # BUG-6: accept-then-close
-        close_msg = await no_token.receive_output()
-        assert close_msg["type"] == "websocket.close"
-        assert close_msg["code"] == 4003
+            assert connected is True
+            message = await no_token.receive_output()
+            assert message["type"] == "websocket.close" and message.get("code") == 4003
+            assert codes == [4003, 4003, 4000, 4003]
         await no_token.disconnect()
 
     _run(scenario())

@@ -86,7 +86,12 @@ sleep 2
 # postgres starts only once, already in recovery.
 echo "== 6. wiping PGDATA and restoring the wal-g base backup"
 $COMPOSE_BASE "${COMPOSE_FILE_ARGS[@]}" stop postgres
-docker volume rm morghdari_postgres_data >/dev/null 2>&1 || true
+# A stopped container still HOLDS its volumes: `docker volume rm` then fails
+# ("in use") and the fetch lands in a non-empty PGDATA ("for delta base must
+# be empty"). Remove the container first (same lesson as the T3 drill's
+# `rm -f redis`, 2026-09-12) — and fail LOUD if the volume survives.
+$COMPOSE_BASE "${COMPOSE_FILE_ARGS[@]}" rm -f postgres
+docker volume rm morghdari_postgres_data >/dev/null || { echo "FATAL: postgres volume still attached — refusing a fake wipe" >&2; exit 1; }
 docker volume create morghdari_postgres_data >/dev/null
 # wal-g v3 REQUIRES a backup name (v2 defaulted to latest) — LATEST is the
 # wal-g spelling for "newest". Bare backup-fetch dies "insufficient
@@ -149,7 +154,7 @@ ELAPSED_MINS=$(( (END_EPOCH - START_EPOCH) / 60 ))
 ELAPSED_SECS=$(( END_EPOCH - START_EPOCH ))
 echo "== 10. T2 drill complete — RTO observed: ${ELAPSED_MINS} min (${ELAPSED_SECS}s), plan ≤ ${RTO_TARGET_MINS} min"
 
-ROW="| $(date -u +%Y-%m-%d) | T2 PITR (staging$([ "$REHEARSAL" == 1 ] && echo ' rehearsal')), target $TARGET_TS | PASS — marker absent; parity ok; hypertables present | RTO ${ELAPSED_MINS} min (plan ≤ ${RTO_TARGET_MINS}); RPO plan ≤ 1 h (archive_timeout 300s) | T3 Redis wipe |"
+ROW="| $(date -u +%Y-%m-%d) | T2 PITR (staging$([ "${REHEARSAL:-0}" == 1 ] && echo ' rehearsal'; true)), target $TARGET_TS | PASS — marker absent; parity ok; hypertables present | RTO ${ELAPSED_MINS} min (plan ≤ ${RTO_TARGET_MINS}); RPO plan ≤ 1 h (archive_timeout 300s) | T3 Redis wipe |"
 if [[ ! -f "$DR_LOG_FILE" ]]; then
   mkdir -p "$(dirname "$DR_LOG_FILE")"
   printf '%s\n' "# v0.8 — Disaster Recovery Testing Log (DR Plan §6 mirror)" \

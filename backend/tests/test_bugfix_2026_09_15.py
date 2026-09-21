@@ -61,8 +61,15 @@ def test_bug02_reconciliation_default_day_is_yesterday():
 
 
 def test_bug09b_clear_active_pointer_deletes_blob():
-    """BUG-9b: clearing the coalesce blob deletes the exact alert:active key."""
-    from apps.alerts.services import sweeps
+    """BUG-9b: clearing the coalesce blob deletes the exact alert:active key.
+
+    Merged 2026-09-21: the two branches named this helper differently
+    (sweeps.clear_active_pointer here, firing.clear_active_blob on the server)
+    over byte-identical logic, so this test now asserts the BEHAVIOUR - the
+    exact key is deleted - through both entry points, and no longer depends on
+    which wrapper happens to exist.
+    """
+    from apps.alerts.services import firing, sweeps
     from apps.alerts.services.redis_keys import active_alert_key
 
     deleted = []
@@ -71,7 +78,13 @@ def test_bug09b_clear_active_pointer_deletes_blob():
         def delete(self, *keys):
             deleted.extend(keys)
 
+    # entry point 1: the wrapper escalate_all() calls on this branch
     sweeps.clear_active_pointer(saloon_id=7, metric="temp", client=FakeClient())
+    assert deleted == [active_alert_key(7, "temp")]
+
+    # entry point 2: the shared firing helper (identical on both branches)
+    deleted.clear()
+    firing.clear_active_blob(FakeClient(), saloon_id=7, metric="temp")
     assert deleted == [active_alert_key(7, "temp")]
 
 
@@ -82,6 +95,9 @@ def test_bug09_cross_org_reads_use_admin_alias():
 
     assert callable(sweeps._admin_alias)
     assert sweeps._admin_alias.__doc__
+    # reconciled 2026-09-21: the server runs the shared import directly, so assert
+    # that name too - the test must not depend on which wrapper exists.
+    assert callable(sweeps.admin_alias)
 
 
 def test_bug10_18_audit_fk_is_set_null():

@@ -25,6 +25,7 @@ backend/media/  # dev-server upload root (O6 photos; tests use a tempdir)
 .env
 .env.*
 !.env.example
+!.env.vps.example
 
 # --- Node (the repo ships no Node app; kept for stray local tooling) ---
 node_modules/
@@ -83,3 +84,6 @@ htmlcov/
 /task_plan.md
 /HANDOFF.md
 *.patch
+
+# --- QA scratch (server-side harness, never committed) ---
+.tmp-qa/

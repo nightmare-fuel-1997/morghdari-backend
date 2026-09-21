@@ -85,11 +85,18 @@ def _apply_tls(client) -> None:
     subscriber MUST speak TLS or the broker drops every handshake.
 
     MQTT_TLS=1 enables. MQTT_TLS_CA names a CA bundle (unset = the system
-    trust store — the VPS-day Let's Encrypt path). MQTT_TLS_INSECURE=1 relaxes
-    hostname verification: accepted-risk for the INTERNAL subscriber→emqx leg
-    (2026-09-19 review — hostname "emqx" is in no public SAN; traffic never
-    leaves the docker bridge; encryption still defeats passive sniffing and
-    broker auth/ACLs still apply). External gateways verify normally.
+    trust store - the VPS-day Let's Encrypt path).
+
+    MQTT_TLS_INSECURE=1 relaxes hostname verification. Scope, reconciled
+    2026-09-21 (the two branches described this setting in opposite terms):
+    it is an ACCEPTED RISK for the INTERNAL subscriber->emqx leg ONLY -
+    hostname "emqx" is in no public SAN and Let's Encrypt issued for
+    farmplus/mqtt.farmplus only, so full verification is impossible without a
+    second internal listener or an internal CA. On that leg traffic never
+    leaves the docker bridge, encryption still defeats passive sniffing, and
+    broker auth/ACLs still apply per credential. It must NEVER be set for the
+    external gateway leg, where certificates verify normally. The proper fix
+    (internal CA or dual listener) remains a standalone task.
     """
     if os.environ.get("MQTT_TLS", "").strip().lower() not in {"1", "true", "yes"}:
         return

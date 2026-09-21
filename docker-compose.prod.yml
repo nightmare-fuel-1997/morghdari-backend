@@ -218,6 +218,8 @@ services:
       # docker bridge (a MITM there already owns the host); encryption still
       # defeats passive sniffing, and auth/ACLs still enforced per credential.
       # Proper fix (internal CA or dual-listener) is a standalone task.
+      # SCOPE (reconciled 2026-09-21): internal subscriber->emqx leg ONLY.
+      # Never set this for the external gateway leg - those certificates verify.
       MQTT_TLS: "1"
       MQTT_TLS_CA: "/app/certs/ca.crt"
       MQTT_TLS_INSECURE: "1"

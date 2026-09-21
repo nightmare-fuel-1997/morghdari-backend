@@ -400,6 +400,10 @@ def recon_day_report(day, org_id=None, redis_client=None) -> dict:
     from apps.alerts.models import AlertInstance
     from apps.telemetry.models import SaloonTelemetry
 
+    if day is None:
+        # BUG-2: defensive default - this service must never hand None to
+        # _tehran_day_bounds (TypeError -> 500) for any caller.
+        day = tehran_yesterday()
     if isinstance(day, str):
         day = dt.date.fromisoformat(day)
     start, end = _tehran_day_bounds(day)
