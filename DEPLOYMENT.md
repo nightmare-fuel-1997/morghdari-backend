@@ -155,3 +155,84 @@ kill -9 $(docker inspect -f '{{.State.Pid}}' morghdari-daphne)
 - Still worth fixing in the *application*: a container that is killed and comes
   back has an empty in-memory state, and nginx keeps proxying to the old IP
   until a reload (see BUG-14 in scripts/deploy.sh).
+
+---
+
+## 8. The repository and the two checkouts (sync procedure)
+
+Until 2026-10-14 the local dev tree and the VPS tree were two unconnected copies,
+which is why every change had to be hand-reconciled. Both are now checkouts of a
+single repository.
+
+| | Path | Branch |
+| --- | --- | --- |
+| Local dev | `M:\projects\poultry_the_main_by_ai` | `main` |
+| VPS | `/opt/morghdari` | `main` |
+
+Remote: `git@github.com:nightmare-fuel-1997/morghdari-backend.git` (private).
+
+**Server authentication.** A read-write *deploy key* lives at
+`/root/.ssh/morghdari_deploy`, selected by `/root/.ssh/config`. It is scoped to
+this one repository. Revoke it from repo Settings → Deploy keys.
+
+**`core.fileMode = false` on the VPS.** The repository was authored on Windows,
+where the executable bit is not recorded. Without this setting three scripts
+(`backend/run_full.bat`, `scripts/fresh_vps_bringup.sh`,
+`scripts/resilience_bundle.sh`) show as permanently modified because the VPS has
+them `chmod +x` and the repo has them `100644`.
+
+### Deliberately NOT in the repository
+
+These exist only on the VPS and are matched by `.gitignore`:
+
+```
+.env   .env.bak-*   .sim.env
+certs/          (incl. privkey.pem, server.key — TLS private keys)
+certbot-www/    *.log    *.bak-*    /backups/
+```
+
+> **Never run `git add -A` on the VPS without checking `.gitignore` first.** The
+> rules in place before 2026-10-14 did not cover `.env`, `.sim.env` or `certs/`,
+> so that command would have committed the TLS private keys and the database
+> password. The current file covers all of them; verify with
+> `git check-ignore -v .env certs/privkey.pem .sim.env`.
+
+### Syncing
+
+Local → VPS:
+
+```bash
+git push origin main
+ssh root@82.115.17.252 'cd /opt/morghdari && git pull --ff-only && git status --short'
+```
+
+VPS → local:
+
+```bash
+ssh root@82.115.17.252 'cd /opt/morghdari && git add -A && git commit -m "<what changed>" && git push origin main'
+git pull --ff-only
+```
+
+`git status --short` must come back empty on both sides. If it does not, the two
+trees have drifted again — stop and reconcile before deploying.
+
+### Two kinds of change, and they deploy differently
+
+1. **Deploy layer** — compose files, `nginx/`, `emqx/`, `redis/`, `monitoring/`,
+   `scripts/`. A `git pull` puts the files in place; `scripts/deploy.sh <tag>` or
+   a compose `up -d` then applies them.
+2. **Application code** — `backend/`. This does **not** run from the tree. Every
+   backend service uses a pre-built image,
+   `ghcr.io/morghdari/backend:${MORGHDARI_TAG}`. A source change needs a new image
+   built and pushed, then deployed by tag. Editing `backend/` on the VPS and
+   restarting containers changes nothing.
+
+### Known live issue at the time of writing (2026-10-14)
+
+The `vps-02` tag was moved to a new build on 2026-10-14, and `daphne` plus
+`simulator` were recreated onto it — but `celery-worker`, `celery-beat`,
+`subscriber-01` and `subscriber-02` were left on the previous image
+(`668229220018`, built 2026-09-21), which no longer exists in the image store.
+The web tier is therefore running newer code than the async and MQTT tiers.
+Recreating those four containers settles it.
+

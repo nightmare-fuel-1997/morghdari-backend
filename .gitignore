@@ -48,6 +48,11 @@ Thumbs.db
 *.orig
 *.rej
 
+# --- Timestamped backups of config files (local artifacts, not source) ---
+# e.g. nginx/nginx.conf.bak-20260917-203605 left on the VPS
+*.bak
+*.bak-*
+
 # NOTE: backend/openapi.generated.yaml is INTENTIONALLY tracked - it is the
 # documented generated mirror, enforced by tests/test_openapi_schema.py.
 # Do NOT add it (or *.generated.yaml) to this file.
