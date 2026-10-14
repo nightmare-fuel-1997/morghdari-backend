@@ -1,0 +1,747 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>برنامه‌ی کنترل کیفیت دستی؛ سامانه مرغداری Morghdari</title>
+<style>
+:root{
+  --bg:#0d1117; --surface:#161b22; --surface2:#1c2330;
+  --border:#2a313c; --border2:#3a4350;
+  --text:#e6edf3; --muted:#9aa7b4;
+  --pass:#3fb950; --fail:#f85149; --warn:#d29922; --info:#58a6ff; --accent:#2dd4bf;
+  --pass-bg:rgba(63,185,80,.10); --fail-bg:rgba(248,81,73,.10); --na-bg:rgba(154,167,180,.08);
+  --mono:ui-monospace,"Cascadia Code",Consolas,"Courier New",monospace;
+  --radius:10px;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:160px}
+body{margin:0;background:var(--bg);color:var(--text);
+  font-family:"Vazirmatn","Segoe UI",Tahoma,sans-serif;font-size:17px;line-height:1.85}
+code{direction:ltr;unicode-bidi:isolate;font-family:var(--mono);font-size:.82em;
+  background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:.05em .4em;
+  white-space:normal;overflow-wrap:anywhere}
+a{color:var(--info);text-decoration:none}
+::selection{background:rgba(45,212,191,.3)}
+
+#toolbar{position:sticky;top:0;z-index:60;background:rgba(13,17,23,.96);
+  backdrop-filter:blur(6px);border-block-end:1px solid var(--border);padding-block:10px}
+#toolbar .wrap{max-width:1500px;margin-inline:auto;padding-inline:16px;display:flex;flex-wrap:wrap;
+  gap:8px 14px;align-items:center}
+#title1{font-size:15px;font-weight:800}
+.pbar{flex:1 1 200px;height:10px;border-radius:6px;background:var(--surface2);display:flex;overflow:hidden;min-width:160px}
+.pbar i{display:block;height:100%}
+.pbar .p{background:var(--pass)}.pbar .f{background:var(--fail)}.pbar .n{background:var(--muted)}
+#counts{font-size:13px;color:var(--muted);white-space:nowrap}
+#counts b{font-weight:700}
+#counts .c-p{color:var(--pass)}#counts .c-f{color:var(--fail)}#counts .c-n{color:var(--muted)}#counts .c-r{color:var(--warn)}
+#toolbar input[type=search]{background:var(--surface);border:1px solid var(--border);border-radius:8px;
+  color:var(--text);padding:6px 12px;font:inherit;font-size:14px;min-width:180px;flex:1 1 200px}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{background:var(--surface);border:1px solid var(--border);color:var(--muted);border-radius:999px;
+  padding:3px 13px;font:inherit;font-size:13px;cursor:pointer}
+.chip[aria-pressed=true]{border-color:var(--accent);color:var(--text)}
+button.ghost{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:8px;
+  padding:4px 12px;font:inherit;font-size:13px;cursor:pointer}
+button.ghost:hover{color:var(--text);border-color:var(--border2)}
+button.danger{border-color:rgba(248,81,73,.5);color:var(--fail)}
+button.danger:hover{background:var(--fail-bg)}
+
+#layout{max-width:1500px;margin-inline:auto;display:grid;grid-template-columns:280px minmax(0,1fr);
+  gap:28px;padding-inline:16px}
+#toc{position:sticky;top:160px;align-self:start;max-height:calc(100vh - 180px);overflow:auto;
+  border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);padding:14px;font-size:13.5px}
+#toc .tocttl{font-weight:800;font-size:12px;color:var(--muted);margin-bottom:8px}
+#toc a{display:block;padding-block:4px;color:var(--muted);border-inline-start:2px solid transparent;padding-inline-start:10px}
+#toc a:hover{color:var(--text)}
+#toc a.active{color:var(--accent);border-inline-start-color:var(--accent)}
+#main{min-width:0}
+
+header.doc{margin-block:26px 8px;border:1px solid var(--border);border-radius:var(--radius);
+  background:linear-gradient(180deg,var(--surface),var(--bg));padding:22px 26px}
+header.doc h1{margin:0 0 6px;font-size:25px;line-height:1.5}
+header.doc p{margin:4px 0;color:var(--muted);font-size:14.5px}
+
+section.mod{margin-block:34px}
+.modhead{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px}
+.modhead .row1{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.modhead h2{margin:0;font-size:19px;line-height:1.5;flex:1 1 auto}
+.modnum{color:var(--accent);font-family:var(--mono);font-size:15px}
+.miniprog{min-width:110px;max-width:220px;flex:0 1 180px;height:8px;border-radius:5px;background:var(--surface2);display:flex;overflow:hidden}
+.miniprog i{display:block;height:100%}
+.miniprog .p{background:var(--pass)}.miniprog .f{background:var(--fail)}.miniprog .n{background:var(--muted)}
+.minicount{font-family:var(--mono);font-size:12.5px;color:var(--muted);direction:ltr;unicode-bidi:isolate}
+.caretbtn{background:transparent;border:1px solid var(--border);border-radius:8px;color:var(--muted);
+  width:30px;height:30px;cursor:pointer;font-size:12px;flex:0 0 auto}
+.caretbtn::before{content:"▾"}
+section.mod[data-open=false] .caretbtn::before{content:"◂"}
+section.mod[data-open=false] .modbody{display:none}
+.modintro{margin-block:12px 2px;color:var(--muted);font-size:14.5px}
+.tablewrap{border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-block:12px}
+table.setup{width:100%;border-collapse:collapse;font-size:14.5px;background:var(--surface)}
+table.setup th{background:var(--surface2);color:var(--muted);font-size:13px;text-align:start;padding:8px 14px;border-block-end:1px solid var(--border)}
+table.setup td{padding:8px 14px;border-block-end:1px solid var(--border);vertical-align:top}
+table.setup tr:last-child td{border-block-end:0}
+
+.trow{background:var(--surface);border:1px solid var(--border);border-inline-start:4px solid var(--border2);
+  border-radius:var(--radius);margin-block:10px;padding:12px 16px;
+  display:grid;grid-template-columns:150px minmax(0,1fr) minmax(0,1.35fr) auto;gap:6px 16px;align-items:start}
+.trow[data-state=pass]{border-inline-start-color:var(--pass);background:var(--pass-bg)}
+.trow[data-state=fail]{border-inline-start-color:var(--fail);background:var(--fail-bg)}
+.trow[data-state=na]{border-inline-start-color:var(--muted);background:var(--na-bg);opacity:.75}
+.tid{font-family:var(--mono);font-size:13.5px;color:var(--muted);padding-block:2px;direction:ltr;unicode-bidi:isolate;text-align:start}
+.trow[data-state=pass] .tid{color:var(--pass)}
+.trow[data-state=fail] .tid{color:var(--fail)}
+.tcell b.lbl{display:block;font-size:11.5px;color:var(--muted);font-weight:600;margin-block-end:2px}
+.note{margin-block:4px 0;font-size:13.5px;border-radius:8px;padding:6px 12px;line-height:1.7}
+.note b{font-weight:800}
+.n-info{background:rgba(88,166,255,.09);border:1px solid rgba(88,166,255,.35);color:#bcd8ff}
+.n-warn{background:rgba(210,153,34,.10);border:1px solid rgba(210,153,34,.45);color:#f0d58c}
+.n-danger{background:rgba(248,81,73,.10);border:1px solid rgba(248,81,73,.5);color:#ffb3ad}
+.n-decision{background:rgba(210,153,34,.14);border:1px dashed rgba(210,153,34,.6);color:#f0d58c}
+.n-decision b{color:var(--warn)}
+.tbtns{display:flex;gap:6px;align-items:center;grid-row:1;grid-column-start:4}
+.stbtn{width:32px;height:32px;border-radius:9px;border:1px solid var(--border);background:var(--surface2);
+  color:var(--muted);cursor:pointer;font-size:15px;line-height:1;padding:0;font-family:var(--mono)}
+.stbtn:hover{border-color:var(--border2);color:var(--text)}
+.trow[data-state=pass] .sb-pass,.trow[data-state=fail] .sb-fail,.trow[data-state=na] .sb-na{color:#0d1117;font-weight:900}
+.trow[data-state=pass] .sb-pass{background:var(--pass);border-color:var(--pass)}
+.trow[data-state=fail] .sb-fail{background:var(--fail);border-color:var(--fail)}
+.trow[data-state=na] .sb-na{background:var(--muted);border-color:var(--muted)}
+.tnote{grid-column:2 / -1}
+.trow.hidden,.mod.hidden{display:none}
+.nomatch{color:var(--muted);font-size:14px;padding:14px 18px;border:1px dashed var(--border);border-radius:var(--radius);display:none}
+.mod.searching .nomatch{display:block}
+
+#backtop{position:fixed;inset-block-end:22px;inset-inline-start:22px;z-index:70;width:44px;height:44px;
+  border-radius:12px;border:1px solid var(--border);background:var(--surface);color:var(--accent);
+  font-size:19px;cursor:pointer;opacity:0;pointer-events:none;transition:opacity .2s}
+#backtop.show{opacity:.92;pointer-events:auto}
+footer{margin-block:44px;color:var(--muted);font-size:13px;border-block-start:1px solid var(--border);padding-block:16px}
+
+@media (max-width:900px){
+  #layout{grid-template-columns:minmax(0,1fr)}
+  #toc{display:none}
+  #toolbar{position:static}
+  html{scroll-behavior:auto}
+}
+@media (max-width:640px){
+  .trow{grid-template-columns:minmax(0,1fr)}
+  .tbtns{grid-column:1;grid-row:auto}
+  body{font-size:16px}
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *{transition:none!important;animation:none!important}
+}
+@media print{
+  body{background:#fff;color:#000;font-size:12px}
+  #toolbar,#toc,#backtop,.tbtns,.caretbtn,.meta{display:none!important}
+  #layout{display:block;padding:0}
+  section.mod[data-open=false] .modbody{display:block!important}
+  .modhead,.trow,header.doc,table.setup,.tablewrap{border-color:#999;background:#fff}
+  .trow[data-state=fail]{border-inline-start-color:#b00}
+  .trow[data-state=pass]{border-inline-start-color:#070}
+  .trow[data-state=na]{opacity:1}
+  code{background:#eee;border-color:#bbb;color:#000}
+  .note{color:#000;background:#fff}
+  .n-danger{border:2px solid #b00}
+  .n-warn,.n-decision{border:1.5px dashed #a60}
+  .trow{break-inside:avoid}
+}
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <div class="wrap">
+    <span id="title1">کنترل کیفیت Morghdari</span>
+    <div class="pbar" role="progressbar" aria-label="پیشرفت کلی"><i class="p"></i><i class="f"></i><i class="n"></i></div>
+    <span id="counts"></span>
+    <input type="search" id="q" placeholder="جست‌وجو در تست‌ها…" aria-label="جست‌وجوی تست‌ها">
+    <div class="chips" role="group" aria-label="فیلتر وضعیت">
+      <button class="chip" data-f="all" aria-pressed="true">همه</button>
+      <button class="chip" data-f="todo" aria-pressed="false">انجام‌نشده</button>
+      <button class="chip" data-f="pass" aria-pressed="false">موفق</button>
+      <button class="chip" data-f="fail" aria-pressed="false">ناموفق</button>
+    </div>
+    <div class="chips">
+      <button class="ghost" id="expandall">باز/بستن همه</button>
+      <button class="ghost danger" id="resetall">پاک‌کردن نتایج</button>
+    </div>
+  </div>
+</div>
+
+<div id="layout">
+  <aside id="toc" aria-label="فهرست مطالب"><div class="tocttl">فهرست بخش‌ها</div></aside>
+  <main id="main">
+    <header class="doc">
+      <h1>برنامه‌ی آزمون دستی و کنترل کیفیت؛ بک‌اند پایش مرغداری</h1>
+      <p>مخاطب: tester دستی یا نیمه‌خودکار روی استک rehearsal/VPS. همه‌ی انتظارها از کد استخراج شده‌اند؛ مسیرها، پیام‌های خطا و ثابت‌های عددی عیناً از منبع‌اند.</p>
+      <p class="meta">قرارداد API نسخه‌ی <code>1.7.8</code> · Daphne (ASGI) · Postgres با RLS اجباری · Redis 7 · EMQX 5.5.1 · Nginx (فقط TLSv1.3) · Celery 5.4 + beat</p>
+      <p class="meta">نتایج در <code>localStorage</code> زیر کلید <code>morghdari_qa_v1</code> می‌مانند. ارقام غربی. هنگام چاپ، همه‌ی بخش‌ها خودکار باز و ابزارها پنهان می‌شوند.</p>
+    </header>
+    <div id="sections"></div>
+    <footer>این سند از یک مدل داده‌ی تک‌فایلی (آرایه‌ی SECTIONS در انتهای همین فایل) ساخته می‌شود. افزودن تست = افزودن یک عضو آرایه. هیچ پیام یا مسیری اختراع نشده؛ موارد مبهم با برچسب «نیازمند تصمیم» علامت خورده‌اند.</footer>
+  </main>
+</div>
+
+<button id="backtop" aria-label="بازگشت به بالا">▲</button>
+
+<script>
+"use strict";
+var STORAGE_KEY = "morghdari_qa_v1";
+
+/* ---------- بخش 0: آماده‌سازی محیط (جدول، بدون شناسه تست) ---------- */
+var SETUP = [
+["محیط هدف","استک rehearsal/VPS با `docker compose -p morghdari -f docker-compose.prod.yml up -d` (هرگز بدون پوشه‌ی `./certs` اجرا نکنید).","مقدار عادی = پروداکشن. تست روی rehearsal با TLS self-signed (`scripts/tls_stage_rehearsal.sh`). چرا: RLS فقط روی Postgres واقعی اجباری است؛ روی sqlite تست معنا ندارد."],
+["ترمینال HTTP","`curl -sk` + `python -m json.tool` یا `httpie`.","کد وضعیت را با `-w \"%{http_code}\\n\" -o /dev/null` هم بخوانید. کوئری‌استرینگ WS عمداً در لاگ nginx ثبت نمی‌شود (فقط `$request_method $uri`)."],
+["خواندن JWT","`python -c \"import base64,json,sys;print(json.loads(base64.urlsafe_b64decode(sys.argv[1]+'==')))\" <JWT>`","برای ادعاهای `roles`، `org_id`، `sid`، `is_platform_staff`، `support_session`."],
+["Redis","`docker exec -it morghdari-redis redis-cli -a \"$REDIS_PASSWORD\"`","بازرس کلید/TTL/استریم. توجه: `FLUSHALL`، `FLUSHDB` و `CONFIG` در redis.conf با rename-command حذف شده‌اند؛ پاک‌سازی کامل فقط با حذف volume."],
+["Postgres","`docker exec -it morghdari-postgres psql -U morghdari_admin -d morghdari`","نقش اپ `morghdari_app`، نقش admin با `BYPASSRLS`، نقش `emqx_auth` فقط SELECT روی سه جدول."],
+["عمر توکن","`ACCESS_TOKEN_LIFETIME = 900s` و `REFRESH = 7 روز`، rotation خاموش؛ سخت‌کد در `base.py`، بدون هیچ اهرم env.","برای تست انقضا (تست‌های 1.18 و 4.17): یا 15 دقیقه صبر، یا monkeypatch به `timedelta(seconds=30)` داخل کانتینر daphne و ری‌استارت سرویس."],
+["TOTP بستر","6 رقم / گام 30 ثانیه / `WINDOW = 1` (میان‌گام ±30 ثانیه)، issuer = `Morghdari`.","راز در جدول `platform_staff_mfa`. برای کد زنده از اپ TOTP یا از shell کانتینر استفاده کنید."],
+["اکانت‌ها","دمو: `demo-owner` / رمز `owner` / سازمان Demo Farm. سایر نقش‌ها با دعوت ساخته می‌شوند (تست 3.1).","نقش‌های سازمان: `owner, manager, engineer, doctor, worker, installer, reviewer`. بستر (platform staff): `is_platform_staff=True` + `staff_role in {admin, support}`."],
+["شبیه‌سازها","`scripts/simulate_farm.py --manifest … --scenario demo` · `scripts/simulate_gateway.py --replay-hours 1` · `scripts/live_verify_emqx.py`","پنجره‌های زمانی simulate_farm: NH3 breach، velocity (max_ts=59)، LOS در 160-172، THI 170-185، GS-CORRELATION 220-226، replay 240-250. پایه‌ی بخش‌های 5، 8، 9 و 20."],
+["دودِ سلامت","`bash scripts/vps_smoke.sh`؛ 7 بررسی: compose ps · `httpz` · سوکت health دیفنه · `pg_isready` · redis ping · `check_hil_readiness --skip-live` · لاگین SMOKE.","قبل از هر جلسه اجرا کنید؛ هر FAIL یعنی محیط خراب است."],
+["ریست کامل","`down` → `docker volume rm morghdari_postgres_data morghdari_redis_data morghdari_emqx_data` → `up -d` → migrate + `scripts/prod_bootstrap.sh`.","تنها راه واقعی پاک‌سازی Redis به دلیل rename-command. نقطه شروع تمیز بخش‌های 12، 15، 17 و 19."],
+["پیشوند مسیرها","همه مسیرهای این سند نسبی‌اند به `/api/v1` (بر اساس `servers` در `openapi.yaml`: `https://api.morghdari.com/api/v1` یا `http://localhost:8000/api/v1`).","اسناد زنده: `/api/docs/` · `/api/redoc/` · `/api/schema/`؛ همگی بدون احراز هویت (AllowAny)."]
+];
+
+/* ---------- مدل تست‌ها: هر بخش = {num,title,intro,first?,tests:[{id,a,e,note?,nt?}]} ----------
+   nt: info | warn | danger | decision  ؛ first: عنوان ستون اول برای جداول مروری */
+var SECTIONS = [
+{num:0,title:"آماده‌سازی محیط (Environment Setup)",intro:"قبل از شروع، محیط را آماده کنید. نکته کلیدی: عمر توکن‌ها در کد سخت‌کد است و هیچ اهرم env برای کوتاه‌کردنش وجود ندارد؛ برای تست انقضا یا 15 دقیقه صبر کنید یا طبق سطر زیر monkeypatch کنید. هر کاری در این جدول انجام می‌دهید پیش‌نیاز همه بخش‌هاست؛ برای شروعِ تمیز از سطر «ریست کامل» استفاده کنید.",tests:[]},
+{num:1,title:"احراز هویت، ورود و MFA",tests:[
+{id:"1.1",a:"POST `api/v1/auth/login/` با `{username, password}` معتبرِ یک عضو سازمان.",e:"200 با کلیدهای دقیق `access_token`، `refresh_token` و شیء `user{id, username, roles, org_id, org_name, is_platform_staff}`. بدنه نباید شکل خام SimpleJWT یعنی `access`/`refresh` باشد."},
+{id:"1.2",a:"POST login با رمز غلط.",e:"401؛ در بدنه هیچ `access_token` وجود ندارد."},
+{id:"1.3",a:"POST login با نام‌کاربری غیروجودی.",e:"401 با همان شکل پاسخ 1.2 (بدونه نباید فاش کند نام‌کاربری وجود دارد یا نه)."},
+{id:"1.4",a:"POST login با `username: \"\"` یا فیلد غایب.",e:"400 اعتبارسنجی (نه 500)."},
+{id:"1.5",a:"POST login با `username` فقط-فاصله (`\"   \"`).",e:"401 یا 400؛ هیچ توکنی برگردانده نمی‌شود. «no active org membership» نباید ظاهر شود (اعتبارسنجی رمز اول می‌آید)."},
+{id:"1.6",a:"POST login با کاربری که همه‌ی عضویت‌هایش deactivate شده.",e:"401 با exact: `{\"detail\": \"no active org membership\"}`.",note:"این پیام، رگرسیونِ بلاکرِ انتشارِ login-under-RLS است. اگر 401 با این پیام برای کاربرِ عضوِ فعال دیدید، سیاست `org_members_self_lookup` (initdb/02_rls.sql) شکسته است؛ با اولویت بحرانی گزارش کنید.",nt:"danger"},
+{id:"1.7",a:"کاربر با دو عضویت فعال در دو سازمان؛ login.",e:"200 و `user.org_id` = قدیمی‌ترین عضویت (مرتب‌سازی `joined_at` سپس `id`)."},
+{id:"1.8",a:"login یک platform-staff بدون `mfa_code`.",e:"403 با `error: \"mfa_required\"` و `detail: \"platform-staff accounts must verify a TOTP code\"` و `enrolled: true`."},
+{id:"1.9",a:"login staff که هرگز MFA تنظیم نکرده.",e:"403 `mfa_required` با `detail: \"no confirmed MFA enrollment؛ POST /auth/mfa/setup/\"` و `enrolled: false`."},
+{id:"1.10",a:"login staff با کد TOTP درست.",e:"200؛ `user.is_platform_staff: true` و `user.org_id: null` (ادعای `is_platform_staff` در JWT فقط وقتی true درج می‌شود)."},
+{id:"1.11",a:"با پنجره‌ی `WINDOW=1`: کدی که یک گام (30 ثانیه) قبل تولید شده.",e:"پذیرفته می‌شود (200). دو گام قبل → همان 403 `mfa_required`."},
+{id:"1.12",a:"POST `auth/mfa/setup/` با توکن غیرstaff.",e:"403 `error: \"caller lacks the support platform claim\"`."},
+{id:"1.13",a:"POST `auth/mfa/setup/` با staff.",e:"200 `{secret, otpauth_uri, confirmed: false}`؛ `otpauth_uri` با `otpauth://totp/Morghdari:` شروع می‌شود."},
+{id:"1.14",a:"دوباره setup (پس از 1.13) و سپس confirm با راز قبلی.",e:"راز جدید جایگزین pending می‌شود؛ confirm با کد راز قدیمی → 400 `\"invalid or already-confirmed code\"`."},
+{id:"1.15",a:"POST `auth/mfa/confirm/` بدون فیلد code.",e:"400 `error: \"code required\"`."},
+{id:"1.16",a:"POST confirm با کد غلط، 20 بار پشت‌سرهم.",e:"هر بار 400 `\"invalid or already-confirmed code\"`؛ هیچ قفل‌شدن/429 نباید رخ دهد.",note:"عمدی است: در کد آمده که confirm عمداً rate-limit قفل‌کننده ندارد. اگر 429 دیدید، bug است.",nt:"warn"},
+{id:"1.17",a:"confirm موفق و سپس confirm دوباره با همان کد.",e:"بار اول `{\"confirmed\": true}`؛ بار دوم 400 (قید «already-confirmed»)."},
+{id:"1.18",a:"با access token، دقیقاً 901 ثانیه پس از login، یک GET بزنید.",e:"401. در log سرویس: `JWT rejected at tenant middleware`. صفحه ریدایرکت نمی‌شود؛ فقط 401 JSON."},
+{id:"1.19",a:"POST `auth/token/refresh/` با `refresh` معتبر (کلید ورودی stock).",e:"200 و تنها کلید `access` در پاسخ؛ نه `refresh` جدید.",note:"چرخش (rotation) عمداً خاموش است (تصمیم مالک 2026-08-23؛ `token_blacklist` هرگز نصب نشده). انتظار `refresh` جدید = گزارش باگ نادرست.",nt:"warn"},
+{id:"1.20",a:"عضویت کاربر را deactivate کنید؛ سپس refresh.",e:"200 با توکن جدیدی که در آن `org_id` غایب/null و `roles` تهی است (fail-closed-empty، C-14). توکن refresh خود بازنشسته نمی‌شود."},
+{id:"1.21",a:"refresh پس از revoke شدن session (تغییر نقش عضو؛ تست 3.7).",e:"401 `error/detail: \"session revoked\"`."},
+{id:"1.22",a:"دو کلیک سریع روی دکمه ورود (دو POST همزمان با یک اکانت).",e:"هر دو 200؛ دو ردیف `user_sessions` با `refresh_jti` متمایز (قید unique نقض نمی‌شود، 500 نداریم)."},
+{id:"1.23",a:"`username` برابر `\"<img src=x onerror=alert(1)>\"`.",e:"401 JSON؛ پاسخ HTML نیست و اسکریپت اجرا نمی‌شود (renderer فقط JSON)."},
+{id:"1.24",a:"login با نام‌کاربری فارسی/عربی اگر ساخته باشید (مثلاً «مرغداری-آزمون»).",e:"200؛ یونیکد در لاگ و پاسخ دست‌نخورده برمی‌گردد.",note:"برای ساخت این کاربر، تست 3.1 را با همان username بزنید."},
+{id:"1.25",a:"GET روی `auth/login/`.",e:"405 Method Not Allowed."},
+{id:"1.26",a:"60+ POST login غلط روی یک username در یک دقیقه.",e:"از تلاش 61 به بعد 429 (throttle auth_login با کلید username)؛ کاربر سالم دیگر همچنان 200."}
+]},
+
+{num:2,title:"چنداجاره‌ای و RLS (سطح داده)",tests:[
+{id:"2.1",a:"با توکن سازمان A، GET `farms/` و GET یک سالن متعلق به B.",e:"لیست فقط ردیف‌های A؛ GET منبع B یا 404 `\"farm not found\"` یا 403 `\"forbidden\"`؛ بدون هیچ سرنخی که آیا id وجود دارد."},
+{id:"2.2",a:"هر endpoint سازمانی بدون Authorization.",e:"401 استاندارد DRF."},
+{id:"2.3",a:"توکن platform-staff (بدون support session) روی GET `farms/`.",e:"400 `\"organization context required\"` (نه 200 خالی، نه 403).",note:"برخلاف فهرست‌های تلمتری/هشدار که روی توکنِ بی‌سازمان fail-closedِ خالی برمی‌گردانند، `farm_list` عمداً 400 می‌دهد. هر دو رفتار درست‌اند؛ endpoint‌ها فرق دارند.",nt:"info"},
+{id:"2.4",a:"توکن support-session روی GET `farms/`.",e:"فقط ردیف‌های سازمانِ نشست (GUC از ادعای `org_id` نشست ساخته می‌شود؛ حتی برای staff اولویت با support_session است)."},
+{id:"2.5",a:"در psql با نقش `morghdari_app` بدون هیچ GUC: `SELECT count(*) FROM alert_instances;` سپس `SET app.current_org_id='<uuid-A>';` و تکرار.",e:"اولی صفر؛ دومی فقط ردیف‌های A. `set_config(..., true)` تراکنشی است؛ برای تست دستی همان session را نگه دارید."},
+{id:"2.6",a:"با نقش `morghdari_app` و `SET app.current_user_id=<user-A>` ولی بدون org GUC: `SELECT * FROM org_members;`",e:"فقط ردیف‌های خود کاربر دیده می‌شود (سیاست self-lookup). `INSERT/UPDATE/DELETE` روی همان ردیف باید رد شود (سیاست فقط SELECT می‌دهد).",note:"نقض این یعنی مسیر تشدیدتشدیدِ نقش از login باز شده؛ بحرانی.",nt:"danger"},
+{id:"2.7",a:"`SELECT` روی `lifecycle_templates` برای ردیف‌های سراسری (`org_id IS NULL`) و ردیف‌های سازمان دیگر.",e:"سراسری‌ها همه‌جا دیده می‌شوند (`lifecycle_templates_global_read`)؛ ردیف سازمان دیگر نه."},
+{id:"2.8",a:"با نقش `emqx_auth`: `SELECT` روی سه جدول مجاز، سپس `SELECT FROM org_members`.",e:"سه جدول اول OK؛ بقیه `permission denied`."},
+{id:"2.9",a:"اجرای `scripts/check_rls_parity.py`.",e:"خروج 0 و پیام OK (برابری سه‌طرفه: دیتابیس، `initdb/02_rls.sql`، `tenants/0002`). هر drift یعنی جدولِ تازه‌متولد بدون سیاست RLS مانده؛ بحرانی.",nt:"danger"}
+]},
+
+{num:3,title:"اعضای سازمان، نقش‌ها و دامنه‌ها",tests:[
+{id:"3.1",a:"POST `org/members/` با توکن owner: `{username: \"t-worker1\", role: \"worker\"}`.",e:"201؛ رمز کاربر تازه unusable است (ورود مستقیم ناممکن)."},
+{id:"3.2",a:"POST members بدون role یا با role=ناشناخته.",e:"400 `error: \"username and a valid role are required\"`."},
+{id:"3.3",a:"دعوت دوباره از عضو فعال.",e:"409 `\"an active membership already exists\"`."},
+{id:"3.4",a:"دعوت دوباره از عضو deactivate‌شده.",e:"200 (بازفعال‌سازی)، نه 409."},
+{id:"3.5",a:"دعوت با توکن manager (غیرowner).",e:"403 `\"caller is not the org owner\"`."},
+{id:"3.6",a:"PATCH `org/members/<id>/` با `{role: \"reviewer\"}` توسط owner.",e:"200 و ردیف `MEMBER_ROLE_CHANGED` در audit log."},
+{id:"3.7",a:"بلافاصله پس از 3.6، refresh توکنِ session زنده‌ی همان عضو.",e:"401 `\"session revoked\"`؛ توکن‌های جاری در همان تراکنش revoke می‌شوند.",note:"رفتار درست است؛ اگر refresh موفق بود، قطعِ نشست در تغییر نقش شکسته؛ امنیتی.",nt:"danger"},
+{id:"3.8",a:"owner نقش خودش را PATCH کند.",e:"409 `\"an owner cannot change their own role\"`."},
+{id:"3.9",a:"PATCH به همان نقش فعلی.",e:"409 `\"member already has this role\"`."},
+{id:"3.10",a:"POST deactivate با member_id متعلق به سازمان دیگر.",e:"404 `\"no such member in the caller's org\"`."},
+{id:"3.11",a:"deactivate کردن عضو؛ سپس درخواست API با access token موجود او (زیر 15 دقیقه).",e:"درخواست همچنان 200 می‌شود.",note:"C-14: انقضای access 15 دقیقه است و revocation اجباری نیست؛ refresh بی‌سازمان می‌شود (1.20). اگر انتظار 401 فوری داشتید، باگ ثبت نکنید؛ اما در بازبینی امنیتی مطرحش کنید.",nt:"warn"},
+{id:"3.12",a:"PATCH role با مقدار خارج از لیست (مثلاً `\"boss\"`).",e:"400 `\"role must be one of owner, manager, engineer, doctor, worker, installer, reviewer\"`."},
+{id:"3.13",a:"PATCH role بدون زمینه سازمان (توکن superuser).",e:"403 `\"caller is not the org owner\"` (gate اولویت با مالکیت است، نه 400)."},
+{id:"3.14",a:"مهندس با دامنه scope فقط سالن X: خواندن تلمتری سالن Y.",e:"رد شده؛ با حذف همه ردیف‌های scope، دسترسی به کل سازمان برمی‌گردد.",note:"صفر ردیف scope = بدون محدودیت (طرح مستند در permissions.py). دامنه فقط باریک می‌کند، هرگز پهن.",nt:"warn"},
+{id:"3.15",a:"GET `org/members/` با worker.",e:"200 فهرست اعضا (خواندن برای هر عضو مجاز است)؛ همان توکن روی POST دعوت 403 `\"caller is not the org owner\"`."}
+]},
+
+{num:4,title:"عملیات پشتیبانی پلتفرم (Support Ops)",tests:[
+{id:"4.1",a:"POST `platform/support/session/` با توکن غیرstaff.",e:"403 `\"caller lacks the support platform claim\"`."},
+{id:"4.2",a:"همان درخواست با superuser که `is_platform_staff=False` است.",e:"403 با همان پیام.",note:"superuser عمداً از این مسیر رد می‌شود؛ این باگ نیست.",nt:"info"},
+{id:"4.3",a:"POST session با `incident_id: \"\"`.",e:"400 `\"incident_id required\"` (حداکثر طول 64)."},
+{id:"4.4",a:"POST session با `org_id` نامعتبر یا ناموجود.",e:"400 `\"unknown org_id\"` در هر دو حالت.",note:"جست‌وجوی org داخل tenant_context انجام می‌شود (اصلاح M7-10). اگر 500 دیدید، RLS شکسته.",nt:"info"},
+{id:"4.5",a:"POST session معتبر.",e:"200 `{access_token, org_id, incident_id, expires_in_sec: 900}`؛ در claims: `support_session: true` + `incident_id`."},
+{id:"4.6",a:"بعد از 4.5، جدول audit را با psql چک کنید.",e:"ردیف `SUPPORT_ORG_ENTER` «پیش از» پاسخ موفق ثبت شده باشد."},
+{id:"4.7",a:"توکن نشست ساپورت را بالای endpoint غیرساپورت (مثلاً force-resolve با توکن معمولی staff) استفاده کنید.",e:"403 `\"no active support session for this org\"`."},
+{id:"4.8",a:"پس از 900 ثانیه، اجرای یک عملیات ساپورت.",e:"401 `\"token_not_valid\"` — توکنِ نشست همان JWT معمولی با عمر 900 ثانیه است (همان فیزیکِ 20.4c)؛ پیام 403 نشست فقط برای توکنِ معتبرِ بدون نشست می‌آید."},
+{id:"4.9",a:"POST `platform/support/tasks/drain/` با `task: \"wipe_db\"`.",e:"400 `\"unknown task\"` (whitelist فقط سه نام دارد)."},
+{id:"4.10",a:"درست‌کردن task ولی بدون `reason`.",e:"400 `\"reason required\"`."},
+{id:"4.11",a:"`task: \"drain_pending_approval\"` بدون slot.",e:"400 `\"task requires gateway_slot_id\"`؛ با slot سازمان دیگر → 404 `\"gateway not found in the session org\"`."},
+{id:"4.12",a:"dispatch معتبر سه تسک.",e:"202 با `dispatched` به این متن‌ها: `\"drain dispatched for <slot>\"` · `\"threshold recache dispatched\"` · `\"location tree cache invalidated\"`."},
+{id:"4.13",a:"قبل و بعدِ rebuild_zone_cache، کلید Redis `location:tree:<org_id>` را ببینید.",e:"کلید ناپدید می‌شود (حذف صریح کش)."},
+{id:"4.14",a:"POST force-resolve روی هشدارِ فعال با `reason: \"\"`.",e:"400 `\"reason required (the runbook defect reference)\"`."},
+{id:"4.15",a:"force-resolve معتبر؛ سپس تکرارش.",e:"اولی 200 و `current_status=RESOLVED`؛ دومی 200 با `\"idempotent\": true`؛ نه 409.",nt:"info"},
+{id:"4.16",a:"force-resolve روی alert متعلق به سازمان دیگر.",e:"404 `\"alert not found in the session org\"`."},
+{id:"4.17",a:"POST provisioning با `action: \"stop\"`.",e:"400 `\"action must be suspend or resume\"`؛ مقادیر مجاز پاسخ 200 با `{gateway_slot_id, provisioning_status}` و audit `SUPPORT_OP_GATEWAY_PROVISIONING`."},
+{id:"4.17b",a:"suspend روی PROVISIONED، تکرار suspend، suspend روی REJECTED، سپس resume.",e:"suspend اول 200؛ تکرار suspend هم 200 (idempotent، نه 409)؛ REJECTED به SUSPENDED می‌شود 409 `cannot transition gateway ... from REJECTED to SUSPENDED`؛ resume برمی‌گرداند به PROVISIONED.",nt:"info"},
+{id:"4.18",a:"register سخت‌افزار در آیکون که ردیف active دارد.",e:"409 `\"slot already has live hardware (retire it first)\"`؛ register روی slot ناموجود → 404 `\"slot not found in the session org\"`؛ بدون فیلدها → 400 `\"slot_id and hardware_id required\"`؛ تکرار دقیق register → 200 + `\"idempotent\": true`."},
+{id:"4.19",a:"replace gateway با `new_hardware_id` برابر واحد فعلی یا تکراری در سازمان.",e:"برابر → 400 `new_hardware_id must differ from the live unit`؛ تکراری → 409 `new_hardware_id already live in this org`؛ معتبر → 200 با رمز یک‌بارمصرف 43 کاراکتری (`token_urlsafe(32)` بدون padding)."},
+{id:"4.20",a:"تکرار (replay) همان replace.",e:"200 با `\"password\": \"\"`، `\"broker_synced\": false` و `\"idempotent\": true`؛ رمز دومی هرگز فاش نمی‌شود.",note:"رمز MQTT فقط یک‌بار نمایش داده می‌شود. پاسخِ replay با رمز = نشتی امنیتی بحرانی.",nt:"danger"}
+]},
+
+{num:5,title:"وارده‌سازی تلمتری MQTT (Subscriber)",tests:[
+{id:"5.1",a:"انتشار payload صحیح schema 2.0 روی `{org}/farms/{farm}/gateways/{slot}/telemetry` (T1).",e:"XADD روی `telemetry:realtime` با فیلدهای `org_id, slot_id, device_ts, is_buffered, payload, trace_id, metrics, clock_drift`؛ ردیف در `saloon_telemetry`؛ کلید `dedup:<org>:<slot>:<device_ts>` با TTL حدود 90000 ثانیه."},
+{id:"5.2",a:"انتشار روی تاپیک نامعتبرِ قابل‌دریافت (مثلاً همان شکل T1 ولی با بخش خالی، یا تاپیک `/status` که سابسکرایبر هم گوش می‌دهد).",e:"DLQ دلیل `\"bad_topic\"`؛ توجه: تاپیک‌های با تعداد بخش غلط (مثل `x/y/z`) اصلاً به پایپ‌لاین نمی‌رسند (فیلتر سابسکرایب بروکر). پیام‌های `/status` هم فعلاً `bad_topic` می‌گیرند چون `_handle_status` سیم‌کشی نشده و هیچ کلید `sensor:lwt` ساخته نمی‌شود.",note:"decision ثبت‌شده: رفتار status فعلاً DLQ است نه LWT؛ محصول باید انتخاب کند.",nt:"decision"},
+{id:"5.3",a:"payload = رشته‌ی `hello` (JSON نیست).",e:"DLQ دلیل `\"bad_json\"`."},
+{id:"5.4",a:"payload = `[1,2,3]` (JSON معتبر ولی dict نیست).",e:"DLQ `\"bad_json\"`؛ همان دلیل؛ تفاوت قائل نشوید."},
+{id:"5.5",a:"`gateway_slot_id` داخل payload ≠ بخش تاپیک.",e:"DLQ `\"TOPIC_PAYLOAD_IDENTITY_MISMATCH\"` (فقدان فیلد هم همین)."},
+{id:"5.6",a:"`schema_version: \"1.9\"` یا `\"3.0\"`.",e:"DLQ `\"UNSUPPORTED_SCHEMA_VERSION\"`؛ فقط `\"2.0\"` پذیرفته است."},
+{id:"5.7",a:"payload بدون `device_ts`.",e:"DLQ `\"missing_device_ts\"`."},
+{id:"5.8",a:"انتشار با slot ناشناخته.",e:"DLQ `\"UNKNOWN_SLOT\"`."},
+{id:"5.9",a:"gateway در وضعیت SUSPENDED و سپس REJECTED.",e:"DLQ `\"gateway_suspended\"` / `\"gateway_rejected\"` (ساختار `gateway_<status lowercase>`)."},
+{id:"5.10",a:"gateway با وضعیت PENDING_APPROVAL.",e:"نه DLQ و نه realtime؛ ورودی `telemetry:pending_approval` افزایش می‌یابد.",note:"نگهداری عمدی تا زمان تأیید؛ gauge تجمیع `telemetry_pending_approval_depth`."},
+{id:"5.11",a:"انتشار برای slot بدون هیچ ردیف provisioning.",e:"پذیرفته می‌شود (مسیر demo/legacy).",nt:"info"},
+{id:"5.12",a:"یک پیام را دقیقاً دو بار منتشر کنید (همان `device_ts`).",e:"بار دوم بی‌صدا حذف می‌شود: نه ردیف DB، نه DLQ، XLEN ثابت.",note:"«نباید خطایی ببینید» درستِ رفتار است (dedup NX). اگر ردیف دوم دیدید: bug.",nt:"warn"},
+{id:"5.13",a:"`temp: -999` در readings.",e:"پذیرفته و ذخیره می‌شود.",note:"هیچ دروازه‌ی رد مقادیر منفی در پایپ‌لاین وجود ندارد؛ اگر تیم محصول انتظار رد دارد، این تست «نیازمند تصمیم» است.",nt:"decision"},
+{id:"5.14",a:"`device_ts` یک ساعت در آینده.",e:"پذیرفته می‌شود و `clock_drift` فقط به‌عنوان فیلد عبور داده می‌شود (بدون رد).",note:"در تست 8.12-مرحله، آستانه‌ی `clock_drift_alert_threshold_min=5` برای هشدار جداست؛ نه رد ورودی. نیازمند تصمیم اگر انتظار رد داشتیم.",nt:"decision"},
+{id:"5.15",a:"دو پیام هم‌میلی‌ثانیه.",e:"هر دو در استریم می‌نشینند (`recv_ts` با increment ‏0.00001 سخت‌افزونی می‌شود) و هر دو در DB (UNIQUE روی `server_received_ts,slot_id,org_id` نقض نمی‌شود)."},
+{id:"5.16",a:"قطع subscriberها (`stop subscriber-01 subscriber-02`) حین انتشار 50 پیام؛ پس از یک دقیقه up.",e:"هیچ پیامی از دست نمی‌رود (QoS1 + session_expiry 24 ساعت؛ شمارش نهایی `telemetry_messages_received_total` رشد می‌کند)."},
+{id:"5.17",a:"پayload بزرگ‌تر از 1 مگابایت.",e:"broker (max_packet_size 1MB)Publish را در سطح پروتکل رد/قطع می‌کند؛ subscriber هیچ DLQ جدیدی نمی‌گیرد."},
+{id:"5.18",a:"حذف موقت ACL اشتراک subscriber (با ری‌استارت بروکر برای سردکردن کش authz)، سپس بوت subscriber.",e:"لاگ دقیق `SUBACK DENIED` با `granted=[128]` و حلقه‌ی تلاش مجدد `resubscribing in 5s`؛ پس از بازگردانی rules، subscribe تمیز با `granted qos=[1]`.",note:"EMQX نتیجه‌ی authz را کش می‌کند: لغو ACL روی سابسکرایب موجود اثر ندارد، فقط روی (re)subscribe پس از انقضای کش. healthcheck کانتینر process-based است.",nt:"warn"}
+]},
+
+{num:6,title:"بروکر EMQX (احراز هویت و ACL دستگاه)",tests:[
+{id:"6.1",a:"اتصال MQTT plaintext روی پورت 1883.",e:"Connection refused؛ only TLS on 8883 فعال است."},
+{id:"6.2",a:"CONNECT با username=slot_id و رمز درست روی 8883.",e:"CONNACK accepted؛ در لاگ، مسیر TLS با `verify_peer` (بدون client-cert هم Phase-1 قبول است)."},
+{id:"6.3",a:"رمز غلط.",e:"رد شدن احراز هویت (با کلاینت MQTTv5 کد 134؛ با v3 کد 4). هش در DB باید `$2b$…` باشد؛ اگر رول‌اور به pbkdf2 دیدید، EMQX 5.5 رد می‌کند.",nt:"info"},
+{id:"6.4",a:"اعتبارنامه‌ی gateway در وضعیت `PENDING_INSTALLATION`، سپس `SUSPENDED`.",e:"اولی قبول (سه وضعیت مجاز در SQL احراز هویت: PENDING_INSTALLATION/PENDING_APPROVAL/PROVISIONED)؛ دومی رد."},
+{id:"6.5",a:"`is_active=false` روی credential.",e:"رد شدن (شرط `cred.is_active = true`)."},
+{id:"6.6",a:"PUBLISH به تاپیک خارج از ACL کاربر.",e:"پیام نادیده گرفته می‌شود (broker `no_match=deny` + `deny_action=ignore`) و subscriber آن را نمی‌بیند.",note:"`ignore` یعنی client هیچ خطایی نمی‌گیرد؛ این عمقی‌ترین حالت عیب‌یابی سخت را می‌سازد؛ با شمارش‌های subscriber راستی‌آزمایی کنید، نه پاسخ client.",nt:"warn"},
+{id:"6.7",a:"با اعتبارنامه subscriber، publish کردن.",e:"رد (ACL اشتراک فقط subscribe دارد). توجه:_EMQX پیش از تطبیق ACL، پیشوند `$share/<grp>/` را حذف می‌کند.",nt:"info"},
+{id:"6.8",a:"اجرای `scripts/live_verify_emqx.py`.",e:"فعلاً N/A: اسکریپت `paho.mqtt.cli` را import می‌کند (در paho 2.x حذف شده) و بروکر plaintext می‌خواهد (روی این استک غیرفعال است). پیش‌نیاز اجرا: سازگاری با paho 2.x و گزینه‌ی TLS.",nt:"warn"},
+{id:"6.9",a:"`rotate-credential` سپس پیش از ack، اتصال با رمز قدیمی و رمز تازه.",e:"هر دو کار می‌کنند (رمز قدیمی فعال می‌ماند تا ACK). `rotation-ack` با کلید `{\"new_password\": …}` → قدیمی رد (134/135)، تازه قبول؛ پاسخ commit دارای `rotation_committed: true` است."},
+{id:"6.10",a:"25 ساعت بعد از یک rotation بدون ack، لاگ را ببینید.",e:"خطای `M5-08: credential rotation staged >24h without device ACK`."}
+]},
+
+{num:7,title:"API خواندن تلمتری و ساعت‌واره",tests:[
+{id:"7.1",a:"GET `saloons/<id>/telemetry/` بدون limit.",e:"200 صعودیِ کرونولوژیک و بدون سقف پیش‌فرض."},
+{id:"7.2",a:"همان با `limit=10`.",e:"10 ردیف نزولی (تازه‌ترین اول). دادن هر یک از `limit`/`offset` حالت را عوض می‌کند؛ باگ نیست.",nt:"info"},
+{id:"7.3",a:"`limit=0` · `limit=1001` · `limit=abc` · `offset=-1`.",e:"به‌ترتیب: 400 `\"limit must be between 1 and 1000\"` · همان · 400 `\"limit must be an integer\"` · 400 `\"offset must be >= 0\"`."},
+{id:"7.4",a:"`since=hello` (تاریخ بی‌اعتبار).",e:"200 با فیلترِ نادیده‌گرفته‌شده.",note:"پارس‌نشدنی عمداً silent-ignore می‌شود؛ اگر انتظار 400 داشتید، باگ ثبت نکنید ولی در بازبینی قرارداد ثبتش کنید.",nt:"warn"},
+{id:"7.5",a:"`include_buffered=1`.",e:"ردیف‌های is_buffered ظاهر می‌شوند؛ پیش‌فرض آن‌ها حذف‌اند."},
+{id:"7.6",a:"`slot_id=GW-NOPE`.",e:"200 با نتایج خالی (نه 404)."},
+{id:"7.7",a:"درخواست تلمتری با توکن staff (بدون org).",e:"400 `\"organization context required\"`."},
+{id:"7.8",a:"GET `farms/<id-taghiali>/telemetry/`.",e:"404 `\"farm not found\"`."},
+{id:"7.9",a:"GET `saloons/<id>/analytics/hourly/` بدون پارامتر.",e:"400 `\"from, to and metric query parameters are required\"`؛ `from>to` → 400 `\"from/to must be ISO datetimes with from < to\"`؛ `metric=xyz` → 400 `\"unknown metric_key 'xyz'\"`."},
+{id:"7.10",a:"GET `metric-types/`.",e:"8 ردیف دقیق: `temp, humidity, lux, nh3, water_l, co, power_mains, power_gen`. ردیف `thi` نباید باشد (مشتق است)."},
+{id:"7.11",a:"`offset` بزرگ‌تر از مجموع ردیف‌ها.",e:"200 با `results: []`."},
+{id:"7.12",a:"سالن متعلق به سازمان دیگر با id صحیح.",e:"200 با `results: []` (fail-closed خالی؛ حتی بهتر از 404 چون هیچ oracle وجودی هم نمی‌دهد). هرگز داده‌ی سازمان دیگر در payload نباشد.",nt:"danger"}
+]},
+
+{num:8,title:"موتور هشدار: آستانه، سرعت‌تغییر، حرکات",tests:[
+{id:"8.1",a:"`temp_max=30`؛ انتشار دقیقاً `30.0` در بازه‌ی duration.",e:"آستانه شکسته می‌شود؛ مقایسه `value >= max` است (نه strict>). انتظار: تشکیل breach پس از اولین مشاهده.",note:"مرزِ فراگیر بودن عامدانه است؛ اگر کسی 29.99 را alert داد، bug است.",nt:"info"},
+{id:"8.2",a:"یک مشاهده‌ی breaching تنها؛ بعد از 899 ثانیه چک کنید.",e:"هیچ alert ساخته نشده (duration پیش‌فرض `breach_duration_sec=900`)."},
+{id:"8.3",a:"مشاهده‌ی دوم 800 ثانیه بعد (کل 1699 ثانیه از شروع، ولی کلید TTL 900 را refresh کرده).",e:"TTL در هر مشاهده پی‌درپی تمدید می‌شود و `started_at` حفظ؛ در 1700 ثانیه‌ام elapsed از 900 گذشته ← alert سطح 1 درست می‌شود. (چک: کلید `saloon:<id>:breach:<metric>` هنوز `started_at` اولیه دارد.)"},
+{id:"8.4",a:"ادامه‌ی breaching پس از ساخت alert.",e:"دوباره alert ساخته نمی‌شود (fire once per episode؛ فلگ `alerted`)."},
+{id:"8.5",a:"برگشت مقدار به `max - 0.3`.",e:"alert فعال می‌ماند؛ resolve فقط زیر `max - hysteresis_buffer_units(0.5)`.",nt:"info"},
+{id:"8.6",a:"métrیک `temp` روی `temp_min` سرد (زیر حد پایین).",e:"هیچ alert نباید ساخته شود؛ سمت min هرگز alert نمی‌دهد.",note:"عمدِ v0.4؛ سردشدگی با replay/گزارش دیده می‌شود.",nt:"warn"},
+{id:"8.7",a:"scenario velocity: انتشار `nh3.max_ts = 59` با `nh3_max_ts_velocity_threshold=50`.",e:"فوراً ACTIVE_TIER_1 با reason `\"NH3 velocity emergency: max_ts=59 >= 50\"`؛ بدون رعایت duration، grace، mute و وضعیت گله."},
+{id:"8.8",a:"روی همان سالن، همزمان یک maintenance mute کامل + subscription mute روی nh3 فعال کنید و دوباره 8.7.",e:"alert همچنان ساخته می‌شود.",note:"قاعده مالک: «آلارم NH3 هرگز خاموش نمی‌شود» (تصمیم 10 / D24-6). اگر suppress شد، بالاترین اولویت.",nt:"danger"},
+{id:"8.9",a:"دو برداشت دما با اختلاف 5.0 درجه در پنجره 60 ثانیه (hash `saloon:<id>:last_metrics`، TTL 120).",e:"Tier-1 فوری با reason `\"Temperature rate-of-change: +5.0°C (threshold 5.0°C/60s)\"`؛ اختلاف 4.9 → هیچ."},
+{id:"8.10",a:"تغییر threshold سالن (انتشار template جدید).",e:"کلید `threshold:transition:<saloon>` با TTL 300 (config: `threshold_transition_grace_sec`) نوشته می‌شود فقط اگر hash قبلی بوده و فرق کند؛ هشدارهای غیرvelocity در این 5 دقیقه suppress.",note:"این تست را بی‌درنگ بعدِ 8.11 (بازگرداندن آستانه) تکرار کنید: hash قبلی هم‌ارز است → نباید کلید grace بنویسد.",nt:"info"},
+{id:"8.11",a:"THI مشتق: `temp=35, rh=60` با `thi_max=79` (سناریو 170-185 simulate_farm).",e:"THI = (1.8·35+32) − (0.55−0.0055·60)·(1.8·35−26) = 86.86 ≥ 79 → breach در بازه duration."},
+{id:"8.12",a:"`breach_duration_sec` را در `system_configuration` روی 30 بگذارید و بی‌درنگ تست 8.2.",e:"هشدار همچنان 900 ثانیه طول می‌کشد.",note:"مخزنِ cache آستانه شبانه (beat 00:00) بازسازی می‌شود؛ برای اثر فوری، عملیات `rebuild_threshold_cache` را dispatch کنید (4.12). اگر بعد از recache همچنان 900 بود: bug.",nt:"warn"},
+{id:"8.13",a:"subscription mute روی `thi` + ست‌بودن `thi_max`؛ سپس انتشار آستانه‌شکنی THI.",e:"راست‌آزمایی کنید که 500 در path مشتق رخ نمی‌دهد.",note:"بررسی کد در evaluation.py:182-188 یک مسیر احتمالی NameError نشان می‌دهد (track_breach بیرون از else). نیازمند تصمیم/احتمال باگ.",nt:"decision"},
+{id:"8.14",a:"دو پیام همزمان برای دو slot یک سالن روی یک metric با آستانه‌شکنی.",e:"فقط یک alert فعال (`alert:active:saloon:<id>:<metric>`)."},
+{id:"8.15",a:"سقف سهمیه ساعتی پیام (tier basic: 10000) و عبور از آن با metric Tier-1.",e:"drop سهمیه روی `temp` و `nh3` اعمال نمی‌شود (`quota_exempt_tier1_metrics=true`).",nt:"info"},
+{id:"8.16",a:"ردیف alert در DB را باز کنید.",e:"مقادیر مجاز: `ACTIVE_TIER_1/2/3` یا `RESOLVED`؛ `source=REALTIME`؛ `highest_tier_reached` دست‌کم 1."}
+]},
+
+{num:9,title:"تشدید، تأیید (Ack) و LOS",tests:[
+{id:"9.1",a:"alert حل‌نشده را 16 دقیقه باز بگذارید (sweep هر 120 ثانیه).",e:"`ACTIVE_TIER_2` در `escalation_tier2_min=15`؛ در 30 → TIER_3؛ هیچ‌وقت demote نمی‌شود."},
+{id:"9.2",a:"در لاگ worker، sink هر tier را ببینید.",e:"T1 `push_workers` · T2 `sms_engineer` · T3 `manager_and_doctor`؛ فعلاً log stub.",nt:"info"},
+{id:"9.3",a:"POST `alerts/<uuid>/acknowledge/` با توکن engineer/manager/owner/worker.",e:"200 `{alert_id, acknowledged_by, pause_minutes, status:\"ACKNOWLEDGED\"}`."},
+{id:"9.4",a:"ack با توکن doctor.",e:"403 `\"assigned worker/engineer required\"`."},
+{id:"9.5",a:"ack روی alert سازمان دیگر یا uuid بی‌اعتبار.",e:"404 `\"alert not found\"`."},
+{id:"9.6",a:"دو بار ack پشت‌سرهم.",e:"هر دو 200؛ پنجره pause تمدید می‌شود (کلید `alert:paused:<id>` با TTL `pause_minutes*60`) و ردیف دوم اضافه می‌شود.",note:"بی‌یکتایی ack عمداً آزاد است؛ وضعیت alert عوض نمی‌شود؛ فقط تایمر تشدید فریز. انتظار 409 = باگ ثبت‌شده‌ی نادرست.",nt:"warn"},
+{id:"9.7",a:"پس از ack و در پنجره 10 دقیقه، عبور از آستانه 15 دقیقه.",e:"escalation به Tier-2 رخ نمی‌دهد؛ بعد از انقضای pause اگر هنوز breach باشد تشدید ادامه می‌یابد."},
+{id:"9.8",a:"برگشت مقدار به نرمال؛ صبر تا sweep بعد (≤120 ثانیه).",e:"`RESOLVED` با `resolved_at` و حذف کلید `alert:active:`."},
+{id:"9.9",a:"قطع کامل برقراری یک slot (سناریو LOS 160-172 شبیه‌ساز) بیش از `sensor_status_ttl_sec=300`.",e:"دقیقاً یک alert LOS Tier-1 در اپیزود (`los:fired` با NX)؛ در sweepهای بعدی تکرار نمی‌شود؛ پس از بازگشت، کلید پاک و اپیزود جدید ممکن. توجه: slotهایی که هرگز هیچ reading زنده‌ای نداشته‌اند هم در اولین sweep آتش می‌زنند (طوفان LOS در cold-start)؛ تست ایزوله نیاز دارد بقیه slotها زنده نگه داشته شوند.",nt:"warn"},
+{id:"9.10",a:"بلافاصله پس از ری‌استارت Redis (حالت wipe)، status کلیدها را منقضی کنید.",e:"هیچ LOS نباید fire شود تا 10 دقیقه (`los_suppress_after_redis_restart_min`).",note:"سرکوب عمقی: تازه‌سازی انبوه TTLها بعد از wipe وگرنه طوفان LOS جعلی می‌سازد. LOS در این پنجره = bug.",nt:"danger"},
+{id:"9.11",a:"سناریو GS-CORRELATION: خاموش‌کردن همزمان ≥70٪ slotهای یک فارم در پنجره 3 دقیقه.",e:"به‌ازای هر فارمِ آسیب‌دیده دقیقاً یک ردیف los (نه به‌ازای هر slot) + مارکر `farm:corr:muted:<farm>`؛ pageهای انفرادی آن فارم تا 10 دقیقه suppress ولی فارم دیگر عادی page می‌کند؛ کلیدهای `farm:los:` و `farm:corr:muted:` مشاهده‌پذیر. فید اپراتور los را فقط با فیلتر سالن/وضعیت نشان می‌دهد (`?metric=los` وجود ندارد و 400 می‌دهد).",nt:"info"},
+{id:"9.12",a:"alert با `source=REPLAY_ANALYSIS` را 31 دقیقه باز بگذارید.",e:"تشدید 2/3 روی آن اجرا نمی‌شود."}
+]},
+
+{num:10,title:"Mute نگهداری و Subscription سازمان",tests:[
+{id:"10.1",a:"POST `maintenance-mutes/` معتبر (مدیر، 2 ساعت آینده).",e:"201؛ ردیف `MUTE_CREATED`؛ در پنجره، alert آستانه‌ای آن سالن ساخته نمی‌شود ولی velocity 8.7 ساخته می‌شود."},
+{id:"10.2",a:"`ends_at` قبل از `starts_at`.",e:"400 `\"ends_at must be after starts_at\"`."},
+{id:"10.3",a:"پنجره 73 ساعته.",e:"400 `\"mute window may not exceed 72 hours\"`؛ 72 ساعت دقیق → قبول.",nt:"info"},
+{id:"10.4",a:"پنجره کاملاً در گذشته.",e:"400 `\"mute window is in the past\"`؛ پنجره‌ی در حال اجرا (شروع گذشته/پایان آینده) → قبول."},
+{id:"10.5",a:"دو پنجره با تماس لبه (پایان اولی = شروع دومی).",e:"هر دو 200 (نیمه‌باز)."},
+{id:"10.6",a:"سپس پنجره همپوش.",e:"409 `\"mute window overlaps an existing window for this saloon\"`."},
+{id:"10.7",a:"DELETE پنجره فعال.",e:"200/204 با `status: REVOKED` در مسیر کوتاه‌کردن و audit `MUTE_REVOKED`؛ DELETE پنجره قدیمی → 409 `\"mute is not active\"`؛ id ناموجود → 404 `\"mute not found\"`."},
+{id:"10.8",a:"create با توکن worker.",e:"403 `\"manager role required\"`."},
+{id:"10.9",a:"پس از پایان پنجره، یک بار شمارش suppress‌شده‌ها را چک کنید.",e:"digest (`maintenance:mute:digest:<id>`) در sweepِ پس از پایان پنجره یک‌بار با NX نوشته می‌شود (کلید count فقط حدود `ends_at-now+60` ثانیه زنده است، پس sweep باید زود پس از پایان بیاید)؛ شمارنده `maintenance:mute:count` در طول پنجره بالا رفته بود."},
+{id:"10.10",a:"POST `alert-subscriptions/` با `metric_key: \"nh3\"`.",e:"201؛ در بازه mute هیچ alert آستانه‌ای `nh3` در کل سازمان ساخته نمی‌شود و breach هم انباشته نمی‌شود؛ هر سرکوبِ واقعی با digest `MUTED_SUPPRESSED` ثبت می‌شود."},
+{id:"10.11",a:"تکرار POST همان metric_key.",e:"200 `{metric_key, muted: true, idempotent: true}`."},
+{id:"10.12",a:"DELETE `alert-subscriptions/nh3/` بدون mute فعال؛ و POST با `metric_key: \"xyz\"`.",e:"404 `\"metric not muted\"`؛ و 400 `\"unknown metric_key\"` (باید در کاتالوگ SensorMetricType باشد)."},
+{id:"10.13",a:"POST subscription روی `nh3`؛ سپس تست 8.7.",e:"velocity NH3 باید alert بسازد. هر suppress روی = نقض قاعده مالک؛ بحرانی.",nt:"danger"},
+{id:"10.14",a:"فیلترهای خراب روی `alerts/`: `status=BOGUS` · `tier=4`.",e:"400 به‌ترتیب `\"status must be ACTIVE or ALL\"` و `\"tier must be 1, 2 or 3\"`."}
+]},
+
+{num:11,title:"فارم، سالن و چرخه گله",tests:[
+{id:"11.1",a:"POST farm و saloon با owner؛ سپس `GET /overview/`.",e:"201ها؛ overview شامل هر دو."},
+{id:"11.2",a:"POST `saloons/<id>/operational-state/` با `state` خارج از enum.",e:"400 `\"state must be one of EMPTY_SANITATION, PRE_HEATING, ACTIVE_FLOCK, HARVESTED_VACANT\"`."},
+{id:"11.3",a:"پرش حلقه: EMPTY_SANITATION → ACTIVE_FLOCK.",e:"400 `\"illegal transition EMPTY_SANITATION → ACTIVE_FLOCK (canonical loop)\"` (حلقه یک‌گامی است)."},
+{id:"11.4",a:"همان وضعیت فعلی را بفرستید.",e:"400 `\"saloon is already in state <x>\"`."},
+{id:"11.5",a:"PRE_HEATING → ACTIVE_FLOCK وقتی دمای لحظه‌ای با preheat target بیشتر از 2 درجه فرق دارد.",e:"400 با فاصله اندازه‌گیری‌شده (`active_flock_temp_tolerance_c=2.0`)."},
+{id:"11.6",a:"همان درخواست با Redis خاموش.",e:"اجازه (degrade-to-allow).",note:"گارد دما best-effort است؛ ردشدن در Redis-down باگ است.",nt:"warn"},
+{id:"11.7",a:"POST flock بدون `placement_count`، سپس `placement_count: 0`.",e:"400 `\"placement_count required and must be an integer\"` / `\"placement_count must be ≥ 1\"`."},
+{id:"11.8",a:"گله دوم فعال روی سالنی که گله فعال دارد.",e:"400 `\"an active flock already exists for this saloon\"`."},
+{id:"11.9",a:"DELETE سالن با گله فعال، با تاریخچه گله، و سالن تازه‌ساخت بدون هیچ سابقه.",e:"به‌ترتیب 409: `saloon has an active flock` / 409: `saloon has flock history` / 200 برای سالن تازه‌ساخت؛ ردیف audit ساخت (`SALOON_CREATED`) با FK تهی (NULL) و details سالم می‌ماند.",note:"BUG-10 بسته شد با جداسازی (FKهای audit از نوع SET_NULL).",nt:"info"},
+{id:"11.10",a:"`flock_age_days` را درست پس از نیمه‌شب تهران ببینید (شروع 23:50 دیروز).",e:"1 (روز کامل تهرانی؛ offset ثابت +03:30 و بدون DST)."},
+{id:"11.11",a:"POST فید `?farm_id=abc`.",e:"400 `\"farm_id must be an integer\"`."},
+{id:"11.12",a:"تغییر وضعیت/گله با نقش worker.",e:"403 `\"engineer role required\"` (WRITE_ROLES = engineer/manager/owner)."}
+]},
+
+{num:12,title:"تأمین و پروژنینگ Gateway",tests:[
+{id:"12.1",a:"POST `gateway-requests/` با installer و با manager.",e:"installer می‌گیرد 403 `manager role required`؛ manager می‌گیرد 201. approve بعدی `GatewaySlot` با `slot_id` از جنس `GW-` + رمز bcrypt و ACL می‌سازد و password را فقط یک‌بار برمی‌گرداند."},
+{id:"12.2",a:"درخواست پنجم و ششم همزمان (سقف واقعی 5 pending، نه 4).",e:"پنجمی 201؛ ششمی 400 `pending gateway request cap reached` (`max_pending_gateway_requests=5` در seed)."},
+{id:"12.3",a:"`review` با توکن بی‌نقش پلتفرم.",e:"403 `\"platform review permission required\"`؛ uuid ناموجود → 404 `\"request not found\"`."},
+{id:"12.4",a:"review با decision=\"MAYBE\"؛ تکرار review.",e:"400 `\"decision must be APPROVE or REJECT\"`؛ 409 `\"request already reviewed\"`."},
+{id:"12.5",a:"approve پیش از ثبت سخت‌افزار.",e:"400 `\"active gateway hardware not registered\"`."},
+{id:"12.6",a:"دو POST `provisioning/sync/` همزمان.",e:"دومی 409 `\"gateway sync already in progress\"` با هدر `Retry-After: 3` (قفل 30 ثانیه)."},
+{id:"12.7",a:"GET `gateways/<slot>/config/` با credential خراب، credential درست دستگاه، و JWT مدیر.",e:"هر دو حالت Basic می‌دهند 404 `gateway not found` چون RLS ردیف slot را پیش از احراز هویت پنهان می‌کند (باگ ثبت‌شده‌ی BUG-11: مسیر config دستگاه خراب است؛ 401 مستند unreachable). JWT مدیر 200 می‌دهد (GUC از claim).",note:"BUG-11 باز است.",nt:"danger"},
+{id:"12.8",a:"`rotate-credential` روی PENDING_APPROVAL؛ `rotation-ack` با رمز اشتباه.",e:"409 `\"rotation requires PROVISIONED gateway (status: …)\"`؛ 409 `\"no staged rotation or password mismatch\"`."},
+{id:"12.9",a:"30 GET متوالی روی `/api/v1/gateways/` (device brute-force).",e:"nginx zone `gateway_config` = 1r/s burst=5 → 429ها؛ `limit_req_status 429`.",note:"لایه nginx است نه DRF؛ اگر همه 200 شدند، config rate-limit درگیر نشده؛ bug زیرساختی.",nt:"warn"},
+{id:"12.10",a:"`provisioning/villages/` بدون `city_id`.",e:"400 `\"city_id query parameter is required\"` (و برای cities: `\"province_id …\"`)."},
+{id:"12.11",a:"mapping POST بدون `pack_id`.",e:"400 `\"mapping requires pack_id and slot_id\"`؛ slot متعلق به سازمان دیگر → `\"sensor slot not found in caller organization\"`."},
+{id:"12.12",a:"replacement بدون `old_hardware_id`.",e:"400 `\"replacement requires old_hardware_id, new_hardware_id, pack_id and slot_id\"`؛ ناشناخته → `\"replacement references unknown hardware or sensor slot\"`."},
+{id:"12.13",a:"پس از approve: جدول `mqtt_device_credentials` + `mqtt_acl_rules`.",e:"hash `$2b$`؛ مجموعه allow T1–T9 (9 ردیف) وجود دارد."}
+]},
+
+{num:13,title:"KPI، پنل‌ها و پیکربندی داشبورد",tests:[
+{id:"13.1",a:"POST `weight-samples/` بدون `sample_size`؛ سپس `sample_size=0`؛ سپس `\"abc\"`؛ سپس بدون `avg_weight_g`.",e:"به‌ترتیب 400: `\"sample_size required and must be an integer\"` (برای غایب و غیرعددی یک‌سان)، `\"sample_size must be ≥ 1\"`، `\"avg_weight_g required\"`؛ کلید عددیِ نامعتبرِ دیگر → `\"<key> must be numeric\"`."},
+{id:"13.2",a:"POST `feed-intake/` برای یک flock و یک روز، و دوباره با مقدار دیگر.",e:"بار دوم UPDATE با `corrected: true` و audit `feed_intake_correction` شامل مقدار قدیم/جدید (upsert روزانه، `uq_flock_feed_intake_day`)."},
+{id:"13.3",a:"`feed_type: \"mediocre\"`.",e:"400 `\"feed_type must be one of finisher, grower, starter\"`."},
+{id:"13.4",a:"`entry_date` بدون فرمت.",e:"400 `\"entry_date required (YYYY-MM-DD)\"`."},
+{id:"13.5",a:"GET `saloons/<id>/kpis/` بدون وزن و فید.",e:"`fcr` برابر null با دلیلِ null-مجاز؛ bundle شامل `mortality_pct`, `compliance_pct`, `cycle_summary`."},
+{id:"13.6",a:"`GET /panels/me/` برای member معمولی.",e:"8 پنل؛ `admin` با `visible:false`؛ بقیه true؛ هر مورد `source ∈ {owner-only,user-override,role,default}`."},
+{id:"13.7",a:"POST role-permission با manager.",e:"403 `\"owner role required\"`؛ با owner: panel نامعتبر → `\"unknown panel_id\"`، نقش نامعتبر → `\"unknown role\"`، `allowed: \"yes\"` → `\"allowed must be a boolean\"`."},
+{id:"13.8",a:"دو ردیف role برای یک پنل: یک allow و یک deny.",e:"deny برنده است (منطق all(allows)).",nt:"info"},
+{id:"13.9",a:"user-override روی allow گذاشتن پنل `admin` برای خود.",e:"رد: owner_only هیچ‌وقت با override/role باز نمی‌شود (fail-closed)."},
+{id:"13.10",a:"PUT `me/dashboard-config/` با مقدار غیربولی.",e:"400 `\"widgets must map known widget keys to booleans\"`؛ PUT معتبر → 200؛ GET بعدی نقشه‌ی `resolved_from` را جدا برای هر ویجت می‌دهد (`{\"live_readings\": \"personal\", …}`).",nt:"info"},
+{id:"13.11",a:"GET `capabilities/` برای سالن بدون sensor nh3.",e:"`nh3` در `live_metrics` نیست و ویژگی وابسته `available:false` با `missing_inputs` و `enable_path`؛ هرگز نه 0 و نه «نرمال».",nt:"info"},
+{id:"13.12",a:"POST biosecurity با `event_type:\"party\"`.",e:"400 با لیست کامل enum شش‌تایی به همین ترتیب (`disinfection, other, outbreak_prep, rodent_control, vehicle_entry, visitor_entry`)."}
+]},
+
+{num:14,title:"گزارش روزانه (Reports)",tests:[
+{id:"14.1",a:"POST گزارش با `bird_count: -5`.",e:"400 `\"bird_count must be a non-negative integer\"`."},
+{id:"14.2",a:"ارسال مقادیر فارسی: `ventilation_status:\"پایدار\"` و `health_status:\"هشدار\"` (تست جداگانه).",e:"نرمالایز به `STABLE` / `WARNING` (عادی/هشدار/بحرانی → NORMAL/WARNING/CRITICAL؛ پایدار/نیازمند بررسی/مشکل‌دار → STABLE/NEEDS_REVIEW/PROBLEM).",nt:"info"},
+{id:"14.3",a:"مقدار خارج از enum.",e:"400 `\"<key> must be one of […] (Persian literals accepted)\"`."},
+{id:"14.4",a:"POST همزمان `casualties_today: 5` و `mortality_count: 7`.",e:"400 `\"conflicting fields: casualties_today vs mortality_count\"`؛ تنها alias → 201 با canonical.",note:"چهار alias: casualties_today، feed_consumed_kg، water_consumed_l، avg_sample_weight_g."},
+{id:"14.5",a:"submit با checklist ناقص.",e:"400 `\"checklist incomplete\"` (شیء checklist هر سه `feed/water/device` را می‌خواهد؛ اگر خودِ checklist آبجکت نباشد → `\"checklist must be an object {feed, water, device}\"`)."},
+{id:"14.6",a:"گزارش با `medications: [{medication_name, dosage, frequency}]`.",e:"وضعیت نهایی FLAGGED + یک ردیف خودکار در `support_tickets` (نه doctor_tickets) + رویداد WS `report.flagged` به گروه `reports_<org_id>`.",nt:"info"},
+{id:"14.7",a:"همان flock/saloon/date دوباره.",e:"400 `\"a report for this flock/saloon/date already exists\"`."},
+{id:"14.8",a:`PATCH یک گزارش دیروز (بیش از 00:00 تهران).`,e:"403 `\"edit window closed (past 00:00 Asia/Tehran)\"`؛ بدون هیچ grace.",note:"D24-3 قفل نیمه‌شب؛ تست را 1 دقیقه بعد از نیمه‌شب هم بزنید: باز هم 403.",nt:"warn"},
+{id:"14.9",a:"با توکن support-session همان PATCH.",e:"200 مجاز + audit `REPORT_ADMIN_EDIT`."},
+{id:"14.10",a:"vet-review با نقش engineer؛ روی گزارش DRAFT؛ decision=\"MAYBE\".",e:"403 `\"reviewer role is read-only\"` برای read-only‌ها؛ 404 `\"report not found or not reviewable\"` (فقط SUBMITTED|FLAGGED)؛ 400 `\"decision must be APPROVED or REJECTED\"`."},
+{id:"14.11",a:"PATCH `status: \"APPROVED\"` از مسیر ویرایش.",e:"400 `\"status may only move between DRAFT and SUBMITTED here\"`."},
+{id:"14.12",a:"GET `reports/<saloon>/2026-13-45/`.",e:"400 `\"report_date must be YYYY-MM-DD\"` یا 404 `\"not found\"`."},
+{id:"14.13",a:"GET فهرست گزارش‌های سالن سازمان دیگر (`saloons/<id>/reports/`).",e:"403 `\"saloon not found in org\"`؛ قانون empty-200 فقط برای endpoint تک‌روزه (14.13b) است."},
+{id:"14.13b",a:"GET تک‌روزه‌ی سالن سازمان دیگر (`saloons/3/reports/2026-09-01/`).",e:"200 `{\"results\": [], \"count\": 0}`؛ بدون 403 و بدون سرنخ وجود.",nt:"danger"},
+{id:"14.14",a:"تلاش برای ساخت گزارش دوم روی همان (flock, saloon, date) با SQL مستقیم.",e:"نقض unique constraint `uq_daily_reports_flock_saloon_date`؛ این حالت در Postgres عملاً غیرقابل‌ساخت است و شاخه‌ی 400 endpoint کد مرده‌ی تدافعی است. محافظ واقعی: 400 تکراریِ 14.7.",nt:"info"}
+]},
+
+{num:15,title:"WebSocket / Channels",tests:[
+{id:"15.1",a:"اتصال `wss://…/ws/saloons/<id>/telemetry?token=<JWT>` معتبر.",e:"پیام hello: `{type: \"telemetry.hello\", saloon_id, org_id, thresholds}`."},
+{id:"15.2",a:"بدون token · token خراب · توکن staff بی‌org · سالن سازمان دیگر.",e:"هر چهار: handshake با HTTP 101 و سپس فریم close با کد 4003 روی سوکت. سمت سرور `AUTH-DENY clause=…` برای هر بند لاگ می‌شود.",note:"BUG-6 بسته شد (accept-then-close): کدهای 4003 واقعاً روی سیم دیده می‌شوند — تأیید زنده (raw-TLS: هر چهار بند 101+close 4003). قرارداد 4003 هم درون‌پردازشی (تست‌های Communicator) و هم روی سیم برقرار است.",nt:"info"},
+{id:"15.3",a:"با 10 اتصال باز و یک توکن نامعتبر.",e:"handshake با 101 و سپس close با 4003 (نه 4000)؛ در لاگ سرور `AUTH-DENY clause=bad-token` می‌آید، یعنی auth پیش از cap ارزیابی شده.",nt:"info"},
+{id:"15.4",a:"اتصال یازدهم معتبر.",e:"handshake با 101 و سپس close با 4000؛ شمارش `ws:active:<user_id>` دقیقاً 10 می‌ماند (بستنِ cap لاگ جدا ندارد — auth موفق بوده)."},
+{id:"15.5",a:"انتشار تلمتری زنده.",e:"رسیدن `telemetry.update` با `metrics` در عرض ≈ 2-4 ثانیه (beat 2s + push پس از commit)."},
+{id:"15.6",a:"gap_fill با `since` بی‌اعتبار.",e:"پیام خطای `{error: \"since must be an ISO datetime\"}`؛ بیش از 200 ردیف → truncate به `GAP_FILL_MAX_ROWS=200`."},
+{id:"15.7",a:"اتصال shim سازگار (`ws/farms/<slug>/telemetry`).",e:"فعلاً 500 روی همه‌ی اتصال‌ها (باگ ثبت‌شده‌ی BUG-7: نام kwarg مسیر `farmSlug` است ولی consumer دنبال `farm_slug` می‌گردد). پس از اصلاح: اولین پیام `connection_established` با `saloon_count`؛ ردیف‌های buffered هیچ‌وقت push نمی‌شوند. مسیر `api/compat/v1/ws/…` از پشت nginx به‌کل unreachable است (404؛ فقط `/ws/` هدر Upgrade دارد).",note:"BUG-7 باز است.",nt:"danger"},
+{id:"15.8",a:"Redis را وسط کار بکشید و اتصال جدید بسازید.",e:"فعلاً 500 روی همه‌ی اتصال‌ها (باگ ثبت‌شده‌ی BUG-8: group-join و snapshot آستانه هم به redis نیاز دارند). ادعای fail-open فقط شمارنده‌ی cap را پوشش می‌دهد، نه کل اتصال.",note:"BUG-8 باز است: قطعی redis یعنی قطعی کامل سوکت‌های زنده.",nt:"danger"},
+{id:"15.9",a:"301 ثانیه بی‌فعالی کامل روی کانکشن (client بدون ping/pong).",e:"بستن اتصالِ بی‌پاسخ: daphne با `ping_interval 20s + ping_timeout 30s` حدود ثانیهٔ 50 می‌بندد (سخت‌گیرانه‌تر از nginx)؛ `proxy_read_timeout 300s` پشتیبانِ nginx می‌ماند. client باید ping را جواب دهد."},
+{id:"15.10",a:"قطع و اتصال سریع 20 بار.",e:"هیچ ردیف zombie تجمیع نمی‌شود (TTL 300 ثانیه روی `ws:active` در هر اتصال/پیام تمدید)."}
+]},
+
+{num:16,title:"عملیات، پایش و Admin",tests:[
+{id:"16.1",a:"GET `https://host/api/v1/metrics/` از بیرون.",e:"404 (مسدود nginx).",note:"تنها نگهبان، مسدودی nginx است؛ دسترسی مستقیم دیفنه:8000 (از داخل شبکه) 200 می‌دهد. اگر 404 نشد: نشتی پیکربندی؛ بحرانی.",nt:"danger"},
+{id:"16.2",a:"از داخل شبکه daphne را direct بزنید.",e:"200 text/prometheus شامل `telemetry_ingested_total`, `telemetry_dead_letter_depth`, `celery_queue_depth{queue=\"alerts\"}`, `websocket_active_connections`, `tenant_cost_estimate_usd`."},
+{id:"16.3",a:"GET `health/`؛ سپس Redis را متوقف کنید و تکرار.",e:"اول 200 با `checks.db: ok` و XLENها؛ دوم 503 degraded (timeout 0.6 ثانیه)."},
+{id:"16.4",a:"GET `status/` بدون احراز هویت.",e:"200 صفحه عمومی؛ SLO `99.9` روی پنجره `14d`؛ اگر Prometheus قطع باشد، مقدار «unknown» و همچنان 200 (نه 500)."},
+{id:"16.5",a:"POST `auth/password/change/` با رمز 9 کاراکتری؛ سپس «password123…» رایج؛ سپس تلاش چهارم در یک دقیقه.",e:"به‌ترتیب: 400 `\"new password too short (min 10)\"`، 400 `\"password is too common\"`، و 429 روی تلاش چهارم. توجه: بدنه‌ی واقعی 429 متن عمومی DRF است؛ جمله‌ی کامل فقط در توضیح OpenAPI آمده.",nt:"info"},,
+{id:"16.6",a:"GET `auth/sessions/`؛ DELETE یک session؛ refresh آن.",e:"لیست جاری‌ها؛ revoke موفق؛ refresh → 401 `\"session revoked\"`."},
+{id:"16.7",a:"GET `audit-logs/`.",e:"فقط رویدادهای سازمان خود؛ pagination `limit` سقف 500؛ `limit=abc` → 400 `\"invalid pagination\"`."},
+{id:"16.8",a:"PUT `thresholds/<id>` با `temp_max: 85`.",e:"400 `\"threshold out of range\"` (پیام عمومی است و عدد bound را بازتاب نمی‌دهد)؛ رطوبت 101 هم رد (0..100)."},
+{id:"16.9",a:"POST عکس 11 مگابایتی روی `saloons/<id>/photos/`؛ و فایل gif.",e:"اولی: 413 از nginx (client_max_body_size 10m زودتر از Django-ی 12MB)؛ دومی 400 (فقط jpg/png تا 10MB)."},
+{id:"16.10",a:"GET `/admin/` از پروکسی.",e:"200 صفحه لاگین (اصلاح R3-fix؛ قبلاً از nginx مسدود بود)."},
+{id:"16.11",a:"ورود admin با سوپرکاربر؛ نام Farm را حاوی `<img src=x onerror=alert(1)>` کنید و `GET /farms/1/overview/` بزنید.",e:"رشته‌ی خام در JSON بازتاب می‌یابد (escape وظیفه‌ی لایه‌ی نمایش است)؛ در HTML ادمین escape شده؛ هیچ اسکریپتی اجرا نمی‌شود. توجه: مسیر GET تکی `farms/<id>/` وجود ندارد (405)."},
+{id:"16.12",a:"سرویس beat را بکشید؛ 6 دقیقه صبر؛ `GET metrics` و سپس rule.",e:"`celery_beat_heartbeat_timestamp_seconds` منجمد؛ شرط staleness > 300 ثانیه (BeatHeartbeatStale) برقرار."},
+{id:"16.13",a:"GET `reconciliation/` بدون `?day=` و سپس با `?day=YYYY-MM-DD`.",e:"فعلاً بدون day → 500 (باگ ثبت‌شده‌ی BUG-2: پیش‌فرض «دیروز» پیاده نشده)؛ با day معتبر → 200 با سقف‌های اسکن و تاریخ‌های تهران.",note:"BUG-2 باز است؛ پس از اصلاح، این ردیف باید 200 + پیش‌فرض دیروز بدهد.",nt:"danger"},
+{id:"16.14",a:"در صفحه `/api/v1/status/` با کیبورد (Tab) حرکت کنید و `prefers-reduced-motion` را در DevTools فعال کنید.",e:"تمرکز دیده می‌شود؛ انیمیشنی اجرا نمی‌شود؛ چیدمان RTL و فارسی در آینه‌ی `dir=rtl` نشکسته."}
+]},
+
+{num:17,title:"زیرساخت: Celery، Redis، Nginx",tests:[
+{id:"17.1",a:"اجرای تست شبیه‌سازی زنده: XADD دستی روی `telemetry:realtime`.",e:"ردیف DB در ≤4 ثانیه (kick هر 2 ثانیه؛ batch 50)."},
+{id:"17.2",a:"`simulate_gateway.py --replay-hours 1` (~60 پیام buffered).",e:"مصرف pacing با `replay_rate_limit_per_min=50` و سقف هر سازمان 20/60 ثانیه؛ `replay:pending:<slot>` INCR سپس با تخلیه ≤0 یک sweep (NX) می‌دود."},
+{id:"17.3",a:"وسط batch، worker را `kill -9` کنید.",e:"پس از 60 ثانیه (`ORPHAN_PEL_IDLE_SEC`) پیام‌ها توسط XAUTOCLAIM reclaim و بدون ردیف تکراری (UNIQUE + ignore_conflicts) نهایی می‌شوند."},
+{id:"17.4",a:"`kill -9` روی redis با AOF (`appendfsync always`)؛ restart.",e:"استریم‌ها و hashها پس از بوت باقی‌اند (XLEN realtime > 0).",note:"maxmemory-policy = noeviction: اگر نوشتنِ تازه رد شد و استریم‌ها trim بودند، bug است نه policy."},
+{id:"17.5",a:"30 GET همزمان `/api/v1/health/` از بیرون.",e:"ترکیب 200/429 (zone api: 5r/s burst=20 nodelay). هیچ 500 نباشد."},
+{id:"17.6",a:"GET `http://host/anything`.",e:"301 به `https://host/anything`؛ استثنای `http://127.0.0.1/healthz` → 200 `ok`."},
+{id:"17.7",a:"`openssl s_client -tls1_2`.",e:"رد؛ فقط TLSv1.3. در پاسخ HTTPS: `X-Content-Type-Options: nosniff`، `X-Frame-Options: DENY`، `Strict-Transport-Security: max-age=63072000; includeSubDomains`، هدر `Server` بدون نسخه."},
+{id:"17.8",a:"grep روی access.log برای کلید `token=`.",e:"صفر هیت؛ log_format فقط `$request_method $uri` است."},
+{id:"17.9",a:"docker health را روی هر 9 کانتینر چک کنید (`docker inspect -f`).",e:"همه `healthy`؛ الگوهای healthcheck همان `pg_isready`، `redis-cli ping`، `emqx ctl status`، سوکت `HTTP/` دیفنه، `celery inspect ping`."},
+{id:"17.10",a:"تغییر رمز redis و restart.",e:"همه سرویس‌ها (subscriber/worker/daphne) سالم بالا می‌آیند (env واحد `REDIS_PASSWORD`). هشدار: پس از هر recreate باید `nginx -s reload` بزنید وگرنه API تا ابد 502 می‌دهد (باگ ثبت‌شده‌ی BUG-14).",note:"BUG-14 باز است.",nt:"danger"},
+{id:"17.11",a:"`docker compose logs daphne` پس از startup با env ناقص.",e:"بوت production بدون `DJANGO_ALLOWED_HOSTS` یا `DATABASE_URL` باید RuntimeError بدهد (fail-fast)؛ نه خاموشی."}
+]},
+
+{num:18,title:"لایه سازگاری (Compat v1)",tests:[
+{id:"18.1",a:"GET `api/compat/v1/farms/farm-1/salons/device-1/reports/` معتبر (با توکن).",e:"200؛ بدون توکن 401 (لایه‌ی compat هم احراز پیش‌فرض دارد). هر دو پیشوند `api/compat/v1` و `api` یک‌سان سرو می‌شوند بدون 301.",nt:"info"},
+{id:"18.2",a:"slug ناموجود (`farm-999`) / حاوی زیرخط (`farm_1`).",e:"اولی 404 JSON `{\"error\": \"not found\"}`؛ دومی 404 در سطح مسیریابی (regex زیرخط را نمی‌پذیرد)؛ هیچ 400 و هیچ تمایز وجودی نباشد.",note:"slug regex = `[A-Za-z0-9-]{1,64}`.",nt:"danger"},
+{id:"18.3",a:"`POST api/compat/v1/reports/` بدون slugها.",e:"400 `\"farm_slug and salon_slug are required\"`؛ GET روی همین مسیر 405 است چون W3 فقط POST دارد."},
+{id:"18.4",a:"`?status=incomplete`.",e:"فقط DRAFT+SUBMITTED (رفتار انحصاری compat)."},
+{id:"18.5",a:"`from=2026-01-05&to=2026-01-01`.",e:"400 `\"invalid time window\"`؛ فرمت بد → `\"from/to must be YYYY-MM-DD\"`."},
+{id:"18.6",a:"اجرای `manage.py backfill_legacy_slugs` دوبار.",e:"idempotent: تعداد ردیف‌های `legacy_slug_map` در اجرای دوم ثابت."}
+]},
+
+{num:19,title:"بازیابی، استقرار و رانش‌ها",tests:[
+{id:"19.1",a:"`./scripts/deploy.sh <tag-تازه>` (ایمیج معیوب).",e:"health-gate روی 9 کانتینر شکست → auto-rollback به تگ `.deploy_tag` قبلی؛ exit 1.",note:"اگر rollback هم ناسالم باشد exit 2؛ در آن حالت دستی مداخله کنید.",nt:"info"},
+{id:"19.2",a:"اجرای `scripts/backup.sh`.",e:"فایل `morghdari_YYYYMMDD.dump` + `aws s3 cp` (در `REHEARSAL=1` آپلود skip؛ پاک‌سازی بیش از 30 روز)."},
+{id:"19.3",a:"`walg_base_backup.sh`.",e:"`wal-g backup-push` موفق و ردیف تازه در `backup-list`."},
+{id:"19.4",a:"`pitr_rehearsal.sh` (رانش T2).",e:"ردیف markerِ پس از target باید ناپدید باشد؛ شمارش‌های پیش‌از هدف برابری کنند؛ hypertables سالم؛ RTO ≤ 240 دقیقه در DR-LOG ثبت شود.",note:"RPO برنامه‌ریزی‌شده ≤ 1 ساعت (`archive_timeout 300` یعنی WAL حداکثر هر 5 دقیقه push؛ ولی بازه ارسال نهایی تا 300 ثانیه).",nt:"warn"},
+{id:"19.5",a:"`restore_rehearsal.sh` (T1: pg_dump).",e:"restore با خطاهای فیلترشده (not a hypertable و…)؛ verify برابر؛ `up -d` و nginx reload.",nt:"info"},
+{id:"19.6",a:"`redis_wipe_drill.sh` (T3).",e:"Redis خالی بالا می‌آید؛ `rebuild_active_state_from_db` هشدارهای فعال را از DB می‌سازد؛ hashهای `saloon:*:thresholds` بازتولید؛ LOS برای 10 دقیقه خاموش (9.10)؛ RTO ≤ 15 دقیقه."},
+{id:"19.7",a:"اجرای `scripts/run_acceptance.sh`.",e:"سه گیت PASS: migrate-gate DEPLOYABLE · pytest+coverage (view/api ≥ 80٪ سبز، services ≥ 90٪ فقط هشدار) · trivy بدون CRITICAL/HIGH قابل‌رفع."},
+{id:"19.8",a:"اجرای `prod_bootstrap.sh` دوبار.",e:"دومی idempotent (ALTER ROLE/GRANT/seed تکراری بدون خطا)."},
+{id:"19.9",a:"`kill -9` روی daphne (`docker kill`).",e:"انتظار (BUG-12، رفتار Docker Desktop): پس از kill خودکار برنمی‌گردد (RestartCount صفر می‌ماند)؛ اپراتور `docker start` می‌زند ← حداکثر 40 ثانیه healthy؛ در فاصله 502/429 (نه timeout بی‌نهایت). مشاهده‌شده (سه‌بار، از جمله 2026-09-14): بدون auto-restart در 120 ثانیه؛ `docker start` دستی ← حدود 5 ثانیه healthy با 200.",note:"BUG-12 باز است؛ روی VPS لینوکسی دوباره راستی‌آزمایی شود.",nt:"danger"},
+{id:"19.10",a:"`scripts/check_hil_readiness.py --skip-live`.",e:"C4–C7 PASS (مسیر diagnostics، تاپیک‌های clock/sync و ota/response، ota_checksums.py، seed)."},
+{id:"19.11",a:"`ota_checksums.py firmware.bin --version 1.2.3 --url …`.",e:"sidecar JSON با `checksum_sha256` (sha256 خالص، chunk 1MiB)؛ نبود فایل → exit 2 (روی کنسول ویندوز خروجی `--help` به UTF-8 نیاز دارد، وگرنه cp1252 می‌شکند؛ مشکل اسکریپت نیست)."}
+]},
+
+{num:20,title:"جریان‌ای سرتاسری (E2E)",tests:[
+{id:"20.1",a:"مسیر Onboard: login owner → ساخت farm/saloon → (staff) register hardware → invite installer → gateway-request → review APPROVE → sync → PROVISIONED → `simulate_farm.py` وصل شود → GET telemetry و WS.",e:"در هر گام status‌های انتظار: 201/200؛ پس از انتشار، WS پیام `telemetry.update` می‌دهد و `GET /api/v1/gateways/<slot>/diagnostics/` همان `diag:last:<slot>` را با فیلدهای `battery_v, rssi, free_heap, sd_ok, errors` نشان می‌دهد."},
+{id:"20.2",a:"مسیر Breach→Escalate→Ack→Resolve (سناریو «temp breach saloon1 +6 بالای 30»): 20 دقیقه ادامه، ack در دقیقه 10، سپس نرمال.",e:"T1 در ≈ دقیقه 15 (duration 900)؛ ack فریز می‌کند؛ پس از انقضای pause و ادامه breach، T2؛ برگشت نرمال → RESOLVED در ≤120 ثانیه؛ در metrics شمارش‌های `alerts_created_total{tier=\"1\"}` رشد."},
+{id:"20.3",a:"مسیر Offline→Replay: gateway را 1 ساعت با `--replay-hours 1` بالا بیاورید (60 ویندوز buffered قدیمی‌بهتازة).",e:"صف `telemetry:historical` با pacing 50/دقیقه تخلیه؛ ردیف‌ها `is_buffered=true`؛ alert‌های آستانه‌شکن از replay: `source=REPLAY_ANALYSIS` و `batch_id: \"<slot>:<first_device_ts>\"`؛ بدون push زنده و بدون تشدید (9.12)؛ `replay:pending:<slot>` تا صفر کسرش و یک sweep."},
+{id:"20.4",a:"مسیر Support Lifecycle: staff mfa login → support session → force-resolve یک alert → drain_pending_approval → انقضای 900 ثانیه.",e:"هر عمل در پنجره درست؛ پس از انقضا، همان عملیات 403 `\"no active support session for this org\"`؛ ردیف‌های SUPPORT_* کامل در audit."},
+{id:"20.5",a:"مسیر LOS-Correlation: با سناریوی 220-226، ≥70٪ slotهای یک فارم در 3 دقیقه قطع.",e:"یک page تجمیعی GS-CORRELATION؛ LOSهای بعدی آن فارم تا 10 دقیقه suppress ولی فارم دیگر عادی page می‌کند؛ کلیدهای `farm:los:` و `farm:corr:muted:` مشاهده‌پذیر."}
+]},
+
+{num:21,title:"مرور الف؛ «باید» خطا ببینیم (نبود خطا = باگ)",first:"ورودی / عمل",tests:[
+{id:"21.1",a:"POST login بی‌رمز",e:"401/400؛ 200 یا توکن خالی یعنی باگ"},
+{id:"21.2",a:"login عضو با عضویت صفر (RLS stack)",e:"401 `\"no active org membership\"`"},
+{id:"21.3",a:"staff login بدون TOTP",e:"403 `\"mfa_required\"`"},
+{id:"21.4",a:"refresh پس از revoke نقش",e:"401 `\"session revoked\"`"},
+{id:"21.5",a:"خواندن سازمان متقاطع (تلمتری/گزارش/اعضا)",e:"401/403/404 یا خالی؛ هیچ بایت داده متقاطع نه"},
+{id:"21.6",a:"mute بیش از 72 ساعت",e:"400"},
+{id:"21.7",a:"پنجره mute همپوش",e:"409"},
+{id:"21.8",a:"PATCH وضعیت سالن با پرش حلقه",e:"400 `\"illegal transition …\"`"},
+{id:"21.9",a:"درخواست gateway پنجم pending",e:"400 سقف سهمیه"},
+{id:"21.10",a:"تغییر رمز تلاش چهارم در دقیقه",e:"429 `auth_strict 3/min`"},
+{id:"21.11",a:"رمز 9 کاراکتری",e:"400"},
+{id:"21.12",a:"گزارش دیروز PATCH",e:"403 `\"edit window closed …\"`"},
+{id:"21.13",a:"conflict alias/canonical در گزارش",e:"400"},
+{id:"21.14",a:"`limit=1001`",e:"400 بین 1 و 1000"},
+{id:"21.15",a:"GET /metrics از بیرون",e:"404"},
+{id:"21.16",a:"WS با توکن سازمان دیگر",e:"close 4003"},
+{id:"21.17",a:"publish روی gateway suspended",e:"DLQ `\"gateway_suspended\"`"},
+{id:"21.18",a:"schema_version 1.9",e:"DLQ `\"UNSUPPORTED_SCHEMA_VERSION\"`"},
+{id:"21.19",a:"sync همزمان دوم",e:"409 + Retry-After: 3"},
+{id:"21.20",a:"action خارج از suspend/resume ساپورت",e:"400"}
+]},
+
+{num:22,title:"مرور ب؛ «نباید» خطا/خروج ببینیم (خطا یا logout = باگ)",first:"ورودی / عمل",tests:[
+{id:"22.1",a:"تکرار پیام با همان device_ts",e:"سکوت: نه خطا نه ردیف تکراری (dedup)"},
+{id:"22.2",a:"`since` بی‌اعتبار در تلمتری",e:"200 نادیده‌گرفتن، نه 400"},
+{id:"22.3",a:"تکرار ack روی همان alert",e:"200 با تمدید pause؛ نه 409"},
+{id:"22.4",a:"تکرار force-resolve روی alert حل‌شده",e:"200 با `\"idempotent\": true`"},
+{id:"22.5",a:"re-invite عضو deactivate‌شده",e:"200 بازفعال‌سازی"},
+{id:"22.6",a:"دو پنجره mute تماسی (لبه‌به‌لبه)",e:"200/201"},
+{id:"22.7",a:"خواندن فهرست‌ها با توکن staff بدون نشست",e:"400 `\"organization context required\"` روی `farms/`؛ لیست خالیِ 200 روی `alerts/` — هیچ دو هیچ‌وقت 500 نه"},
+{id:"22.8",a:"slug سازگاری ناموجود",e:"404 یکنواخت؛ بدون 400 و بدون افشا"},
+{id:"22.9",a:"refresh توکن (بدون چرخش)",e:"200 فقط با `access`؛ session جاری باقی و `last_seen_at` تمدید"},
+{id:"22.10",a:"slot بدون ردیف provisioning (demo)",e:"پذیرش عادی"},
+{id:"22.11",a:"Redis down حین گارد دمای ACTIVE_FLOCK",e:"degrade-to-allow؛ نه 500"},
+{id:"22.12",a:"تغییر نقش عضو",e:"خودِ درخواست 200 است؛ فقط refreshهای بعدی عضو رد می‌شوند (نه قطعِ اجباری توکن فعلی)"},
+{id:"22.13",a:"وضعیت Prometheus در صفحه status",e:"200 «unknown»؛ نه 500"},
+{id:"22.14",a:"بوت redis wipe",e:"10 دقیقه بدون LOS؛ سپس ادامه عادی"},
+{id:"22.15",a:"پاسخ‌های JSON با متن فارسی («مرغداری طوس»)",e:"یونیکد سالم در پاسخ و audit؛ بدون mojibake"}
+]}
+];
+
+/* ---------------- موتور رندر ---------------- */
+function fmt(target,src){ /* متن ساده با `کد`؛ همه‌چیز از طریق textContent ساخته می‌شود */
+  var parts=String(src).split("`");
+  for(var i=0;i<parts.length;i++){
+    if(i%2===1){var c=document.createElement("code");c.textContent=parts[i];target.appendChild(c);}
+    else if(parts[i]){target.appendChild(document.createTextNode(parts[i]));}
+  }
+}
+var state={};
+try{state=JSON.parse(localStorage.getItem(STORAGE_KEY)||"{}")||{};}catch(e){state={};}
+function save(){try{localStorage.setItem(STORAGE_KEY,JSON.stringify(state));}catch(e){}}
+var allTests=[];SECTIONS.forEach(function(s){s.tests.forEach(function(t){allTests.push(t);});});
+
+var host=document.getElementById("sections");
+var toc=document.getElementById("toc");
+
+SECTIONS.forEach(function(s){
+  var sec=document.createElement("section");sec.className="mod";sec.id="sec"+s.num;sec.dataset.open="true";
+  var head=document.createElement("div");head.className="modhead";
+  var row=document.createElement("div");row.className="row1";
+  var caret=document.createElement("button");caret.className="caretbtn";caret.setAttribute("aria-label","باز/بستن بخش");
+  caret.addEventListener("click",function(){sec.dataset.open=sec.dataset.open==="true"?"false":"true";});
+  var h2=document.createElement("h2");
+  var n=document.createElement("span");n.className="modnum";n.textContent=String(s.num);
+  h2.appendChild(n);h2.appendChild(document.createTextNode("؛ "+s.title));
+  var mp=document.createElement("div");mp.className="miniprog";
+  var mpi=[document.createElement("i"),document.createElement("i"),document.createElement("i")];
+  mpi[0].className="p";mpi[1].className="f";mpi[2].className="n";
+  mpi.forEach(function(x){mp.appendChild(x);});
+  var mc=document.createElement("span");mc.className="minicount";
+  row.appendChild(caret);row.appendChild(h2);row.appendChild(mp);row.appendChild(mc);
+  head.appendChild(row);sec.appendChild(head);
+
+  var body=document.createElement("div");body.className="modbody";
+  if(s.num===0){
+    var intro=document.createElement("p");intro.className="modintro";fmt(intro,s.intro);body.appendChild(intro);
+    var tw=document.createElement("div");tw.className="tablewrap";
+    var tb=document.createElement("table");tb.className="setup";
+    var trh=document.createElement("tr");
+    ["مورد","چه چیزی/فرمان","مقدار و دلیل"].forEach(function(x){var th=document.createElement("th");th.textContent=x;trh.appendChild(th);});
+    tb.appendChild(trh);
+    SETUP.forEach(function(r){
+      var tr=document.createElement("tr");
+      r.forEach(function(cell){var td=document.createElement("td");fmt(td,cell);tr.appendChild(td);});
+      tb.appendChild(tr);
+    });
+    tw.appendChild(tb);body.appendChild(tw);
+  }else{
+    if(s.intro){var p=document.createElement("p");p.className="modintro";fmt(p,s.intro);body.appendChild(p);}
+    s.tests.forEach(function(t){
+      var tr=document.createElement("div");tr.className="trow";tr.dataset.id=t.id;
+      var st=state[t.id];if(st)tr.dataset.state=st;
+      var tid=document.createElement("span");tid.className="tid";tid.textContent=t.id;
+      var ca=document.createElement("div");ca.className="tcell";
+      var la=document.createElement("b");la.className="lbl";la.textContent=s.first||"اقدام";ca.appendChild(la);
+      var aa=document.createElement("div");fmt(aa,t.a);ca.appendChild(aa);
+      var ce=document.createElement("div");ce.className="tcell";
+      var le=document.createElement("b");le.className="lbl";le.textContent="انتظار (باید دقیقاً محقق شود)";ce.appendChild(le);
+      var ae=document.createElement("div");fmt(ae,t.e);ce.appendChild(ae);
+      var btns=document.createElement("div");btns.className="tbtns";
+      [["pass","✓","قبول"],["fail","✕","رد"],["na","–","نامرتبط"]].forEach(function(b){
+        var el=document.createElement("button");el.className="stbtn sb-"+b[0];el.textContent=b[1];
+        el.title=b[2];el.setAttribute("aria-label",b[2]+"؛ تست "+t.id);
+        el.addEventListener("click",function(){
+          if(state[t.id]===b[0])delete state[t.id];else state[t.id]=b[0];
+          save();applyRow(tr,t.id);refresh();
+        });
+        btns.appendChild(el);
+      });
+      tr.appendChild(tid);tr.appendChild(ca);tr.appendChild(ce);tr.appendChild(btns);
+      if(t.note){var nt=document.createElement("div");nt.className="note n-"+(t.nt||"info");
+        var nb=document.createElement("b");nb.textContent=({info:"توضیح: ",warn:"هشدار: ",danger:"خطر/امنیت: ",decision:"نیازمند تصمیم: "})[t.nt||"info"];
+        nt.appendChild(nb);fmt(nt,t.note);
+        var wrap=document.createElement("div");wrap.className="tnote";wrap.appendChild(nt);tr.appendChild(wrap);}
+      body.appendChild(tr);
+    });
+    var nm=document.createElement("div");nm.className="nomatch";nm.textContent="هیچ تستی با این جست‌وجو/فیلتر در این بخش نیست.";body.appendChild(nm);
+  }
+  sec.appendChild(body);host.appendChild(sec);
+
+  var ta=document.createElement("a");ta.href="#sec"+s.num;
+  ta.textContent=s.num+"؛ "+s.title;ta.dataset.target="sec"+s.num;
+  toc.appendChild(ta);
+});
+
+function applyRow(tr,id){var st=state[id];if(st)tr.dataset.state=st;else tr.removeAttribute("data-state");}
+function counts(list){var p=0,f=0,n=0;list.forEach(function(t){var s=state[t.id];if(s==="pass")p++;else if(s==="fail")f++;else if(s==="na")n++;});return{p:p,f:f,n:n,r:list.length-p-f-n};}
+var gbar=host; // placeholder
+var pP=document.querySelector("#toolbar .pbar .p"),pF=document.querySelector("#toolbar .pbar .f"),pN=document.querySelector("#toolbar .pbar .n");
+var cnt=document.getElementById("counts");
+
+function refresh(){
+  var total=allTests.length,c=counts(allTests);
+  pP.style.width=(c.p/total*100)+"%";pF.style.width=(c.f/total*100)+"%";pN.style.width=(c.n/total*100)+"%";
+  cnt.textContent="";
+  function seg(cls,label,val){var b=document.createElement("b");b.className=cls;b.textContent=label+": "+val;cnt.appendChild(b);cnt.appendChild(document.createTextNode(" "));}
+  seg("c-p","موفق",c.p);seg("c-f","رد",c.f);seg("c-n","N/A",c.n);seg("c-r","باقی",c.r);
+  SECTIONS.forEach(function(s){
+    var sec=document.getElementById("sec"+s.num);
+    var mini=sec.querySelectorAll(".miniprog i"),mc=sec.querySelector(".minicount");
+    if(s.num!==0){
+      var sc=counts(s.tests),tt=s.tests.length;
+      mini[0].style.width=(sc.p/tt*100)+"%";mini[1].style.width=(sc.f/tt*100)+"%";mini[2].style.width=(sc.n/tt*100)+"%";
+      mc.textContent=(sc.p+sc.f+sc.n)+"/"+tt;
+    }
+  });
+  applyFilters();
+}
+
+var qInput=document.getElementById("q"),filter="all";
+function rowVisible(t){
+  var st=state[t.id];
+  if(filter==="todo"&&st)return false;
+  if((filter==="pass"||filter==="fail")&&st!==filter)return false;
+  var q=qInput.value.trim().toLowerCase();
+  if(q){var hay=(t.id+" "+t.a+" "+t.e+" "+(t.note||"")).toLowerCase();
+    if(hay.indexOf(q)===-1)return false;}
+  return true;
+}
+function applyFilters(){
+  var anyQuery=qInput.value.trim().length>0;
+  SECTIONS.forEach(function(s){
+    var sec=document.getElementById("sec"+s.num);
+    if(s.num===0||!s.tests){sec.classList.remove("hidden");sec.classList.remove("searching");return;}
+    var visible=0;
+    s.tests.forEach(function(t){
+      var tr=sec.querySelector('.trow[data-id="'+t.id+'"]');
+      if(!tr)return;
+      var v=rowVisible(t);tr.classList.toggle("hidden",!v);if(v)visible++;
+    });
+    sec.classList.toggle("searching",anyQuery&&visible===0&&s.tests.length>0);
+    var hideByFilter=visible===0&&filter!=="all"&&!anyQuery;
+    var hideBySearch=visible===0&&anyQuery&&filter!=="all";
+    sec.classList.toggle("hidden",hideByFilter||hideBySearch);
+  });
+}
+qInput.addEventListener("input",refresh);
+document.querySelectorAll(".chip").forEach(function(ch){
+  ch.addEventListener("click",function(){
+    document.querySelectorAll(".chip").forEach(function(x){x.setAttribute("aria-pressed","false");});
+    ch.setAttribute("aria-pressed","true");filter=ch.dataset.f;refresh();
+  });
+});
+document.getElementById("expandall").addEventListener("click",function(){
+  var secs=document.querySelectorAll("section.mod");
+  var anyOpen=Array.prototype.some.call(secs,function(s){return s.dataset.open==="true";});
+  secs.forEach(function(s){s.dataset.open=anyOpen?"false":"true";});
+});
+document.getElementById("resetall").addEventListener("click",function(){
+  if(confirm("همه نتایج تیک‌ها پاک شود؟ این کار قابل بازگشت نیست.")){state={};save();
+    document.querySelectorAll(".trow").forEach(function(tr){tr.removeAttribute("data-state");});refresh();}
+});
+
+/* scroll-spy + back-to-top */
+var tocLinks=toc.querySelectorAll("a");
+var back=document.getElementById("backtop");
+function spy(){
+  var y=window.scrollY+200,cur=null;
+  SECTIONS.forEach(function(s){var el=document.getElementById("sec"+s.num);if(el.offsetTop<=y)cur=s.num;});
+  tocLinks.forEach(function(a){a.classList.toggle("active",a.dataset.target==="sec"+cur);});
+  back.classList.toggle("show",window.scrollY>600);
+}
+window.addEventListener("scroll",spy,{passive:true});
+back.addEventListener("click",function(){window.scrollTo({top:0});});
+window.addEventListener("beforeprint",function(){document.querySelectorAll("section.mod").forEach(function(s){s.dataset.open="true";});});
+refresh();spy();
+</script>
+</body>
+</html>

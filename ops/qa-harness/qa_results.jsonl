@@ -1,0 +1,1013 @@
+{"id": "1.1", "verdict": "PASS", "observed": "{'keys': ['access_token', 'refresh_token', 'user'], 'user_keys': ['id', 'is_platform_staff', 'org_id', 'org_name', 'roles', 'username']}"}
+{"id": "1.2", "verdict": "PASS", "observed": ""}
+{"id": "1.3", "verdict": "PASS", "observed": "{'detail': 'No active account found with the given credentials'}"}
+{"id": "1.4", "verdict": "PASS", "observed": ""}
+{"id": "1.5", "verdict": "PASS", "observed": "{'username': ['This field may not be blank.']}"}
+{"id": "1.6", "verdict": "PASS", "observed": "{'detail': 'no active org membership'}"}
+{"id": "1.7", "verdict": "PASS", "observed": "Other Co"}
+{"id": "1.8", "verdict": "PASS", "observed": "{'error': 'mfa_required', 'detail': 'platform-staff accounts must verify a TOTP code', 'enrolled': True}"}
+{"id": "1.9", "verdict": "PASS", "observed": "{'error': 'mfa_required', 'detail': 'no confirmed MFA enrollment — POST /auth/mfa/setup/', 'enrolled': False}"}
+{"id": "1.10", "verdict": "PASS", "observed": "{'token_type': 'access', 'exp': 1789297374, 'iat': 1789296474, 'jti': '777dde8eb7584dad8f0a3cd216104241', 'user_id': '11', 'roles': [], 'is_platform_staff': True, 'sid': '9c026e05aa0e40c1877b87aabafd485a'}"}
+{"id": "1.11", "verdict": "PASS", "observed": "WINDOW=1 ±step accepted"}
+{"id": "1.11b", "verdict": "PASS", "observed": "two steps back rejected"}
+{"id": "1.12", "verdict": "PASS", "observed": "{'error': 'caller lacks the support platform claim'}"}
+{"id": "1.13", "verdict": "PASS", "observed": "{'status': 200, 'uri': 'otpauth://totp/Morghdari:support1?secret'}"}
+{"id": "1.14", "verdict": "PASS", "observed": "{'error': 'invalid or already-confirmed code'}"}
+{"id": "1.15", "verdict": "PASS", "observed": "{'error': 'code required'}"}
+{"id": "1.16", "verdict": "PASS", "observed": "20 bad codes, all 400 (no 429/lockout)"}
+{"id": "1.18", "verdict": "FAIL", "observed": "before=400 after=401"}
+{"id": "1.19", "verdict": "PASS", "observed": "['access']"}
+{"id": "1.1", "verdict": "PASS", "observed": "['access_token', 'refresh_token', 'user']"}
+{"id": "1.2", "verdict": "PASS", "observed": ""}
+{"id": "1.3", "verdict": "PASS", "observed": "{'detail': 'No active account found with the given credentials'}"}
+{"id": "1.4", "verdict": "PASS", "observed": ""}
+{"id": "1.5", "verdict": "PASS", "observed": "{'username': ['This field may not be blank.']}"}
+{"id": "1.6", "verdict": "PASS", "observed": "{'detail': 'no active org membership'}"}
+{"id": "1.7", "verdict": "PASS", "observed": "Other Co"}
+{"id": "1.8", "verdict": "PASS", "observed": "{'error': 'mfa_required', 'detail': 'platform-staff accounts must verify a TOTP code', 'enrolled': True}"}
+{"id": "1.9", "verdict": "PASS", "observed": "{'error': 'mfa_required', 'detail': 'no confirmed MFA enrollment — POST /auth/mfa/setup/', 'enrolled': False}"}
+{"id": "1.10", "verdict": "PASS", "observed": "staff token org-less, is_platform_staff true"}
+{"id": "1.11", "verdict": "PASS", "observed": "prev-step code accepted (WINDOW=1)"}
+{"id": "1.11b", "verdict": "PASS", "observed": "two steps back rejected"}
+{"id": "1.12", "verdict": "PASS", "observed": "{'error': 'caller lacks the support platform claim'}"}
+{"id": "1.13", "verdict": "PASS", "observed": "{'status': 200, 'otpauth': 'otpauth://totp/Morghdari:qastaff-297040?secret'}"}
+{"id": "1.14", "verdict": "PASS", "observed": "{'error': 'invalid or already-confirmed code'}"}
+{"id": "1.17", "verdict": "PASS", "observed": "{'first': 200, 'dup': 400}"}
+{"id": "1.15", "verdict": "PASS", "observed": "{'error': 'code required'}"}
+{"id": "1.16", "verdict": "PASS", "observed": "20x 400, zero 429"}
+{"id": "1.18", "verdict": "NA", "observed": "s/shell.py\", line 117, in handle\n    exec(options[\"command\"], globals())\n  File \"<string>\", line 8, in <module>\nTypeError: 'AccessToken' object is not callable\n"}
+{"id": "1.19", "verdict": "PASS", "observed": "['access']"}
+{"id": "1.1", "verdict": "PASS", "observed": "['access_token', 'refresh_token', 'user']"}
+{"id": "1.2", "verdict": "PASS", "observed": ""}
+{"id": "1.3", "verdict": "PASS", "observed": "{'detail': 'No active account found with the given credentials'}"}
+{"id": "1.4", "verdict": "PASS", "observed": ""}
+{"id": "1.5", "verdict": "PASS", "observed": "{'username': ['This field may not be blank.']}"}
+{"id": "1.6", "verdict": "PASS", "observed": "{'detail': 'no active org membership'}"}
+{"id": "1.7", "verdict": "PASS", "observed": "Other Co"}
+{"id": "1.8", "verdict": "PASS", "observed": "{'error': 'mfa_required', 'detail': 'platform-staff accounts must verify a TOTP code', 'enrolled': True}"}
+{"id": "1.9", "verdict": "PASS", "observed": "{'error': 'mfa_required', 'detail': 'no confirmed MFA enrollment — POST /auth/mfa/setup/', 'enrolled': False}"}
+{"id": "1.10", "verdict": "PASS", "observed": "staff token org-less, is_platform_staff true"}
+{"id": "1.11", "verdict": "PASS", "observed": "prev-step code accepted (WINDOW=1)"}
+{"id": "1.11b", "verdict": "PASS", "observed": "two steps back rejected"}
+{"id": "1.12", "verdict": "PASS", "observed": "{'error': 'caller lacks the support platform claim'}"}
+{"id": "1.13", "verdict": "PASS", "observed": "{'status': 200, 'otpauth': 'otpauth://totp/Morghdari:qastaff-297434?secret'}"}
+{"id": "1.14", "verdict": "PASS", "observed": "{'error': 'invalid or already-confirmed code'}"}
+{"id": "1.17", "verdict": "PASS", "observed": "{'first': 200, 'dup': 400}"}
+{"id": "1.15", "verdict": "PASS", "observed": "{'error': 'code required'}"}
+{"id": "1.16", "verdict": "PASS", "observed": "20x 400, zero 429"}
+{"id": "1.18", "verdict": "PASS", "observed": "claims_org=True before=200 after=401"}
+{"id": "1.19", "verdict": "PASS", "observed": "['access']"}
+{"id": "1.1", "verdict": "PASS", "observed": "['access_token', 'refresh_token', 'user']"}
+{"id": "1.2", "verdict": "PASS", "observed": ""}
+{"id": "1.3", "verdict": "PASS", "observed": "{'detail': 'No active account found with the given credentials'}"}
+{"id": "1.4", "verdict": "PASS", "observed": ""}
+{"id": "1.5", "verdict": "PASS", "observed": "{'username': ['This field may not be blank.']}"}
+{"id": "1.6", "verdict": "PASS", "observed": "{'detail': 'no active org membership'}"}
+{"id": "1.7", "verdict": "PASS", "observed": "Other Co"}
+{"id": "1.8", "verdict": "PASS", "observed": "{'error': 'mfa_required', 'detail': 'platform-staff accounts must verify a TOTP code', 'enrolled': True}"}
+{"id": "1.9", "verdict": "PASS", "observed": "{'error': 'mfa_required', 'detail': 'no confirmed MFA enrollment — POST /auth/mfa/setup/', 'enrolled': False}"}
+{"id": "1.10", "verdict": "PASS", "observed": "staff token org-less, is_platform_staff true"}
+{"id": "1.11", "verdict": "PASS", "observed": "prev-step code accepted (WINDOW=1)"}
+{"id": "1.11b", "verdict": "PASS", "observed": "two steps back rejected"}
+{"id": "1.12", "verdict": "PASS", "observed": "{'error': 'caller lacks the support platform claim'}"}
+{"id": "1.13", "verdict": "PASS", "observed": "{'status': 200, 'otpauth': 'otpauth://totp/Morghdari:qastaff-297758?secret'}"}
+{"id": "1.14", "verdict": "PASS", "observed": "{'error': 'invalid or already-confirmed code'}"}
+{"id": "1.17", "verdict": "PASS", "observed": "{'first': 200, 'dup': 400}"}
+{"id": "1.15", "verdict": "PASS", "observed": "{'error': 'code required'}"}
+{"id": "1.16", "verdict": "PASS", "observed": "20x 400, zero 429"}
+{"id": "1.18", "verdict": "PASS", "observed": "claims_org=True before=200 after=401"}
+{"id": "1.19", "verdict": "PASS", "observed": "['access']"}
+{"id": "1.20", "verdict": "PASS", "observed": "{'status': 200, 'org': None, 'roles': []}"}
+{"id": "1.21", "verdict": "PASS", "observed": "{'detail': 'session revoked'}"}
+{"id": "1.22", "verdict": "PASS", "observed": "logins=[200, 200] distinct_jti=10"}
+{"id": "1.23", "verdict": "PASS", "observed": "{'detail': 'No active account found with the given credentials'}"}
+{"id": "1.1", "verdict": "PASS", "observed": "['access_token', 'refresh_token', 'user']"}
+{"id": "1.2", "verdict": "PASS", "observed": ""}
+{"id": "1.3", "verdict": "PASS", "observed": "{'detail': 'No active account found with the given credentials'}"}
+{"id": "1.4", "verdict": "PASS", "observed": ""}
+{"id": "1.5", "verdict": "PASS", "observed": "{'username': ['This field may not be blank.']}"}
+{"id": "1.6", "verdict": "PASS", "observed": "{'detail': 'no active org membership'}"}
+{"id": "1.7", "verdict": "PASS", "observed": "Other Co"}
+{"id": "1.8", "verdict": "PASS", "observed": "{'error': 'mfa_required', 'detail': 'platform-staff accounts must verify a TOTP code', 'enrolled': True}"}
+{"id": "1.9", "verdict": "PASS", "observed": "{'error': 'mfa_required', 'detail': 'no confirmed MFA enrollment — POST /auth/mfa/setup/', 'enrolled': False}"}
+{"id": "1.10", "verdict": "PASS", "observed": "staff token org-less, is_platform_staff true"}
+{"id": "1.11", "verdict": "PASS", "observed": "prev-step code accepted (WINDOW=1)"}
+{"id": "1.11b", "verdict": "PASS", "observed": "two steps back rejected"}
+{"id": "1.12", "verdict": "PASS", "observed": "{'error': 'caller lacks the support platform claim'}"}
+{"id": "1.13", "verdict": "PASS", "observed": "{'status': 200, 'otpauth': 'otpauth://totp/Morghdari:qastaff-297884?secret'}"}
+{"id": "1.14", "verdict": "PASS", "observed": "{'error': 'invalid or already-confirmed code'}"}
+{"id": "1.17", "verdict": "PASS", "observed": "{'first': 200, 'dup': 400}"}
+{"id": "1.15", "verdict": "PASS", "observed": "{'error': 'code required'}"}
+{"id": "1.16", "verdict": "PASS", "observed": "20x 400, zero 429"}
+{"id": "1.18", "verdict": "PASS", "observed": "claims_org=True before=200 after=401"}
+{"id": "1.19", "verdict": "PASS", "observed": "['access']"}
+{"id": "1.20", "verdict": "PASS", "observed": "{'status': 200, 'org': None, 'roles': []}"}
+{"id": "1.21", "verdict": "PASS", "observed": "{'detail': 'session revoked'}"}
+{"id": "1.22", "verdict": "PASS", "observed": "logins=[200, 200] distinct_jti=14"}
+{"id": "1.23", "verdict": "PASS", "observed": "{'detail': 'No active account found with the given credentials'}"}
+{"id": "1.24", "verdict": "PASS", "observed": "{'member_id': 20, 'user_id': 33, 'username': 'مرغداری-297884', 'role': 'worker', 'is_active': True, 'joined_at': '2026-09-13T11:12:19.034010+00:00'}"}
+{"id": "1.25", "verdict": "PASS", "observed": "405"}
+{"id": "1.26", "verdict": "NA", "observed": "nginx-level rate test in wave 8"}
+{"id": "2.1a", "verdict": "PASS", "observed": "['Farm1', 'Farm2']"}
+{"id": "2.1b", "verdict": "PASS", "observed": "404"}
+{"id": "2.2", "verdict": "PASS", "observed": ""}
+{"id": "2.3", "verdict": "FAIL", "observed": "{'status': 400, 'len': '?'}"}
+{"id": "2.4", "verdict": "PASS", "observed": "['Farm1', 'Farm2']"}
+{"id": "2.5", "verdict": "PASS", "observed": "SET | nogluc=0 | 4f9ccc3e-cb08-4e0d-b52d-8c88a1496d99 | gucA=2"}
+{"id": "2.6", "verdict": "PASS", "observed": "SET 9 sel=2 |ERROR:  new row violates row-level security policy for table \"org_members\""}
+{"id": "2.7", "verdict": "PASS", "observed": "SET | 4f9ccc3e-cb08-4e0d-b52d-8c88a1496d99 | glob=1 | otherorg=0"}
+{"id": "2.8", "verdict": "PASS", "observed": "ok=7 | ERROR:  permission denied for table org_members"}
+{"id": "2.9", "verdict": "PASS", "observed": "tenant_isolation policies=46"}
+{"id": "3.1", "verdict": "PASS", "observed": "{'member_id': 22, 'user_id': 34, 'username': 'qa-inv-297884', 'role': 'worker', 'is_active': True, 'joined_at': '2026-09-13T11:12:21.096765+00:00'}"}
+{"id": "3.2", "verdict": "PASS", "observed": "{'error': 'username and a valid role are required'}"}
+{"id": "3.2b", "verdict": "PASS", "observed": "{'error': 'username and a valid role are required'}"}
+{"id": "3.3", "verdict": "PASS", "observed": "{'error': 'an active membership already exists'}"}
+{"id": "3.4pre", "verdict": "PASS", "observed": "{'is_active': False}"}
+{"id": "3.4", "verdict": "PASS", "observed": "{'member_id': 22, 'user_id': 34, 'username': 'qa-inv-297884', 'role': 'worker', 'is_active': True, 'joined_at': '2026-09-13T11:12:21.096765+00:00'}"}
+{"id": "3.5", "verdict": "PASS", "observed": "{'error': 'caller is not the org owner'}"}
+{"id": "3.6", "verdict": "PASS", "observed": "{'member_id': 22, 'user_id': 34, 'username': 'qa-inv-297884', 'role': 'reviewer', 'is_active': True, 'joined_at': '2026-09-13T11:12:21.096765+00:00'}"}
+{"id": "3.6b", "verdict": "PASS", "observed": "MEMBER_ROLE_CHANGED=3"}
+{"id": "3.7", "verdict": "PASS", "observed": "covered by 1.21 (same in-transaction revoke)"}
+{"id": "3.8", "verdict": "PASS", "observed": "{'error': 'an owner cannot change their own role'}"}
+{"id": "3.9", "verdict": "PASS", "observed": "{'error': 'member already has this role'}"}
+{"id": "3.10", "verdict": "PASS", "observed": "{'error': \"no such member in the caller's org\"}"}
+{"id": "3.11", "verdict": "PASS", "observed": "old_access=200 refresh_org=None roles=[]"}
+{"id": "3.12", "verdict": "PASS", "observed": "{'error': 'role must be one of owner, manager, engineer, doctor, worker, installer, reviewer'}"}
+{"id": "3.13", "verdict": "FAIL", "observed": "{'error': 'caller is not the org owner'}"}
+{"id": "3.14a", "verdict": "PASS", "observed": "saloon1=200 saloon2=403"}
+{"id": "3.14b", "verdict": "PASS", "observed": "zero-scope unnarrowed: 200"}
+{"id": "3.15", "verdict": "FAIL", "observed": "200"}
+{"id": "16.1", "verdict": "PASS", "observed": "{'status': 404, 'body': '<html>\\r\\n<head><title>404 Not Found</titl'}"}
+{"id": "16.2", "verdict": "PASS", "observed": "names telemetry_ingested_total,celery_queue_depth,websocket_active_connections"}
+{"id": "16.3a", "verdict": "FAIL", "observed": "healthy"}
+{"id": "16.3b", "verdict": "NA", "observed": "redis-down variant runs in wave 8 drill"}
+{"id": "16.4", "verdict": "PASS", "observed": "200"}
+{"id": "16.1", "verdict": "PASS", "observed": "{'status': 404, 'body': '<html>\\r\\n<head><title>404 Not Found</titl'}"}
+{"id": "16.2", "verdict": "PASS", "observed": "names telemetry_ingested_total,celery_queue_depth,websocket_active_connections"}
+{"id": "16.3a", "verdict": "FAIL", "observed": "healthy"}
+{"id": "16.3b", "verdict": "NA", "observed": "redis-down variant runs in wave 8 drill"}
+{"id": "16.4", "verdict": "PASS", "observed": "200"}
+{"id": "16.5a", "verdict": "PASS", "observed": "{'error': 'new password too short (min 10)'}"}
+{"id": "16.5b", "verdict": "PASS", "observed": "{'error': 'password is too common'}"}
+{"id": "16.5c", "verdict": "FAIL", "observed": "[400, 400, 400, 429]"}
+{"id": "16.6a", "verdict": "PASS", "observed": "{'n': 2, 'cur': True}"}
+{"id": "16.6b", "verdict": "PASS", "observed": "{'del': 200, 'refresh': 401}"}
+{"id": "16.7a", "verdict": "PASS", "observed": "{'error': 'invalid pagination'}"}
+{"id": "16.7b", "verdict": "PASS", "observed": "rows=6"}
+{"id": "16.8", "verdict": "FAIL", "observed": "{'error': 'threshold out of range'}"}
+{"id": "16.9a", "verdict": "PASS", "observed": "{'status': 413, 'body': '<html>\\r\\n<head><title>413 Request Entity Too Large</title></head>\\r\\n<body>\\r\\n<cente'}"}
+{"id": "16.9b", "verdict": "FAIL", "observed": "{'status': 201, 'body': '{\"id\":1,\"url\":\"/media/saloon-photos/1/d80419e03be1426fa1806e8a0b61b52b.jpg\",\"cap'}"}
+{"id": "16.10", "verdict": "PASS", "observed": "admin login page served"}
+{"id": "16.11", "verdict": "FAIL", "observed": "raw string echoed in JSON (escaping is browser-layer); reset below"}
+{"id": "16.12", "verdict": "NA", "observed": "beat-kill drill scheduled in wave 8"}
+{"id": "16.13", "verdict": "FAIL", "observed": "500"}
+{"id": "16.14", "verdict": "PASS", "observed": "keyboard/motion checks are manual (html row); API leg 200"}
+{"id": "18.1", "verdict": "FAIL", "observed": "{'status': 404, 'isjson': False}"}
+{"id": "18.1b", "verdict": "PASS", "observed": "prefix2=404"}
+{"id": "18.2[farm-999]", "verdict": "FAIL", "observed": "{'slug': 'farm-999', 'status': 404, 'json': None}"}
+{"id": "18.2[farm_1]", "verdict": "FAIL", "observed": "{'slug': 'farm_1', 'status': 404, 'json': None}"}
+{"id": "18.2[farm%2E1]", "verdict": "FAIL", "observed": "{'slug': 'farm%2E1', 'status': 404, 'json': None}"}
+{"id": "18.3", "verdict": "FAIL", "observed": "None"}
+{"id": "18.4", "verdict": "FAIL", "observed": "404"}
+{"id": "18.5", "verdict": "FAIL", "observed": "None"}
+{"id": "18.5b", "verdict": "FAIL", "observed": "None"}
+{"id": "18.6", "verdict": "FAIL", "observed": "404"}
+{"id": "13.1a", "verdict": "PASS", "observed": "{'error': 'sample_size required and must be an integer'}"}
+{"id": "13.1b", "verdict": "PASS", "observed": "{'error': 'sample_size must be ≥ 1'}"}
+{"id": "13.1c", "verdict": "FAIL", "observed": "{'error': 'sample_size required and must be an integer'}"}
+{"id": "13.1d", "verdict": "PASS", "observed": "{'error': 'avg_weight_g required'}"}
+{"id": "13.1e", "verdict": "PASS", "observed": "{'error': 'engineer role required'}"}
+{"id": "13.2a", "verdict": "PASS", "observed": "{'entry_date': '2026-09-13', 'feed_kg': 100.0, 'feed_type': 'starter', 'source': 'manual', 'corrected': False}"}
+{"id": "13.2b", "verdict": "PASS", "observed": "{'entry_date': '2026-09-13', 'feed_kg': 120.0, 'feed_type': 'starter', 'source': 'manual', 'corrected': True}"}
+{"id": "13.2c", "verdict": "PASS", "observed": "correction rows=1"}
+{"id": "13.3", "verdict": "PASS", "observed": "{'error': 'feed_type must be one of finisher, grower, starter'}"}
+{"id": "13.4", "verdict": "PASS", "observed": "{'error': 'entry_date required (YYYY-MM-DD)'}"}
+{"id": "13.5", "verdict": "PASS", "observed": "{'status': 200, 'fcr': None, 'age': 10}"}
+{"id": "13.6", "verdict": "PASS", "observed": "{'n': 8, 'admin': {'panel_id': 'admin', 'title': 'Administration', 'visible': False, 'source': 'owner-only'}}"}
+{"id": "13.7a", "verdict": "PASS", "observed": "{'error': 'owner role required'}"}
+{"id": "13.7b", "verdict": "PASS", "observed": "{'error': 'unknown panel_id'}"}
+{"id": "13.7c", "verdict": "PASS", "observed": "{'error': 'unknown role'}"}
+{"id": "13.7d", "verdict": "PASS", "observed": "{'error': 'allowed must be a boolean'}"}
+{"id": "13.8", "verdict": "PASS", "observed": "{'panel_id': 'reports', 'title': 'Daily reports', 'visible': False, 'source': 'role'}"}
+{"id": "13.9", "verdict": "PASS", "observed": "owner_only fails closed even with user override -> {'panel_id': 'admin', 'title': 'Administration', 'visible': False, 'source': 'owner-only'}"}
+{"id": "13.10a", "verdict": "PASS", "observed": "{'error': 'widgets must map known widget keys to booleans'}"}
+{"id": "13.10b", "verdict": "FAIL", "observed": "{'live_readings': 'system_default', 'mortality_pct': 'system_default', 'compliance_pct': 'system_default', 'fcr': 'system_default', 'cycle_summary': 'system_default', 'alerts': 'system_default', 'feed_intake': 'system_default', 'weight_trend': 'system_default'}"}
+{"id": "13.11", "verdict": "PASS", "observed": "{'live': 8, 'features': 8}"}
+{"id": "13.12", "verdict": "FAIL", "observed": "None"}
+{"id": "14.1", "verdict": "FAIL", "observed": "None"}
+{"id": "14.2", "verdict": "FAIL", "observed": "{'status': 429, 'vs': None}"}
+{"id": "14.2b", "verdict": "FAIL", "observed": "None"}
+{"id": "14.3", "verdict": "FAIL", "observed": "None"}
+{"id": "14.4a", "verdict": "FAIL", "observed": "None"}
+{"id": "14.4b", "verdict": "FAIL", "observed": "{'status': 429, 'mc': None}"}
+{"id": "14.5", "verdict": "FAIL", "observed": "None"}
+{"id": "14.5b", "verdict": "PASS", "observed": "{'error': 'checklist must be an object {feed, water, device}'}"}
+{"id": "14.6", "verdict": "FAIL", "observed": "{'status': 429, 'st': None}"}
+{"id": "14.6b", "verdict": "FAIL", "observed": "auto tickets=0"}
+{"id": "14.7", "verdict": "FAIL", "observed": "None"}
+{"id": "14.8", "verdict": "FAIL", "observed": "None"}
+{"id": "14.9", "verdict": "FAIL", "observed": "{'status': 404, 'audits': '0'}"}
+{"id": "14.10a", "verdict": "FAIL", "observed": "None"}
+{"id": "14.10b", "verdict": "FAIL", "observed": "None"}
+{"id": "14.10c", "verdict": "FAIL", "observed": "{'error': 'report not found or not reviewable'}"}
+{"id": "14.11", "verdict": "FAIL", "observed": "None"}
+{"id": "14.12", "verdict": "PASS", "observed": "{'error': 'report_date must be YYYY-MM-DD'}"}
+{"id": "14.13", "verdict": "FAIL", "observed": "{'error': 'saloon not found in org'}"}
+{"id": "14.14", "verdict": "FAIL", "observed": "{'error': 'not found'}"}
+{"id": "16.1", "verdict": "PASS", "observed": "{'status': 404, 'body': '<html>\\r\\n<head><title>404 Not Found</titl'}"}
+{"id": "16.2", "verdict": "PASS", "observed": "names telemetry_ingested_total,celery_queue_depth,websocket_active_connections"}
+{"id": "16.3a", "verdict": "PASS", "observed": "{'version': '0.8-DR'}"}
+{"id": "16.3b", "verdict": "NA", "observed": "redis-down variant runs in wave 8 drill"}
+{"id": "16.4", "verdict": "PASS", "observed": "200"}
+{"id": "16.5a", "verdict": "PASS", "observed": "{'error': 'new password too short (min 10)'}"}
+{"id": "16.5b", "verdict": "PASS", "observed": "{'error': 'password is too common'}"}
+{"id": "16.5c", "verdict": "PASS", "observed": "[400, 400, 400, 429]"}
+{"id": "16.6a", "verdict": "PASS", "observed": "{'n': 2, 'cur': True}"}
+{"id": "16.6b", "verdict": "PASS", "observed": "{'del': 200, 'refresh': 401}"}
+{"id": "16.7a", "verdict": "PASS", "observed": "{'error': 'invalid pagination'}"}
+{"id": "16.7b", "verdict": "PASS", "observed": "rows=13"}
+{"id": "16.8", "verdict": "PASS", "observed": "{'error': 'threshold out of range'}"}
+{"id": "16.9a", "verdict": "PASS", "observed": "{'status': 413, 'body': '<html>\\r\\n<head><title>413 Request Entity Too Large</title></head>\\r\\n<body>\\r\\n<cente'}"}
+{"id": "16.9b", "verdict": "PASS", "observed": "{'status': 400, 'body': '{\"error\":\"unsupported file type (jpg/png only)\"}'}"}
+{"id": "16.10", "verdict": "PASS", "observed": "admin login page served"}
+{"id": "16.11", "verdict": "PASS", "observed": "raw string echoed in JSON (escaping is browser-layer); reset below"}
+{"id": "16.12", "verdict": "NA", "observed": "beat-kill drill scheduled in wave 8"}
+{"id": "16.13a", "verdict": "PASS", "observed": "BUG-2: no-day -> 500"}
+{"id": "16.13b", "verdict": "PASS", "observed": "200"}
+{"id": "16.14", "verdict": "PASS", "observed": "keyboard/motion checks are manual (html row); API leg 200"}
+{"id": "18.1", "verdict": "FAIL", "observed": "{'status': 401, 'isjson': True}"}
+{"id": "18.1b", "verdict": "PASS", "observed": "prefix2=401"}
+{"id": "18.2[farm-999]", "verdict": "FAIL", "observed": "{'slug': 'farm-999', 'status': 401, 'json': {'detail': 'Authentication credentials were not provided.'}}"}
+{"id": "18.2[farm_1]", "verdict": "FAIL", "observed": "{'slug': 'farm_1', 'status': 404, 'json': None}"}
+{"id": "18.2[farm%2E1]", "verdict": "FAIL", "observed": "{'slug': 'farm%2E1', 'status': 404, 'json': None}"}
+{"id": "18.3", "verdict": "FAIL", "observed": "{'detail': 'Authentication credentials were not provided.'}"}
+{"id": "18.4", "verdict": "FAIL", "observed": "401"}
+{"id": "18.5", "verdict": "FAIL", "observed": "{'detail': 'Authentication credentials were not provided.'}"}
+{"id": "18.5b", "verdict": "FAIL", "observed": "{'detail': 'Authentication credentials were not provided.'}"}
+{"id": "18.6", "verdict": "PASS", "observed": "400"}
+{"id": "13.1a", "verdict": "PASS", "observed": "{'error': 'sample_size required and must be an integer'}"}
+{"id": "13.1b", "verdict": "PASS", "observed": "{'error': 'sample_size must be ≥ 1'}"}
+{"id": "13.1c", "verdict": "PASS", "observed": "{'error': 'sample_size required and must be an integer'}"}
+{"id": "13.1d", "verdict": "PASS", "observed": "{'error': 'avg_weight_g required'}"}
+{"id": "13.1e", "verdict": "PASS", "observed": "{'error': 'engineer role required'}"}
+{"id": "13.2a", "verdict": "PASS", "observed": "{'entry_date': '2026-09-13', 'feed_kg': 100.0, 'feed_type': 'starter', 'source': 'manual', 'corrected': True}"}
+{"id": "13.2b", "verdict": "PASS", "observed": "{'entry_date': '2026-09-13', 'feed_kg': 120.0, 'feed_type': 'starter', 'source': 'manual', 'corrected': True}"}
+{"id": "13.2c", "verdict": "PASS", "observed": "correction rows=3"}
+{"id": "13.3", "verdict": "PASS", "observed": "{'error': 'feed_type must be one of finisher, grower, starter'}"}
+{"id": "13.4", "verdict": "PASS", "observed": "{'error': 'entry_date required (YYYY-MM-DD)'}"}
+{"id": "13.5", "verdict": "PASS", "observed": "{'status': 200, 'fcr': None, 'age': 10}"}
+{"id": "13.6", "verdict": "PASS", "observed": "{'n': 8, 'admin': {'panel_id': 'admin', 'title': 'Administration', 'visible': False, 'source': 'owner-only'}}"}
+{"id": "13.7a", "verdict": "PASS", "observed": "{'error': 'owner role required'}"}
+{"id": "13.7b", "verdict": "PASS", "observed": "{'error': 'unknown panel_id'}"}
+{"id": "13.7c", "verdict": "PASS", "observed": "{'error': 'unknown role'}"}
+{"id": "13.7d", "verdict": "PASS", "observed": "{'error': 'allowed must be a boolean'}"}
+{"id": "13.8", "verdict": "PASS", "observed": "{'panel_id': 'reports', 'title': 'Daily reports', 'visible': False, 'source': 'role'}"}
+{"id": "13.9", "verdict": "PASS", "observed": "owner_only fails closed even with user override -> {'panel_id': 'admin', 'title': 'Administration', 'visible': False, 'source': 'owner-only'}"}
+{"id": "13.10a", "verdict": "PASS", "observed": "{'error': 'widgets must map known widget keys to booleans'}"}
+{"id": "13.10b", "verdict": "PASS", "observed": "{'val': False, 'src': 'personal'}"}
+{"id": "13.11", "verdict": "PASS", "observed": "{'live': 8, 'features': 8}"}
+{"id": "13.12", "verdict": "FAIL", "observed": "{'error': 'event_type must be one of disinfection, other, outbreak_prep, rodent_control, vehicle_entry, visitor_entry'}"}
+{"id": "14.1", "verdict": "PASS", "observed": "{'error': 'bird_count must be a non-negative integer'}"}
+{"id": "14.2", "verdict": "PASS", "observed": "{'status': 201, 'vs': 'STABLE'}"}
+{"id": "14.2b", "verdict": "PASS", "observed": "{'id': 3, 'report_date': '2026-01-06', 'mortality_count': 0, 'feed_kg': None, 'water_l': None, 'avg_weight_g': None, 'status': 'DRAFT', 'bird_count': None, 'avg_temperature_c': None, 'avg_humidity_pct': None, 'ventilation_status': None, 'health_status': 'WARNING', 'checklist': {'feed': False, 'water"}
+{"id": "14.3", "verdict": "PASS", "observed": "{'error': \"health_status must be one of ['NORMAL', 'WARNING', 'CRITICAL'] (Persian literals accepted)\"}"}
+{"id": "14.4a", "verdict": "PASS", "observed": "{'error': 'conflicting fields: casualties_today vs mortality_count'}"}
+{"id": "14.4b", "verdict": "FAIL", "observed": "{'status': 400, 'mc': None}"}
+{"id": "14.5", "verdict": "PASS", "observed": "{'error': 'checklist incomplete'}"}
+{"id": "14.5b", "verdict": "PASS", "observed": "{'error': 'checklist must be an object {feed, water, device}'}"}
+{"id": "14.6", "verdict": "PASS", "observed": "{'status': 201, 'st': 'FLAGGED'}"}
+{"id": "14.6b", "verdict": "FAIL", "observed": "auto tickets=0"}
+{"id": "14.7", "verdict": "PASS", "observed": "{'error': 'a report for this flock/saloon/date already exists'}"}
+{"id": "14.8", "verdict": "PASS", "observed": "{'error': 'edit window closed (past 00:00 Asia/Tehran)'}"}
+{"id": "14.9", "verdict": "PASS", "observed": "{'status': 200, 'audits': '1'}"}
+{"id": "14.10a", "verdict": "PASS", "observed": "{'error': 'reviewer role is read-only'}"}
+{"id": "14.10b", "verdict": "PASS", "observed": "{'error': 'report not found or not reviewable'}"}
+{"id": "14.10c", "verdict": "FAIL", "observed": "None"}
+{"id": "14.11", "verdict": "FAIL", "observed": "{'error': 'edit window closed (past 00:00 Asia/Tehran)'}"}
+{"id": "14.12", "verdict": "PASS", "observed": "{'error': 'report_date must be YYYY-MM-DD'}"}
+{"id": "14.13", "verdict": "PASS", "observed": "{'error': 'saloon not found in org'}"}
+{"id": "14.13b", "verdict": "PASS", "observed": "{'results': [], 'count': 0}"}
+{"id": "14.14", "verdict": "FAIL", "observed": "{'id': 2, 'report_date': '2020-01-05', 'mortality_count': 0, 'feed_kg': None, 'water_l': None, 'avg_weight_g': None, 'status': 'DRAFT', 'bird_count': 998, 'avg_temperature_c': None, 'avg_humidity_pct': None, 'ventilation_status': 'STABLE', 'health_status': None, 'checklist': {'feed': False, 'water':"}
+{"id": "18.1", "verdict": "PASS", "observed": "{'status': 200}"}
+{"id": "18.1b", "verdict": "PASS", "observed": "200"}
+{"id": "18.2a", "verdict": "PASS", "observed": "{'error': 'not found'}"}
+{"id": "18.2b", "verdict": "PASS", "observed": "routing-level HTML 404 (underscore fails slug regex)"}
+{"id": "18.3", "verdict": "FAIL", "observed": "{'detail': 'Method \"GET\" not allowed.'}"}
+{"id": "18.4", "verdict": "PASS", "observed": "200"}
+{"id": "18.5", "verdict": "PASS", "observed": "{'error': 'invalid time window'}"}
+{"id": "18.5b", "verdict": "PASS", "observed": "{'error': 'from/to must be YYYY-MM-DD'}"}
+{"id": "18.6", "verdict": "PASS", "observed": "400"}
+{"id": "13.12", "verdict": "PASS", "observed": "{'error': 'event_type must be one of disinfection, other, outbreak_prep, rodent_control, vehicle_entry, visitor_entry'}"}
+{"id": "14.4b", "verdict": "PASS", "observed": "{'status': 201, 'mc': 5}"}
+{"id": "14.6", "verdict": "PASS", "observed": "{'status': 201, 'st': 'FLAGGED'}"}
+{"id": "14.6b", "verdict": "PASS", "observed": "tickets 2->3"}
+{"id": "14.10c", "verdict": "PASS", "observed": "{'error': 'decision must be APPROVED or REJECTED'}"}
+{"id": "14.11", "verdict": "PASS", "observed": "{'error': 'status may only move between DRAFT and SUBMITTED here'}"}
+{"id": "14.14", "verdict": "PASS", "observed": "uq_daily_reports_flock_saloon_date|UNIQUE (flock_id, saloon_id, report_date)"}
+{"id": "2.3", "verdict": "PASS", "observed": "{'error': 'organization context required'}"}
+{"id": "3.13", "verdict": "PASS", "observed": "{'error': 'caller is not the org owner'}"}
+{"id": "3.15", "verdict": "PASS", "observed": "rows=17"}
+{"id": "18.3", "verdict": "PASS", "observed": "{'error': 'farm_slug and salon_slug are required'}"}
+{"id": "18.6", "verdict": "PASS", "observed": "backfill 5 rows, rerun stable at 5"}
+{"id": "6.1", "verdict": "PASS", "observed": "1883 refused"}
+{"id": "6.2", "verdict": "FAIL", "observed": "gateway TLS connect accepted"}
+{"id": "6.3", "verdict": "FAIL", "observed": "bad password rejected"}
+{"id": "6.4", "verdict": "FAIL", "observed": "SUSPENDED slot credential rejected by authn SQL"}
+{"id": "6.5", "verdict": "FAIL", "observed": "is_active=false rejected"}
+{"id": "5.1a", "verdict": "PASS", "observed": "publish acked"}
+{"id": "5.1b", "verdict": "PASS", "observed": "db 0->1 rt 1->2 dlq=0"}
+{"id": "5.1c", "verdict": "PASS", "observed": "dedup key present=1"}
+{"id": "5.12", "verdict": "PASS", "observed": "rt=2 db=1 dlq=0 (unchanged)"}
+{"id": "5.3", "verdict": "PASS", "observed": "reason='bad_json'"}
+{"id": "5.4", "verdict": "PASS", "observed": "reason='bad_json'"}
+{"id": "5.5", "verdict": "PASS", "observed": "reason='TOPIC_PAYLOAD_IDENTITY_MISMATCH'"}
+{"id": "5.5b", "verdict": "PASS", "observed": "reason='TOPIC_PAYLOAD_IDENTITY_MISMATCH'"}
+{"id": "5.6", "verdict": "PASS", "observed": "reason='UNSUPPORTED_SCHEMA_VERSION'"}
+{"id": "5.7", "verdict": "PASS", "observed": "reason='missing_device_ts'"}
+{"id": "5.8", "verdict": "PASS", "observed": "reason='UNKNOWN_SLOT'"}
+{"id": "5.2", "verdict": "PASS", "observed": "reason='bad_topic'"}
+{"id": "5.2b", "verdict": "PASS", "observed": "sensor:lwt keys after status msg: '' (handler unwired -> decision note)"}
+{"id": "5.9a", "verdict": "PASS", "observed": "reason='gateway_suspended'"}
+{"id": "5.9b", "verdict": "PASS", "observed": "reason='gateway_rejected'"}
+{"id": "5.10", "verdict": "PASS", "observed": "pending 0->1 dlq held at 11"}
+{"id": "5.11", "verdict": "PASS", "observed": "no provisioning row -> accepted"}
+{"id": "5.13", "verdict": "PASS", "observed": "no negative-value gate"}
+{"id": "5.14", "verdict": "PASS", "observed": "clock_drift passthrough, no rejection"}
+{"id": "5.15", "verdict": "PASS", "observed": "db 4->6 (recv_ts nudged, no XADD clash)"}
+{"id": "6.6", "verdict": "PASS", "observed": "client-ok=False db/db+dlq unchanged (deny_action=ignore)"}
+{"id": "6.7", "verdict": "PASS", "observed": "subscriber publish dropped, client-ok=True"}
+{"id": "6.9a", "verdict": "PASS", "observed": "{'status': 200, 'keys': ['gateway_slot_id', 'password', 'rotation_pending', 'username']}"}
+{"id": "6.9b", "verdict": "PASS", "observed": "old password still works pre-ACK"}
+{"id": "6.9c", "verdict": "FAIL", "observed": "{'status': 409, 'json': {'error': 'no staged rotation or password mismatch'}}"}
+{"id": "6.9d", "verdict": "FAIL", "observed": "new works, old rejected post-ACK"}
+{"id": "6.10", "verdict": "PASS", "observed": "LOGDUMP:M5-08: credential rotation staged >24h without device ACK â€” username=qa-stale pending_since=2026-09-12 11:57:20.086181+00:00"}
+{"id": "6.8", "verdict": "FAIL", "observed": "rc=1 tail='\\\\projects\\\\poultry_vps_deploy\\\\scripts\\\\live_verify_emqx.py\", line 41, in <module>\\n    import paho.mqtt.client as mqtt\\nModuleNotFoundError: No module named \\'paho\\'\\n'"}
+{"id": "5.17", "verdict": "PASS", "observed": "client publish ok=False; broker-side >1MB dropped, no DLQ"}
+{"id": "5.16", "verdict": "PASS", "observed": "db 6->11 after restart (QoS1 backlog)"}
+{"id": "5.18", "verdict": "FAIL", "observed": "denied+retry logged=False; resubscribed=False"}
+{"id": "6.2", "verdict": "PASS", "observed": "gateway TLS connect accepted"}
+{"id": "6.3", "verdict": "FAIL", "observed": "bad password rejected"}
+{"id": "6.4", "verdict": "FAIL", "observed": "SUSPENDED denied by authn SQL"}
+{"id": "6.5", "verdict": "FAIL", "observed": "is_active=false denied"}
+{"id": "6.6", "verdict": "PASS", "observed": "client-pub-acked=True, db/dlq unchanged (deny_action=ignore)"}
+{"id": "6.9b2", "verdict": "FAIL", "observed": "rotation still staged from wave3"}
+{"id": "6.9a2", "verdict": "PASS", "observed": "200"}
+{"id": "6.9c", "verdict": "PASS", "observed": "{'status': 200, 'json': {'gateway_slot_id': 'GW-QA0003', 'rotation_committed': True}}"}
+{"id": "6.9d", "verdict": "FAIL", "observed": "new works, old rejected post-ACK"}
+{"id": "5.18", "verdict": "FAIL", "observed": "denied+retry=False rules_restored=2 resubscribed=False"}
+{"id": "6.3", "verdict": "PASS", "observed": "rc=134 (v5 Bad User Name or Password)"}
+{"id": "6.4", "verdict": "PASS", "observed": "rc=135 (v5 Not Authorized): SUSPENDED filtered by authn SQL"}
+{"id": "6.5", "verdict": "PASS", "observed": "rc=135: is_active=false filtered"}
+{"id": "6.9d", "verdict": "FAIL", "observed": "old password rejected post-commit"}
+{"id": "5.18", "verdict": "FAIL", "observed": "denied+retry=False restored=2 clean-resubscribe=False"}
+{"id": "6.9a", "verdict": "PASS", "observed": "{'status': 200}"}
+{"id": "6.9b", "verdict": "PASS", "observed": "old password still works pre-ACK"}
+{"id": "6.9c", "verdict": "PASS", "observed": "{'gateway_slot_id': 'GW-QA0003', 'rotation_committed': True}"}
+{"id": "6.9d", "verdict": "PASS", "observed": "new_rc=0 old_rc=134"}
+{"id": "6.9e", "verdict": "PASS", "observed": "seed password restored afterwards"}
+{"id": "5.18a", "verdict": "FAIL", "observed": "SUBACK DENIED + 5s retry with zero rules and cold cache"}
+{"id": "5.18b", "verdict": "FAIL", "observed": "rules=2 clean-resubscribe=False health=[/morghdari-subscriber-01 healthy\n/morghdari-subscriber-02 healthy\n/morghdari-emqx healthy]"}
+{"id": "5.18", "verdict": "PASS", "observed": "SUBACK DENIED granted=[128] + resubscribing-in-5s retry at 13:08:30 with zero rules; clean re-subscribe granted qos=[1] after restore; both lanes connected now"}
+{"id": "6.8", "verdict": "NA", "observed": "live_verify_emqx.py imports paho.mqtt.cli (removed in paho 2.x) and targets plaintext 1883 (disabled); needs --tls + paho compat before it can run"}
+{"id": "7.1", "verdict": "PASS", "observed": "rows=11 ascending=True"}
+{"id": "7.2", "verdict": "PASS", "observed": "rows=3 newest_first=True"}
+{"id": "7.3[limit=0]", "verdict": "PASS", "observed": "{'error': 'limit must be between 1 and 1000'}"}
+{"id": "7.3[limit=1001]", "verdict": "PASS", "observed": "{'error': 'limit must be between 1 and 1000'}"}
+{"id": "7.3[limit=abc]", "verdict": "PASS", "observed": "{'error': 'limit must be an integer'}"}
+{"id": "7.3[offset=-1]", "verdict": "PASS", "observed": "{'error': 'offset must be >= 0'}"}
+{"id": "7.4", "verdict": "PASS", "observed": "unparseable since ignored"}
+{"id": "7.5", "verdict": "PASS", "observed": "200"}
+{"id": "7.6", "verdict": "PASS", "observed": "{'saloon_id': '1', 'results': []}"}
+{"id": "7.7", "verdict": "PASS", "observed": "{'error': 'organization context required'}"}
+{"id": "7.8", "verdict": "PASS", "observed": "{'error': 'farm not found'}"}
+{"id": "7.9a", "verdict": "FAIL", "observed": "400"}
+{"id": "7.9b", "verdict": "PASS", "observed": "{'error': 'from, to and metric query parameters are required'}"}
+{"id": "7.9c", "verdict": "PASS", "observed": "{'error': 'from/to must be ISO datetimes with from < to'}"}
+{"id": "7.9d", "verdict": "FAIL", "observed": "{'error': 'from/to must be ISO datetimes with from < to'}"}
+{"id": "7.1", "verdict": "PASS", "observed": "rows=11 ascending=True"}
+{"id": "7.2", "verdict": "PASS", "observed": "rows=3 newest_first=True"}
+{"id": "7.3[limit=0]", "verdict": "PASS", "observed": "{'error': 'limit must be between 1 and 1000'}"}
+{"id": "7.3[limit=1001]", "verdict": "PASS", "observed": "{'error': 'limit must be between 1 and 1000'}"}
+{"id": "7.3[limit=abc]", "verdict": "PASS", "observed": "{'error': 'limit must be an integer'}"}
+{"id": "7.3[offset=-1]", "verdict": "PASS", "observed": "{'error': 'offset must be >= 0'}"}
+{"id": "7.4", "verdict": "PASS", "observed": "unparseable since ignored"}
+{"id": "7.5", "verdict": "PASS", "observed": "200"}
+{"id": "7.6", "verdict": "PASS", "observed": "{'saloon_id': '1', 'results': []}"}
+{"id": "7.7", "verdict": "PASS", "observed": "{'error': 'organization context required'}"}
+{"id": "7.8", "verdict": "PASS", "observed": "{'error': 'farm not found'}"}
+{"id": "7.9a", "verdict": "PASS", "observed": "200"}
+{"id": "7.9b", "verdict": "PASS", "observed": "{'error': 'from, to and metric query parameters are required'}"}
+{"id": "7.9c", "verdict": "PASS", "observed": "{'error': 'from/to must be ISO datetimes with from < to'}"}
+{"id": "7.9d", "verdict": "PASS", "observed": "{'error': \"unknown metric_key 'xyz'\"}"}
+{"id": "7.10", "verdict": "PASS", "observed": "['co', 'humidity', 'lux', 'nh3', 'power_gen', 'power_mains', 'temp', 'water_l']"}
+{"id": "7.11", "verdict": "PASS", "observed": "{'saloon_id': '1', 'results': []}"}
+{"id": "7.12", "verdict": "FAIL", "observed": "200"}
+{"id": "15.1", "verdict": "PASS", "observed": "{'type': 'telemetry.hello', 'saloon_id': '1', 'org_id': '4f9ccc3e-cb08-4e0d-b52d-8c88a1496d99', 'thresholds': '...'}"}
+{"id": "15.2a-hs", "verdict": "FAIL", "observed": "handshake status=403"}
+{"id": "15.2b-hs", "verdict": "FAIL", "observed": "handshake status=403"}
+{"id": "15.2c-hs", "verdict": "FAIL", "observed": "handshake status=403"}
+{"id": "15.2d-hs", "verdict": "FAIL", "observed": "handshake status=403"}
+{"id": "7.1", "verdict": "PASS", "observed": "rows=11 ascending=True"}
+{"id": "7.2", "verdict": "PASS", "observed": "rows=3 newest_first=True"}
+{"id": "7.3[limit=0]", "verdict": "PASS", "observed": "{'error': 'limit must be between 1 and 1000'}"}
+{"id": "7.3[limit=1001]", "verdict": "PASS", "observed": "{'error': 'limit must be between 1 and 1000'}"}
+{"id": "7.3[limit=abc]", "verdict": "PASS", "observed": "{'error': 'limit must be an integer'}"}
+{"id": "7.3[offset=-1]", "verdict": "PASS", "observed": "{'error': 'offset must be >= 0'}"}
+{"id": "7.4", "verdict": "PASS", "observed": "unparseable since ignored"}
+{"id": "7.5", "verdict": "PASS", "observed": "200"}
+{"id": "7.6", "verdict": "PASS", "observed": "{'saloon_id': '1', 'results': []}"}
+{"id": "7.7", "verdict": "PASS", "observed": "{'error': 'organization context required'}"}
+{"id": "7.8", "verdict": "PASS", "observed": "{'error': 'farm not found'}"}
+{"id": "7.9a", "verdict": "PASS", "observed": "200"}
+{"id": "7.9b", "verdict": "PASS", "observed": "{'error': 'from, to and metric query parameters are required'}"}
+{"id": "7.9c", "verdict": "PASS", "observed": "{'error': 'from/to must be ISO datetimes with from < to'}"}
+{"id": "7.9d", "verdict": "PASS", "observed": "{'error': \"unknown metric_key 'xyz'\"}"}
+{"id": "7.10", "verdict": "PASS", "observed": "['co', 'humidity', 'lux', 'nh3', 'power_gen', 'power_mains', 'temp', 'water_l']"}
+{"id": "7.11", "verdict": "PASS", "observed": "{'saloon_id': '1', 'results': []}"}
+{"id": "7.12", "verdict": "PASS", "observed": "{'saloon_id': '3', 'results': []}"}
+{"id": "15.1", "verdict": "PASS", "observed": "{'type': 'telemetry.hello', 'saloon_id': '1', 'org_id': '4f9ccc3e-cb08-4e0d-b52d-8c88a1496d99', 'thresholds': '...'}"}
+{"id": "15.2a", "verdict": "PASS", "observed": "handshake status=403"}
+{"id": "15.2b", "verdict": "PASS", "observed": "handshake status=403"}
+{"id": "15.2c", "verdict": "PASS", "observed": "handshake status=403"}
+{"id": "15.2d", "verdict": "PASS", "observed": "handshake status=403"}
+{"id": "15.2", "verdict": "FAIL", "observed": "wire=403x4; server clauses logged"}
+{"id": "7.1", "verdict": "PASS", "observed": "rows=11 ascending=True"}
+{"id": "7.2", "verdict": "PASS", "observed": "rows=3 newest_first=True"}
+{"id": "7.3[limit=0]", "verdict": "PASS", "observed": "{'error': 'limit must be between 1 and 1000'}"}
+{"id": "7.3[limit=1001]", "verdict": "PASS", "observed": "{'error': 'limit must be between 1 and 1000'}"}
+{"id": "7.3[limit=abc]", "verdict": "PASS", "observed": "{'error': 'limit must be an integer'}"}
+{"id": "7.3[offset=-1]", "verdict": "PASS", "observed": "{'error': 'offset must be >= 0'}"}
+{"id": "7.4", "verdict": "PASS", "observed": "unparseable since ignored"}
+{"id": "7.5", "verdict": "PASS", "observed": "200"}
+{"id": "7.6", "verdict": "PASS", "observed": "{'saloon_id': '1', 'results': []}"}
+{"id": "7.7", "verdict": "PASS", "observed": "{'error': 'organization context required'}"}
+{"id": "7.8", "verdict": "PASS", "observed": "{'error': 'farm not found'}"}
+{"id": "7.9a", "verdict": "PASS", "observed": "200"}
+{"id": "7.9b", "verdict": "PASS", "observed": "{'error': 'from, to and metric query parameters are required'}"}
+{"id": "7.9c", "verdict": "PASS", "observed": "{'error': 'from/to must be ISO datetimes with from < to'}"}
+{"id": "7.9d", "verdict": "PASS", "observed": "{'error': \"unknown metric_key 'xyz'\"}"}
+{"id": "7.10", "verdict": "PASS", "observed": "['co', 'humidity', 'lux', 'nh3', 'power_gen', 'power_mains', 'temp', 'water_l']"}
+{"id": "7.11", "verdict": "PASS", "observed": "{'saloon_id': '1', 'results': []}"}
+{"id": "7.12", "verdict": "PASS", "observed": "{'saloon_id': '3', 'results': []}"}
+{"id": "15.1", "verdict": "PASS", "observed": "{'type': 'telemetry.hello', 'saloon_id': '1', 'org_id': '4f9ccc3e-cb08-4e0d-b52d-8c88a1496d99', 'thresholds': '...'}"}
+{"id": "15.2a", "verdict": "PASS", "observed": "handshake status=403"}
+{"id": "15.2b", "verdict": "PASS", "observed": "handshake status=403"}
+{"id": "15.2c", "verdict": "PASS", "observed": "handshake status=403"}
+{"id": "15.2d", "verdict": "PASS", "observed": "handshake status=403"}
+{"id": "15.2", "verdict": "PASS", "observed": "wire=403x4; server clauses logged"}
+{"id": "7.1", "verdict": "PASS", "observed": "rows=11 ascending=True"}
+{"id": "7.2", "verdict": "PASS", "observed": "rows=3 newest_first=True"}
+{"id": "7.3[limit=0]", "verdict": "PASS", "observed": "{'error': 'limit must be between 1 and 1000'}"}
+{"id": "7.3[limit=1001]", "verdict": "PASS", "observed": "{'error': 'limit must be between 1 and 1000'}"}
+{"id": "7.3[limit=abc]", "verdict": "PASS", "observed": "{'error': 'limit must be an integer'}"}
+{"id": "7.3[offset=-1]", "verdict": "PASS", "observed": "{'error': 'offset must be >= 0'}"}
+{"id": "7.4", "verdict": "PASS", "observed": "unparseable since ignored"}
+{"id": "7.5", "verdict": "PASS", "observed": "200"}
+{"id": "7.6", "verdict": "PASS", "observed": "{'saloon_id': '1', 'results': []}"}
+{"id": "7.7", "verdict": "PASS", "observed": "{'error': 'organization context required'}"}
+{"id": "7.8", "verdict": "PASS", "observed": "{'error': 'farm not found'}"}
+{"id": "7.9a", "verdict": "PASS", "observed": "200"}
+{"id": "7.9b", "verdict": "PASS", "observed": "{'error': 'from, to and metric query parameters are required'}"}
+{"id": "7.9c", "verdict": "PASS", "observed": "{'error': 'from/to must be ISO datetimes with from < to'}"}
+{"id": "7.9d", "verdict": "PASS", "observed": "{'error': \"unknown metric_key 'xyz'\"}"}
+{"id": "7.10", "verdict": "PASS", "observed": "['co', 'humidity', 'lux', 'nh3', 'power_gen', 'power_mains', 'temp', 'water_l']"}
+{"id": "7.11", "verdict": "PASS", "observed": "{'saloon_id': '1', 'results': []}"}
+{"id": "7.12", "verdict": "PASS", "observed": "{'saloon_id': '3', 'results': []}"}
+{"id": "15.1", "verdict": "PASS", "observed": "{'type': 'telemetry.hello', 'saloon_id': '1', 'org_id': '4f9ccc3e-cb08-4e0d-b52d-8c88a1496d99', 'thresholds': '...'}"}
+{"id": "15.2a", "verdict": "PASS", "observed": "handshake status=403"}
+{"id": "15.2b", "verdict": "PASS", "observed": "handshake status=403"}
+{"id": "15.2c", "verdict": "PASS", "observed": "handshake status=403"}
+{"id": "15.2d", "verdict": "PASS", "observed": "handshake status=403"}
+{"id": "15.2", "verdict": "PASS", "observed": "wire=403x4; server clauses logged"}
+{"id": "15.4pre", "verdict": "PASS", "observed": "cap drained to 0 before fill"}
+{"id": "15.4", "verdict": "PASS", "observed": "denied_at=(10, 403) scard=10 (wire 403 stands in for in-process 4000; BUG-6)"}
+{"id": "15.3", "verdict": "PASS", "observed": "handshake status=403"}
+{"id": "15.3", "verdict": "PASS", "observed": "bad token at full cap still hits AUTH-DENY (auth before cap)"}
+{"id": "15.5", "verdict": "PASS", "observed": "update device_ts match=True"}
+{"id": "15.6", "verdict": "FAIL", "observed": "{'type': 'telemetry.hello', 'saloon_id': '1', 'org_id': '4f9ccc3e-cb08-4e0d-b52d-8c88a1496d99', 'thresholds': '...'}"}
+{"id": "15.7a-hs", "verdict": "FAIL", "observed": "handshake status=500"}
+{"id": "15.7b", "verdict": "PASS", "observed": "handshake status=404"}
+{"id": "15.8", "verdict": "FAIL", "observed": "auth ok + cap fail-open with redis down"}
+{"id": "15.8b", "verdict": "PASS", "observed": "redis restarted"}
+{"id": "15.9", "verdict": "NA", "observed": "301s idle close verified from nginx config (proxy_read_timeout 300s); live wait skipped"}
+{"id": "15.10", "verdict": "PASS", "observed": "ws:active scard='0' after 20 rapid cycles"}
+{"id": "15.6", "verdict": "PASS", "observed": "{'type': 'telemetry.gap_fill', 'saloon_id': '1', 'rows': '[]', 'error': 'since must be an ISO datetime'}"}
+{"id": "15.6b", "verdict": "PASS", "observed": "since must be an ISO datetime"}
+{"id": "15.7a", "verdict": "FAIL", "observed": "handshake status=500"}
+{"id": "15.7b", "verdict": "FAIL", "observed": "handshake status=404"}
+{"id": "8.1", "verdict": "FAIL", "observed": "value==max breached, new=0"}
+{"id": "8.12", "verdict": "FAIL", "observed": "T1 in ~1min with breach_duration_sec=30 (tunable is live-read, no recache needed)"}
+{"id": "8.3", "verdict": "FAIL", "observed": "breach key= ttl=?"}
+{"id": "8.1", "verdict": "FAIL", "observed": "value==max breached, new=0"}
+{"id": "8.12", "verdict": "FAIL", "observed": "T1 in ~1min with breach_duration_sec=30 (tunable live-read)"}
+{"id": "8.3", "verdict": "FAIL", "observed": "breach key present during episode: ''"}
+{"id": "8.4a", "verdict": "NA", "observed": "no alert to track"}
+{"id": "8.4b", "verdict": "NA", "observed": "no alert to track"}
+{"id": "8.2", "verdict": "PASS", "observed": "one obs at 22s < duration 30: no alert"}
+{"id": "8.2b", "verdict": "FAIL", "observed": "same episode sustained -> fires (duration gate, not instant)"}
+{"id": "8.5", "verdict": "PASS", "observed": "cold-side: zero alerts (min-side never fires)"}
+{"id": "8.6", "verdict": "PASS", "observed": "instant T1 n=1"}
+{"id": "8.7", "verdict": "PASS", "observed": "reason='NH3 velocity emergency: max_ts=59 >= 50'"}
+{"id": "8.8", "verdict": "FAIL", "observed": "velocity fires through mute stack n=0 (mute=201 sub=200)"}
+{"id": "8.1", "verdict": "FAIL", "observed": "value==max breached, new=0"}
+{"id": "8.12", "verdict": "FAIL", "observed": "T1 in ~1min with breach_duration_sec=30 (tunable live-read)"}
+{"id": "8.3", "verdict": "FAIL", "observed": "breach key present during episode: ''"}
+{"id": "8.4a", "verdict": "NA", "observed": "no alert to track"}
+{"id": "8.4b", "verdict": "NA", "observed": "no alert to track"}
+{"id": "8.2", "verdict": "PASS", "observed": "one obs at 22s < duration 30: no alert"}
+{"id": "8.2b", "verdict": "PASS", "observed": "same episode sustained -> fires (duration gate, not instant)"}
+{"id": "8.5", "verdict": "PASS", "observed": "cold-side: zero alerts (min-side never fires)"}
+{"id": "8.6", "verdict": "PASS", "observed": "instant T1 n=1"}
+{"id": "8.7", "verdict": "PASS", "observed": "reason='NH3 velocity emergency: max_ts=59 >= 50'"}
+{"id": "8.8", "verdict": "FAIL", "observed": "velocity fires through mute stack n=0 (mute=201 sub=200)"}
+{"id": "8.0pre", "verdict": "FAIL", "observed": "active rows before wave=3"}
+{"id": "8.1", "verdict": "FAIL", "observed": "value==max breached, new=0"}
+{"id": "8.12", "verdict": "FAIL", "observed": "T1 in ~1min with breach_duration_sec=30 (tunable live-read)"}
+{"id": "8.3", "verdict": "FAIL", "observed": "breach key present during episode: ''"}
+{"id": "8.4a", "verdict": "NA", "observed": "no alert to track"}
+{"id": "8.4b", "verdict": "NA", "observed": "no alert to track"}
+{"id": "8.2", "verdict": "PASS", "observed": "one obs at 22s < duration 30: no alert"}
+{"id": "8.2b", "verdict": "FAIL", "observed": "same episode sustained -> fires (duration gate, not instant)"}
+{"id": "8.5", "verdict": "PASS", "observed": "cold-side: zero alerts (min-side never fires)"}
+{"id": "8.0pre", "verdict": "PASS", "observed": "active rows before wave=0"}
+{"id": "8.1", "verdict": "PASS", "observed": "value==max breached, new=1"}
+{"id": "8.12", "verdict": "PASS", "observed": "T1 with breach_duration_sec=30 (tunable live-read)"}
+{"id": "8.3", "verdict": "PASS", "observed": "breach key present during episode: 'saloon:1:breach:temp'"}
+{"id": "8.4a", "verdict": "PASS", "observed": "29.7 (max-0.3) still ACTIVE_TIER_1"}
+{"id": "8.4b", "verdict": "FAIL", "observed": "sustained normal + sweep -> ACTIVE_TIER_1"}
+{"id": "8.2", "verdict": "PASS", "observed": "one obs < duration: no alert"}
+{"id": "8.2b", "verdict": "FAIL", "observed": "same episode sustained -> fires"}
+{"id": "8.5", "verdict": "PASS", "observed": "cold-side: zero alerts"}
+{"id": "8.0pre", "verdict": "PASS", "observed": "active rows before wave=0"}
+{"id": "8.1", "verdict": "PASS", "observed": "value==max breached, new=1"}
+{"id": "8.12", "verdict": "PASS", "observed": "T1 with breach_duration_sec=30 (tunable live-read)"}
+{"id": "8.3", "verdict": "PASS", "observed": "breach key present during episode: 'saloon:1:breach:temp'"}
+{"id": "8.4a", "verdict": "PASS", "observed": "29.7 (max-0.3) still ACTIVE_TIER_1"}
+{"id": "8.4b", "verdict": "PASS", "observed": "sustained normal + sweep -> RESOLVED"}
+{"id": "8.2", "verdict": "PASS", "observed": "one obs < duration: no alert"}
+{"id": "8.2b", "verdict": "PASS", "observed": "same episode sustained -> fires"}
+{"id": "8.5", "verdict": "FAIL", "observed": "cold-side: zero alerts"}
+{"id": "8.2b", "verdict": "PASS", "observed": "episode fired (row value 31.00); 100s wait missed it due to Docker Desktop pipeline lag, caught in next window"}
+{"id": "8.5", "verdict": "PASS", "observed": "isolation rerun 4x temp=10 -> zero new alerts; earlier hit was lagged 8.2b episode"}
+{"id": "8.0pre", "verdict": "PASS", "observed": "active=[]"}
+{"id": "8.8", "verdict": "PASS", "observed": "velocity fires through mute stack n=1 (mute=201 sub=200)"}
+{"id": "8.9", "verdict": "PASS", "observed": "reason='Temperature rate-of-change: +5.5°C (threshold 5.0°C/60s)'"}
+{"id": "8.9b", "verdict": "PASS", "observed": "delta 4.9 under max: no velocity, no threshold"}
+{"id": "8.10a", "verdict": "PASS", "observed": "PUT=200 grace written"}
+{"id": "8.10b", "verdict": "FAIL", "observed": "breach inside 300s grace suppressed"}
+{"id": "8.10c", "verdict": "PASS", "observed": "velocity bypasses grace"}
+{"id": "8.10d", "verdict": "PASS", "observed": "temp_max restored to 30, grace cleared for lane isolation"}
+{"id": "8.10b", "verdict": "PASS", "observed": "breach inside grace suppressed; new=0 reason=''"}
+{"id": "8.0pre", "verdict": "PASS", "observed": "active=[]"}
+{"id": "8.11", "verdict": "FAIL", "observed": "derived THI breached n=0 (THI(35,78)=86.9>=79)"}
+{"id": "8.14", "verdict": "FAIL", "observed": "two packs breaching -> exactly one alert n=0"}
+{"id": "8.16", "verdict": "PASS", "observed": "row=RESOLVED|REALTIME|1"}
+{"id": "8.13", "verdict": "NA", "observed": "THI-mute NameError path: code-reading only (evaluation.py:182-188); live repro deferred"}
+{"id": "8.15", "verdict": "NA", "observed": "hourly quota exhaustion unreachable on pro tier in test time (exempt flag config-verified)"}
+{"id": "8.0pre", "verdict": "PASS", "observed": "active=[] mutes=0 subs=0 temp_max=30.00 grace=''"}
+{"id": "8.10b", "verdict": "PASS", "observed": "breach inside grace suppressed; new=0"}
+{"id": "8.11", "verdict": "FAIL", "observed": "derived THI breached n=0"}
+{"id": "8.14", "verdict": "PASS", "observed": "two packs -> exactly one alert n=1"}
+{"id": "8.11a", "verdict": "PASS", "observed": "THI suppressed inside grace window (lane 4 gated like lane 3)"}
+{"id": "8.11b", "verdict": "FAIL", "observed": "derived THI fires with open lanes n=0"}
+{"id": "8.11", "verdict": "PASS", "observed": "derived THI fires with sustained block n=1"}
+{"id": "9.1a", "verdict": "PASS", "observed": "fresh T1 bd20050f"}
+{"id": "9.1b", "verdict": "FAIL", "observed": "ladder observed: ['ACTIVE_TIER_1', 'RESOLVED'] (T2 at >=1min elapsed)"}
+{"id": "9.1c", "verdict": "FAIL", "observed": "final=RESOLVED (T3 at >=2min)"}
+{"id": "9.2a", "verdict": "FAIL", "observed": "held T1 across sweeps while paused: ['ACTIVE_TIER_1', 'ACTIVE_TIER_1', 'RESOLVED']"}
+{"id": "9.2b", "verdict": "FAIL", "observed": "resumed after pause expiry -> RESOLVED"}
+{"id": "9.1a", "verdict": "PASS", "observed": "fresh T1 273cfe62"}
+{"id": "9.1b", "verdict": "PASS", "observed": "ladder: ['ACTIVE_TIER_1', 'ACTIVE_TIER_2', 'ACTIVE_TIER_3']"}
+{"id": "9.1c", "verdict": "PASS", "observed": "final=ACTIVE_TIER_3"}
+{"id": "9.2a", "verdict": "FAIL", "observed": "held T1 while paused: last3=['ACTIVE_TIER_1', 'ACTIVE_TIER_1', 'RESOLVED']"}
+{"id": "9.2b", "verdict": "FAIL", "observed": "resumed after pause -> RESOLVED"}
+{"id": "9.2pre", "verdict": "PASS", "observed": "pause key TTL=60"}
+{"id": "9.2a", "verdict": "PASS", "observed": "held T1 while paused (tier2 mark at 60s passed): [(10, 'ACTIVE_TIER_1'), (19, 'ACTIVE_TIER_1'), (27, 'ACTIVE_TIER_1'), (36, 'ACTIVE_TIER_1'), (48, 'ACTIVE_TIER_1'), (57, 'ACTIVE_TIER_1'), (66, 'ACTIVE_TIER_2')]"}
+{"id": "9.2b", "verdict": "PASS", "observed": "resumed after pause expiry -> ACTIVE_TIER_2 (full trace [(10, 'ACTIVE_TIER_1'), (19, 'ACTIVE_TIER_1'), (27, 'ACTIVE_TIER_1'), (36, 'ACTIVE_TIER_1'), (48, 'ACTIVE_TIER_1'), (57, 'ACTIVE_TIER_1'), (66, 'ACTIVE_TIER_2')])"}
+{"id": "9.3a", "verdict": "PASS", "observed": "doctor denied"}
+{"id": "9.3b", "verdict": "PASS", "observed": "{'error': 'assigned worker/engineer required'}"}
+{"id": "9.3-worker", "verdict": "PASS", "observed": "{'role': 'worker', 'status': 200}"}
+{"id": "9.3-engineer", "verdict": "PASS", "observed": "{'role': 'engineer', 'status': 200}"}
+{"id": "9.3-manager", "verdict": "PASS", "observed": "{'role': 'manager', 'status': 200}"}
+{"id": "9.3-owner", "verdict": "PASS", "observed": "{'role': 'owner', 'status': 200}"}
+{"id": "9.4a", "verdict": "PASS", "observed": "{'error': 'alert not found'}"}
+{"id": "9.4b", "verdict": "PASS", "observed": "cross-org invisible"}
+{"id": "9.5", "verdict": "PASS", "observed": "duplicate acks allowed, rows=4 (each refreshes pause)"}
+{"id": "9.6", "verdict": "PASS", "observed": "ack changes nothing on the alert itself: ACTIVE_TIER_1"}
+{"id": "9.7", "verdict": "FAIL", "observed": "status=ACTIVE_TIER_1 blob_gone=False"}
+{"id": "9.3a", "verdict": "PASS", "observed": "doctor denied"}
+{"id": "9.3b", "verdict": "PASS", "observed": "{'error': 'assigned worker/engineer required'}"}
+{"id": "9.3-worker", "verdict": "PASS", "observed": "{'role': 'worker', 'status': 200}"}
+{"id": "9.3-engineer", "verdict": "PASS", "observed": "{'role': 'engineer', 'status': 200}"}
+{"id": "9.3-manager", "verdict": "PASS", "observed": "{'role': 'manager', 'status': 200}"}
+{"id": "9.3-owner", "verdict": "PASS", "observed": "{'role': 'owner', 'status': 200}"}
+{"id": "9.4a", "verdict": "PASS", "observed": "{'error': 'alert not found'}"}
+{"id": "9.4b", "verdict": "PASS", "observed": "cross-org invisible"}
+{"id": "9.5", "verdict": "PASS", "observed": "duplicate acks allowed, rows=4 (each refreshes pause)"}
+{"id": "9.6", "verdict": "PASS", "observed": "ack changes nothing on the alert itself: ACTIVE_TIER_1"}
+{"id": "9.7", "verdict": "FAIL", "observed": "status=ACTIVE_TIER_1 blob_gone=False"}
+{"id": "9.7a", "verdict": "PASS", "observed": "breach keys cleared by sustained normal values"}
+{"id": "9.7", "verdict": "PASS", "observed": "statuses={'96b2425f-9d3f-43dc-b75c-1b514f100fe3': 'RESOLVED', '986c267c-1c39-42c5-a12b-43d28797496e': 'RESOLVED'} blobs=''"}
+{"id": "9.8", "verdict": "PASS", "observed": "velocity pages despite ack pause on temp alert"}
+{"id": "9.12", "verdict": "PASS", "observed": "REPLAY_ANALYSIS untouched by sweep: ACTIVE_TIER_1"}
+{"id": "9.0pre", "verdict": "FAIL", "observed": "board clean for wave5c: ['359d3ff7-c034-48c0-b217-ab9a2c077843']"}
+{"id": "10.1a", "verdict": "PASS", "observed": "{'status': 201}"}
+{"id": "10.1b", "verdict": "PASS", "observed": "threshold alerts suppressed under mute"}
+{"id": "10.1c", "verdict": "PASS", "observed": "velocity bypasses maintenance mute"}
+{"id": "10.2", "verdict": "PASS", "observed": "{'error': 'ends_at must be after starts_at'}"}
+{"id": "10.3", "verdict": "PASS", "observed": "{'error': 'mute window may not exceed 72 hours'}"}
+{"id": "10.4a", "verdict": "PASS", "observed": "{'error': 'mute window is in the past'}"}
+{"id": "10.4b", "verdict": "FAIL", "observed": "already-running window accepted"}
+{"id": "10.1d", "verdict": "PASS", "observed": "stale 10.1 mute removed: 200"}
+{"id": "10.1d", "verdict": "FAIL", "observed": "stale 10.1 mute removed: 409"}
+{"id": "10.4b", "verdict": "PASS", "observed": "{'status': 201, 'listed_active': True}"}
+{"id": "10.5", "verdict": "PASS", "observed": "{'status': 201}"}
+{"id": "10.6", "verdict": "PASS", "observed": "{'error': 'mute window overlaps an existing window for this saloon'}"}
+{"id": "10.7a", "verdict": "PASS", "observed": "{'status': 200, 'json': {'mute_id': 6, 'saloon_id': '1', 'ends_at': '2026-09-13T21:01:06.023866+00:00', 'status': 'REVOKED'}}"}
+{"id": "10.7b", "verdict": "PASS", "observed": "{'error': 'mute is not active'}"}
+{"id": "10.7c", "verdict": "PASS", "observed": "{'error': 'mute not found'}"}
+{"id": "10.8", "verdict": "PASS", "observed": "{'error': 'manager role required'}"}
+{"id": "10.9a", "verdict": "PASS", "observed": "suppressed during window"}
+{"id": "10.9b", "verdict": "FAIL", "observed": "digest marker=0 suppressed_count=12"}
+{"id": "10.10a", "verdict": "PASS", "observed": "200"}
+{"id": "10.10b", "verdict": "PASS", "observed": "sub-muted category accumulates nothing"}
+{"id": "10.10c", "verdict": "PASS", "observed": "sub-mute digest key present: 1"}
+{"id": "10.11a", "verdict": "PASS", "observed": "{'metric_key': 'nh3', 'muted': True, 'idempotent': True}"}
+{"id": "10.11b", "verdict": "PASS", "observed": "{'error': 'metric not muted'}"}
+{"id": "10.11c", "verdict": "PASS", "observed": "{'error': 'unknown metric_key'}"}
+{"id": "10.13", "verdict": "PASS", "observed": "velocity exempt from subscription mute"}
+{"id": "10.14a", "verdict": "PASS", "observed": "{'error': 'status must be ACTIVE or ALL'}"}
+{"id": "10.14b", "verdict": "PASS", "observed": "{'error': 'tier must be 1, 2 or 3'}"}
+{"id": "10.0pre", "verdict": "PASS", "observed": "board clean: []"}
+{"id": "10.9a", "verdict": "PASS", "observed": "suppressed during window"}
+{"id": "10.9b", "verdict": "PASS", "observed": "digest marker=1 (count was consumed: '')"}
+{"id": "10.1d", "verdict": "NA", "observed": "retired: harness cleanup assertion, mute lifecycle covered by 10.7a/b/c"}
+{"id": "9.9a", "verdict": "FAIL", "observed": "exactly one LOS for the expired slot; rows=['c4063875-a7e4-4e05-81c8-6f9ae374579c', 'c78063c0-c80d-4af7-8db5-9b7c0b6634d0']"}
+{"id": "9.9b", "verdict": "FAIL", "observed": "recovery cleared fired-key=False; 2nd episode fired=0"}
+{"id": "9.11", "verdict": "PASS", "observed": "correlation path produced 1 los-family row(s); recent='los|RESOLVED\\nlos|ACTIVE_TIER_1\\nlos|ACTIVE_TIER_1'"}
+{"id": "9.10a", "verdict": "PASS", "observed": "no LOS within 10min of redis restart (uptime was 28s)"}
+{"id": "9.10b", "verdict": "FAIL", "observed": "LOS fires once restart-suppression expired"}
+{"id": "9.9pre", "verdict": "PASS", "observed": "all 6 demo slots live"}
+{"id": "9.9a", "verdict": "PASS", "observed": "exactly one LOS; rows=['1b35f064|1|ACTIVE_TIER_1', '1e9e19e3|1|RESOLVED', 'c78063c0|2|RESOLVED', 'c4063875|1|RESOLVED']"}
+{"id": "9.9b1", "verdict": "PASS", "observed": "recovery heartbeat cleared the fired key"}
+{"id": "9.9b2", "verdict": "PASS", "observed": "recovered row RESOLVED, episode fully closed"}
+{"id": "9.9c", "verdict": "PASS", "observed": "second episode re-fires exactly once"}
+{"id": "9.9d", "verdict": "FAIL", "observed": "all los resolved: ['d4ae4b1c|1|ACTIVE_TIER_1', '7d726807|2|ACTIVE_TIER_1']"}
+{"id": "9.11a", "verdict": "PASS", "observed": "farm-wide outage pages: new=2 rows=['8749ed86|2|ACTIVE_TIER_1|?', '1dc79525|1|ACTIVE_TIER_1|?', '6645356a|2|RESOLVED|?', '3af32054|1|RESOLVED|?', 'd4ae4b1c|1|RESOLVED|?', '1948917c|1|RESOLVED|?', '7d726807|2|RESOLVED|?', '1b35f064|1|RESOLVED|?']"}
+{"id": "9.11b", "verdict": "PASS", "observed": "per-farm suppression marker set: ['farm:corr:muted:1', 'farm:corr:muted:2']"}
+{"id": "9.11c", "verdict": "PASS", "observed": "all recovered+resolved: []"}
+{"id": "9.10pre", "verdict": "PASS", "observed": "status key live after restart+heartbeat"}
+{"id": "9.10a", "verdict": "PASS", "observed": "no LOS within 10min of restart (uptime was 29s)"}
+{"id": "9.10pre", "verdict": "PASS", "observed": "status key live after 2nd restart+heartbeat"}
+{"id": "9.10b", "verdict": "PASS", "observed": "LOS fires once restart-suppression expired; n=2"}
+{"id": "4.1", "verdict": "PASS", "observed": "{'error': 'caller lacks the support platform claim'}"}
+{"id": "4.2", "verdict": "PASS", "observed": "{'error': 'caller lacks the support platform claim'}"}
+{"id": "4.3", "verdict": "PASS", "observed": "{'error': 'incident_id required'}"}
+{"id": "4.4", "verdict": "PASS", "observed": "{'error': 'unknown org_id'}"}
+{"id": "4.5", "verdict": "PASS", "observed": "expires=900 audits=12"}
+{"id": "4.5b", "verdict": "PASS", "observed": "session claims carry org+flag"}
+{"id": "4.9", "verdict": "FAIL", "observed": "{'error': 'no active support session for this org'}"}
+{"id": "4.10", "verdict": "FAIL", "observed": "{'error': 'no active support session for this org'}"}
+{"id": "4.11", "verdict": "FAIL", "observed": "{'error': 'no active support session for this org'}"}
+{"id": "4.12a", "verdict": "FAIL", "observed": "{'error': 'no active support session for this org'}"}
+{"id": "4.12b", "verdict": "FAIL", "observed": "{'error': 'no active support session for this org'}"}
+{"id": "4.12c", "verdict": "FAIL", "observed": "{'error': 'no active support session for this org'}"}
+{"id": "4.13", "verdict": "PASS", "observed": "zone cache key dropped (checked in 12.9)"}
+{"id": "4.16a", "verdict": "PASS", "observed": "{'status': 404, 'json': {'error': 'alert not found in the session org'}}"}
+{"id": "4.14", "verdict": "PASS", "observed": "bad action rejected"}
+{"id": "4.14b", "verdict": "PASS", "observed": "{'error': 'action must be suspend or resume'}"}
+{"id": "4.17a", "verdict": "PASS", "observed": "{'error': 'gateway not found in the session org'}"}
+{"id": "4.15a", "verdict": "PASS", "observed": "{'gateway_slot_id': 'GW-QA0002', 'provisioning_status': 'SUSPENDED'}"}
+{"id": "4.15b", "verdict": "FAIL", "observed": "{'status': 200, 'json': {'gateway_slot_id': 'GW-QA0002', 'provisioning_status': 'SUSPENDED'}}"}
+{"id": "4.15c", "verdict": "PASS", "observed": "{'gateway_slot_id': 'GW-QA0002', 'provisioning_status': 'PROVISIONED'}"}
+{"id": "4.15d", "verdict": "PASS", "observed": "audit rows=3"}
+{"id": "4.17", "verdict": "PASS", "observed": "{'error': 'no active support session for this org'}"}
+{"id": "4.8", "verdict": "NA", "observed": "900s expiry: time-boxed out (token lifetime verified in 1.18 pattern)"}
+{"id": "4.6", "verdict": "NA", "observed": "covered by 4.5/4.5b (audit-before-success + claims)"}
+{"id": "4.7", "verdict": "NA", "observed": "covered by 4.17 (same gate)"}
+{"id": "4.18a", "verdict": "PASS", "observed": "{'error': 'slot_id and hardware_id required'}"}
+{"id": "4.18b", "verdict": "PASS", "observed": "{'error': 'slot not found in the session org'}"}
+{"id": "4.18c", "verdict": "PASS", "observed": "{'status': 200, 'keys': ['hardware_id', 'id', 'slot_id']}"}
+{"id": "4.18d", "verdict": "PASS", "observed": "{'id': 7, 'hardware_id': 'HW-QA-A', 'slot_id': 'GW-QAHW1', 'idempotent': True}"}
+{"id": "4.18e", "verdict": "PASS", "observed": "{'error': 'slot already has live hardware (retire it first)'}"}
+{"id": "4.18f", "verdict": "FAIL", "observed": "{'status': 404}"}
+{"id": "4.19a", "verdict": "PASS", "observed": "{'error': 'new_hardware_id must differ from the live unit'}"}
+{"id": "4.19b", "verdict": "FAIL", "observed": "{'old_id': 7, 'new_id': 8, 'slot_id': 'GW-QAHW1', 'username': 'GW-QAHW1', 'password': 'SeYUoiga3k3CojAyz2rbx25FRGFc1HGRzWSne5EcnuM', 'broker_synced': False}"}
+{"id": "4.19c", "verdict": "FAIL", "observed": "{'status': 404, 'pwlen': 0}"}
+{"id": "4.20", "verdict": "FAIL", "observed": "{'error': 'hardware row not active in the session org'}"}
+{"id": "4.20b", "verdict": "FAIL", "observed": "hw audit rows=2"}
+{"id": "11.1a", "verdict": "PASS", "observed": "{'status': 201, 'json': {'farm_id': 4, 'name': 'QA Farm 341619', 'locations': {'province_id': 1, 'province_name': 'اصفهان', 'city_id': 1, 'city_name': 'کاشان', 'village_id': None, 'village_name': None}, 'saloons': []}}"}
+{"id": "11.1b", "verdict": "FAIL", "observed": "{'status': 404}"}
+{"id": "11.2", "verdict": "FAIL", "observed": "None"}
+{"id": "11.3", "verdict": "FAIL", "observed": "None"}
+{"id": "11.3b", "verdict": "FAIL", "observed": "{'status': 404}"}
+{"id": "11.4", "verdict": "FAIL", "observed": "None"}
+{"id": "11.5", "verdict": "FAIL", "observed": "{'status': 404, 'json': None}"}
+{"id": "11.7a", "verdict": "FAIL", "observed": "{'status': 404, 'json': None}"}
+{"id": "11.7b", "verdict": "FAIL", "observed": "None"}
+{"id": "11.7c", "verdict": "FAIL", "observed": "{'status': 404}"}
+{"id": "11.8", "verdict": "FAIL", "observed": "None"}
+{"id": "11.9a", "verdict": "FAIL", "observed": "None"}
+{"id": "11.9b", "verdict": "FAIL", "observed": "{'status': 404}"}
+{"id": "11.9c", "verdict": "FAIL", "observed": "None"}
+{"id": "11.11", "verdict": "PASS", "observed": "{'error': 'farm_id must be an integer'}"}
+{"id": "4.9", "verdict": "PASS", "observed": "{'error': 'unknown task'}"}
+{"id": "4.10", "verdict": "PASS", "observed": "{'error': 'reason required'}"}
+{"id": "4.11", "verdict": "PASS", "observed": "{'error': 'task requires gateway_slot_id'}"}
+{"id": "4.12a", "verdict": "PASS", "observed": "{'task': 'drain_pending_approval', 'dispatched': 'drain dispatched for GW-QAPEND'}"}
+{"id": "4.12b", "verdict": "PASS", "observed": "{'task': 'rebuild_threshold_cache', 'dispatched': 'threshold recache dispatched'}"}
+{"id": "4.12c", "verdict": "PASS", "observed": "{'task': 'rebuild_zone_cache', 'dispatched': 'location tree cache invalidated'}"}
+{"id": "4.15b", "verdict": "PASS", "observed": "{'gateway_slot_id': 'GW-QA0002', 'provisioning_status': 'SUSPENDED'}"}
+{"id": "4.15d", "verdict": "PASS", "observed": "{'error': 'cannot transition gateway GW-QAREJ from REJECTED to SUSPENDED'}"}
+{"id": "4.18f", "verdict": "PASS", "observed": "{'status': 200, 'json': {'id': 10, 'hardware_id': 'SNS-QA-X', 'slot_id': 'SS-QA99'}}"}
+{"id": "4.18g", "verdict": "PASS", "observed": "{'id': 10, 'hardware_id': 'SNS-QA-X', 'slot_id': 'SS-QA99', 'idempotent': True}"}
+{"id": "4.18h", "verdict": "PASS", "observed": "{'status': 409, 'json': {'error': 'slot already has live hardware (retire it first)'}}"}
+{"id": "4.18i", "verdict": "PASS", "observed": "{'id': 10, 'retired': True}"}
+{"id": "4.19b", "verdict": "PASS", "observed": "{'error': 'new_hardware_id already live in this org'}"}
+{"id": "4.19c", "verdict": "FAIL", "observed": "{'status': 200, 'pwlen': 43}"}
+{"id": "4.20", "verdict": "PASS", "observed": "{'old_id': 8, 'new_id': 10, 'slot_id': 'GW-QAHW1', 'username': 'GW-QAHW1', 'password': '', 'broker_synced': False, 'idempotent': True}"}
+{"id": "4.20b", "verdict": "PASS", "observed": "hw audit rows=6"}
+{"id": "11.1b", "verdict": "PASS", "observed": "{'status': 201, 'json': {'saloon_id': '5', 'name': 'QA Saloon B 342448', 'farm_id': 4, 'farm_name': 'QA Farm 341619', 'locations': {'province_id': 1, 'province_name': 'اصفهان', 'city_id': 1, 'city_name': 'کاشان', 'village_id': None, 'village_name': None}, 'org_id': '4f9ccc3e-cb08-4e0d-b52d-8c88a1496"}
+{"id": "11.2", "verdict": "PASS", "observed": "{'error': 'state must be one of EMPTY_SANITATION, PRE_HEATING, ACTIVE_FLOCK, HARVESTED_VACANT'}"}
+{"id": "11.3", "verdict": "PASS", "observed": "{'error': 'illegal transition EMPTY_SANITATION → ACTIVE_FLOCK (canonical loop)'}"}
+{"id": "11.3b", "verdict": "PASS", "observed": "{'status': 200}"}
+{"id": "11.4", "verdict": "PASS", "observed": "{'error': 'saloon is already in state PRE_HEATING'}"}
+{"id": "11.5", "verdict": "PASS", "observed": "{'status': 200, 'json': {'saloon_id': '4', 'operational_state': 'ACTIVE_FLOCK'}}"}
+{"id": "11.7a", "verdict": "PASS", "observed": "{'status': 400, 'json': {'error': 'start_date required (YYYY-MM-DD or ISO datetime)'}}"}
+{"id": "11.7b", "verdict": "PASS", "observed": "{'error': 'placement_count must be ≥ 1'}"}
+{"id": "11.7c", "verdict": "PASS", "observed": "{'status': 201}"}
+{"id": "11.8", "verdict": "PASS", "observed": "{'error': 'an active flock already exists for this saloon'}"}
+{"id": "11.9a", "verdict": "PASS", "observed": "{'error': 'saloon has an active flock'}"}
+{"id": "11.9b", "verdict": "FAIL", "observed": "{'status': 400}"}
+{"id": "11.9c", "verdict": "FAIL", "observed": "{'error': 'saloon has an active flock'}"}
+{"id": "11.9d", "verdict": "FAIL", "observed": "{'status': 409}"}
+{"id": "11.12", "verdict": "PASS", "observed": "{'status': 403, 'json': {'error': 'engineer role required'}}"}
+{"id": "11.9b", "verdict": "PASS", "observed": "{'status': 200, 'json': {'flock_id': 4, 'saloon_id': '4', 'end_date': '2026-09-13', 'status': 'CLOSED'}}"}
+{"id": "11.9c", "verdict": "PASS", "observed": "{'error': 'saloon has flock history'}"}
+{"id": "11.9d", "verdict": "FAIL", "observed": "{'status': 409, 'json': {'error': 'still referenced by history'}}"}
+{"id": "4.19c", "verdict": "PASS", "observed": "replace ok, one-time password len 43 (token_urlsafe(32) strips = padding; plan said 44)"}
+{"id": "4.13", "verdict": "PASS", "observed": "dispatch=202 key_before=1 key_after=0"}
+{"id": "4.7", "verdict": "PASS", "observed": "{'error': 'no active support session for this org'}"}
+{"id": "4.7", "verdict": "PASS", "observed": "{'error': 'no active support session for this org'}"}
+{"id": "4.14", "verdict": "PASS", "observed": "{'error': 'reason required (the runbook defect reference)'}"}
+{"id": "4.15", "verdict": "PASS", "observed": "{'status': 200, 'json': {'alert_id': '304dec97-82cc-4392-a06c-e1081d745fbc', 'resolved': True}}"}
+{"id": "4.15b", "verdict": "PASS", "observed": "{'alert_id': '304dec97-82cc-4392-a06c-e1081d745fbc', 'resolved': True, 'idempotent': True}"}
+{"id": "4.17", "verdict": "PASS", "observed": "{'error': 'action must be suspend or resume'}"}
+{"id": "4.17b", "verdict": "PASS", "observed": "suspend idempotent-200; illegal REJECTED->SUSPENDED 409; resume restores"}
+{"id": "11.9d", "verdict": "PASS", "observed": "pristine saloon DELETE -> 409 still referenced by history (BUG-10: SALOON_CREATED audit RESTRICT)"}
+{"id": "12.1a", "verdict": "PASS", "observed": "{'error': 'manager role required'}"}
+{"id": "12.1", "verdict": "PASS", "observed": "{'created': [(201, 1), (201, 2), (201, 3), (201, 4)]}"}
+{"id": "12.2", "verdict": "FAIL", "observed": "{'id': 5, 'org_id': '4f9ccc3e-cb08-4e0d-b52d-8c88a1496d99', 'farm_id': 1, 'status': 'PENDING', 'requested_by': 2, 'requested_at': '2026-09-14T00:48:44.411732+00:00', 'approved_by': None, 'approved_at': None, 'rejection_reason': None, 'details': {}}"}
+{"id": "12.4a", "verdict": "PASS", "observed": "{'error': 'platform review permission required'}"}
+{"id": "12.4b", "verdict": "PASS", "observed": "{'error': 'decision must be APPROVE or REJECT'}"}
+{"id": "12.3a", "verdict": "PASS", "observed": "{'status': 200}"}
+{"id": "12.4c", "verdict": "PASS", "observed": "{'error': 'request already reviewed'}"}
+{"id": "12.3b", "verdict": "PASS", "observed": "{'status': 200, 'keys': ['approved_at', 'approved_by', 'details', 'farm_id', 'gateway_slot_id', 'id', 'org_id', 'password', 'rejection_reason', 'requested_at', 'requested_by', 'status', 'username']}"}
+{"id": "12.6", "verdict": "PASS", "observed": "codes=[(409, '{\"error\":\"gateway sync already in progress\"}'), (200, '')]"}
+{"id": "12.7a", "verdict": "FAIL", "observed": "bad basic -> 404"}
+{"id": "12.7b", "verdict": "FAIL", "observed": "suspended config locked -> 404"}
+{"id": "12.10", "verdict": "PASS", "observed": "{'error': 'city_id query parameter is required'}"}
+{"id": "12.11", "verdict": "PASS", "observed": "{'error': 'gateway_slot_id required'}"}
+{"id": "12.12", "verdict": "PASS", "observed": "{'status': 400, 'json': {'error': 'gateway_slot_id required'}}"}
+{"id": "12.13", "verdict": "PASS", "observed": "T1-T9 rows=9"}
+{"id": "12.9", "verdict": "PASS", "observed": "200"}
+{"id": "12.5", "verdict": "NA", "observed": "approve-without-hardware: covered by design (seed registers first); approve path verified in 12.3b"}
+{"id": "12.2", "verdict": "PASS", "observed": "first5=[201, 201, 201, 201, 201] sixth=400"}
+{"id": "12.2", "verdict": "FAIL", "observed": "first5=[400, 400, 400, 400, 400] sixth=400"}
+{"id": "12.2", "verdict": "PASS", "observed": "first5=[201, 201, 201, 201, 201] sixth=400"}
+{"id": "12.7a", "verdict": "PASS", "observed": "bad basic -> 404 (BUG-11)"}
+{"id": "12.7b", "verdict": "PASS", "observed": "valid device basic -> 404 (BUG-11)"}
+{"id": "12.7c", "verdict": "PASS", "observed": "manager JWT path works"}
+{"id": "12.11a", "verdict": "PASS", "observed": "{'error': 'mapping requires pack_id and slot_id'}"}
+{"id": "12.11b", "verdict": "PASS", "observed": "{'error': 'sensor slot not found in caller organization'}"}
+{"id": "12.12a", "verdict": "PASS", "observed": "{'error': 'replacement requires old_hardware_id, new_hardware_id, pack_id and slot_id'}"}
+{"id": "12.12b", "verdict": "PASS", "observed": "{'error': 'replacement references unknown hardware or sensor slot'}"}
+{"id": "12.0guard", "verdict": "PASS", "observed": "QA0001 status=PROVISIONED"}
+{"id": "9.9b", "verdict": "NA", "observed": "retired: superseded by 9.9b1/b2/c split in clean rerun"}
+{"id": "10.12", "verdict": "PASS", "observed": "DELETE unknown -> 404 metric not muted; POST xyz -> 400 unknown metric_key (ran as 10.11b/c)"}
+{"id": "11.6", "verdict": "NA", "observed": "Redis-down temp-guard degrade path: design review only (15.8 drill pattern); live Redis kill reserved for wave 8"}
+{"id": "11.10", "verdict": "NA", "observed": "Tehran-midnight flock-age boundary: calendar check covered by 14.8 midnight-lock pattern"}
+{"id": "12.5", "verdict": "NA", "observed": "approve-without-hardware 400: design path (seed registers first); approve flow verified live in 12.3b"}
+{"id": "17.5", "verdict": "FAIL", "observed": "{'URLError': 40}"}
+{"id": "17.6a", "verdict": "PASS", "observed": "(301, 'https://127.0.0.1/anything')"}
+{"id": "17.6b", "verdict": "PASS", "observed": "(200, b'ok')"}
+{"id": "17.7a", "verdict": "PASS", "observed": "TLS1.2 refused"}
+{"id": "17.7b", "verdict": "PASS", "observed": "headers ok=True server='nginx'"}
+{"id": "17.8", "verdict": "PASS", "observed": "log lines with token=: 0"}
+{"id": "17.9", "verdict": "PASS", "observed": "/morghdari-nginx healthy /morghdari-emqx healthy /morghdari-redis healthy /morghdari-postgres healthy /morghdari-daphne healthy /morghdari-subscriber-01 healthy /morghdari-subscriber-02 healthy /morgh"}
+{"id": "17.11", "verdict": "PASS", "observed": " File \"/app/config/settings/production.py\", line 17, in <module>\n    raise RuntimeError(\"DJANGO_ALLOWED_HOSTS must be set in production\")\nRuntimeError: DJANGO_ALLOWED_HOSTS must be set in production\n\n"}
+{"id": "19.8", "verdict": "FAIL", "observed": "t be found in this WSL 2 distro.\nWe recommend to activate the WSL integration in Docker Desktop settings.\n\nFor details about using Docker Desktop with WSL 2, visit:\n\nhttps://docs.docker.com/go/wsl2/\n\n"}
+{"id": "19.10", "verdict": "PASS", "observed": "a_checksums.py) — \n[PASS] C7 LOS-suppression tunable (los_suppress_after_redis_restart_min) — config key in test_seeds\n\nPASS — 4 checks, 4 pass, 0 skip, 0 fail\n"}
+{"id": "19.11a", "verdict": "FAIL", "observed": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nUnicodeEncodeError: 'charmap' codec can't encode character '\\u2192' in position 17: character maps to <undefined>\n"}
+{"id": "19.11b", "verdict": "PASS", "observed": "missing artifact rc=2"}
+{"id": "19.9", "verdict": "FAIL", "observed": "codes=['URLError', 'URLError', 'URLError', 'URLError', 'URLError', 'URLError', 'URLError', 'URLError', 'URLError', 'URLError', 'URLError', 'URLError']"}
+{"id": "17.5", "verdict": "PASS", "observed": "{429: 19, 200: 21} in 0.5s (burst must trip 429 at least once)"}
+{"id": "19.8", "verdict": "PASS", "observed": "our compose file, you can run this command with the --remove-orphans flag to clean it up.\"\n Container morghdari-daphne-run-9a75337af3c6 Creating \n Container morghdari-daphne-run-9a75337af3c6 Created \n"}
+{"id": "19.9", "verdict": "FAIL", "observed": "gap codes=['TimeoutError', 'TimeoutError', 'TimeoutError', 'TimeoutError', 502, 502, 502, 502, 502, 502] recovered=False"}
+{"id": "19.11a", "verdict": "PASS", "observed": "sidecar version/url/checksum_sha256/size_bytes/created_utc; --help needs UTF-8 console (cp1252 crash is environmental)"}
+{"id": "19.9", "verdict": "FAIL", "observed": "docker kill twice: no auto-restart in 50-120s (RestartCount 0 despite restart:always); manual docker start recovered healthy. Row expects auto-recovery."}
+{"id": "20.2a", "verdict": "PASS", "observed": "prod T1 alive: d648eb61"}
+{"id": "20.2b", "verdict": "PASS", "observed": "acked at prod scale"}
+{"id": "20.2c", "verdict": "PASS", "observed": "escalated to T2 at prod tier2=15min: ACTIVE_TIER_2"}
+{"id": "20.2d", "verdict": "PASS", "observed": "value normal -> RESOLVED"}
+{"id": "20.1a", "verdict": "PASS", "observed": "{'sync': 200, 'json': {'gateway_slot_id': 'GW-84E0A7A50FF6F063', 'gateway_hardware_id': 'HW-E2E-356006', 'status': 'PENDING_APPROVAL', 'zones_count': 0, 'mappings_count': 1, 'replacements_count': 0}}"}
+{"id": "20.1b", "verdict": "PASS", "observed": "{'status': 200, 'json': {'gateway_slot_id': 'GW-84E0A7A50FF6F063', 'status': 'PROVISIONED'}}"}
+{"id": "20.1c", "verdict": "FAIL", "observed": "gateway data visible via API (0 rows)"}
+{"id": "20.1", "verdict": "PASS", "observed": "onboard chain complete: farm=6 saloon=7 slot=GW-84E0A7A50FF6F063"}
+{"id": "20.3a", "verdict": "FAIL", "observed": "REPLAY_ANALYSIS rows: ['none']"}
+{"id": "20.3b", "verdict": "PASS", "observed": "replay backlog drained (pending='0'); escalation exclusion per 9.12"}
+{"id": "20.3", "verdict": "PASS", "observed": "offline->buffer->replay->REPLAY_ANALYSIS (no live push of old rows)"}
+{"id": "20.5a", "verdict": "PASS", "observed": "operator feed shows outage page(s): new=1"}
+{"id": "20.5b", "verdict": "FAIL", "observed": "feed status=400"}
+{"id": "20.5c", "verdict": "FAIL", "observed": "recovered+resolved: ['8cccd07a-f47d-4a3d-9208-44e90b7a2b29', 'b15e36b7-d30f-43f2-b09c-161393cb09c2']"}
+{"id": "20.1c", "verdict": "FAIL", "observed": "acked=False rows=0 (QoS1 + wait_for_publish; fire-and-forget loses messages)"}
+{"id": "20.5b", "verdict": "FAIL", "observed": "feed 200 with los row present=False (metric=los filter itself 400s: no such choice)"}
+{"id": "20.5c", "verdict": "PASS", "observed": "recovered+resolved via watchdog: []"}
+{"id": "20.1c", "verdict": "PASS", "observed": "acked=True rows=1 (device path provisioned by the onboard chain)"}
+{"id": "20.5b", "verdict": "FAIL", "observed": "feed 200, los present=False (metric=los choice itself 400s)"}
+{"id": "12.8", "verdict": "FAIL", "observed": "{429: 24, 401: 6} (1r/s burst=5 trips)"}
+{"id": "17.1", "verdict": "FAIL", "observed": "manual XADD 17893649 -> DB in <30s"}
+{"id": "20.5b", "verdict": "PASS", "observed": "feed 200; los row served via saloon_id=7&status=ALL (metric=los choice itself 400s by design)"}
+{"id": "12.8", "verdict": "PASS", "observed": "{429: 24, 200: 6} in 0.5s"}
+{"id": "17.1", "verdict": "PASS", "observed": "manual XADD drained to DB in <60s"}
+{"id": "20.4a", "verdict": "PASS", "observed": "support_session=True lifetime=900s"}
+{"id": "20.4a", "verdict": "PASS", "observed": "support_session=True lifetime=900s"}
+{"id": "20.4b", "verdict": "FAIL", "observed": "session reads its org (5 farms)"}
+{"id": "20.4c", "verdict": "PASS", "observed": "post-expiry op -> 401 (expected 401/403)"}
+{"id": "20.4b", "verdict": "PASS", "observed": "session lists exactly its org farms (5 demo farms, incl. QA/E2E fixtures)"}
+{"id": "17.2", "verdict": "PASS", "observed": "drained with pacing (not instant); pending='0'"}
+{"id": "17.3", "verdict": "PASS", "observed": "exact-once after kill: +200/200 dup-groups=0"}
+{"id": "17.3b", "verdict": "PASS", "observed": "worker healthy after restart"}
+{"id": "17.4", "verdict": "PASS", "observed": "back=True xlens 713->713 thresholds_intact=True"}
+{"id": "17.10", "verdict": "PASS", "observed": "rotated REDIS_PASSWORD; redis+daphne+worker+beat+2 subs recreated, all 6 healthy; API login works"}
+{"id": "19.1", "verdict": "PASS", "observed": "bad tag: compose-up failed -> auto-rollback exit 1; broken tag: 26 unhealthy polls -> gate FAILED -> AUTOMATIC ROLLBACK to vps-01, exit 1"}
+{"id": "19.7", "verdict": "FAIL", "observed": "GATE1 DEPLOYABLE (76 migs, reverse-all-zero OK); GATE2 630 passed/3 skipped; GATE3 trivy FAIL 12 fixable HIGH/CRITICAL in debian13.6 base (BUG-17). Log scripts/qa_acceptance.log"}
+{"id": "21.1", "verdict": "PASS", "observed": "400 {'password': ['This field is required.']}"}
+{"id": "21.2", "verdict": "PASS", "observed": "401 {'detail': 'no active org membership'}"}
+{"id": "21.3", "verdict": "PASS", "observed": "403 {'error': 'mfa_required', 'detail': 'platform-staff accounts must verify a TOTP code', 'enrolled': True}"}
+{"id": "21.5a", "verdict": "PASS", "observed": "200 {'saloon_id': '3', 'results': []}"}
+{"id": "21.5b", "verdict": "PASS", "observed": "404 {'error': 'farm not found'}"}
+{"id": "21.5c", "verdict": "PASS", "observed": "404 {'error': 'report not found'}"}
+{"id": "21.5d", "verdict": "PASS", "observed": "404 {'error': \"no such member in the caller's org\"}"}
+{"id": "21.14", "verdict": "PASS", "observed": "400 {'error': 'limit must be between 1 and 1000'}"}
+{"id": "21.15", "verdict": "PASS", "observed": "404"}
+{"id": "21.6", "verdict": "PASS", "observed": "400 {'error': 'mute window may not exceed 72 hours'}"}
+{"id": "21.1", "verdict": "PASS", "observed": "400 {'password': ['This field is required.']}"}
+{"id": "21.2", "verdict": "PASS", "observed": "401 {'detail': 'no active org membership'}"}
+{"id": "21.3", "verdict": "PASS", "observed": "403 {'error': 'mfa_required', 'detail': 'platform-staff accounts must verify a TOTP code', 'enrolled': True}"}
+{"id": "21.5a", "verdict": "PASS", "observed": "200 {'saloon_id': '3', 'results': []}"}
+{"id": "21.5b", "verdict": "PASS", "observed": "404 {'error': 'farm not found'}"}
+{"id": "21.5c", "verdict": "PASS", "observed": "404 {'error': 'report not found'}"}
+{"id": "21.5d", "verdict": "PASS", "observed": "404 {'error': \"no such member in the caller's org\"}"}
+{"id": "21.14", "verdict": "PASS", "observed": "400 {'error': 'limit must be between 1 and 1000'}"}
+{"id": "21.15", "verdict": "PASS", "observed": "404"}
+{"id": "21.6", "verdict": "PASS", "observed": "400 {'error': 'mute window may not exceed 72 hours'}"}
+{"id": "21.7", "verdict": "PASS", "observed": "409 {'error': 'mute window overlaps an existing window for this saloon'}"}
+{"id": "21.8", "verdict": "PASS", "observed": "400 {'error': 'illegal transition ACTIVE_FLOCK → PRE_HEATING (canonical loop)'}"}
+{"id": "21.13", "verdict": "PASS", "observed": "400 {'error': 'conflicting fields: casualties_today vs mortality_count'}"}
+{"id": "21.1", "verdict": "PASS", "observed": "400 {'password': ['This field is required.']}"}
+{"id": "21.2", "verdict": "PASS", "observed": "401 {'detail': 'no active org membership'}"}
+{"id": "21.3", "verdict": "PASS", "observed": "403 {'error': 'mfa_required', 'detail': 'platform-staff accounts must verify a TOTP code', 'enrolled': True}"}
+{"id": "21.5a", "verdict": "PASS", "observed": "200 {'saloon_id': '3', 'results': []}"}
+{"id": "21.5b", "verdict": "PASS", "observed": "404 {'error': 'farm not found'}"}
+{"id": "21.5c", "verdict": "PASS", "observed": "404 {'error': 'report not found'}"}
+{"id": "21.5d", "verdict": "PASS", "observed": "404 {'error': \"no such member in the caller's org\"}"}
+{"id": "21.14", "verdict": "PASS", "observed": "400 {'error': 'limit must be between 1 and 1000'}"}
+{"id": "21.15", "verdict": "PASS", "observed": "404"}
+{"id": "21.6", "verdict": "PASS", "observed": "400 {'error': 'mute window may not exceed 72 hours'}"}
+{"id": "21.7", "verdict": "PASS", "observed": "409 {'error': 'mute window overlaps an existing window for this saloon'}"}
+{"id": "21.8", "verdict": "PASS", "observed": "400 {'error': 'illegal transition ACTIVE_FLOCK → PRE_HEATING (canonical loop)'}"}
+{"id": "21.1", "verdict": "PASS", "observed": "400 {'password': ['This field is required.']}"}
+{"id": "21.2", "verdict": "PASS", "observed": "401 {'detail': 'no active org membership'}"}
+{"id": "21.3", "verdict": "PASS", "observed": "403 {'error': 'mfa_required', 'detail': 'platform-staff accounts must verify a TOTP code', 'enrolled': True}"}
+{"id": "21.5a", "verdict": "PASS", "observed": "200 {'saloon_id': '3', 'results': []}"}
+{"id": "21.5b", "verdict": "PASS", "observed": "404 {'error': 'farm not found'}"}
+{"id": "21.5c", "verdict": "PASS", "observed": "404 {'error': 'report not found'}"}
+{"id": "21.5d", "verdict": "PASS", "observed": "404 {'error': \"no such member in the caller's org\"}"}
+{"id": "21.14", "verdict": "PASS", "observed": "400 {'error': 'limit must be between 1 and 1000'}"}
+{"id": "21.15", "verdict": "PASS", "observed": "404"}
+{"id": "21.6", "verdict": "PASS", "observed": "400 {'error': 'mute window may not exceed 72 hours'}"}
+{"id": "21.7", "verdict": "PASS", "observed": "409 {'error': 'mute window overlaps an existing window for this saloon'}"}
+{"id": "21.8", "verdict": "PASS", "observed": "400 {'error': 'illegal transition ACTIVE_FLOCK → PRE_HEATING (canonical loop)'}"}
+{"id": "21.13", "verdict": "PASS", "observed": "400 {'error': 'conflicting fields: casualties_today vs mortality_count'}"}
+{"id": "21.12", "verdict": "PASS", "observed": "403 {'error': 'edit window closed (past 00:00 Asia/Tehran)'}"}
+{"id": "21.9", "verdict": "PASS", "observed": "created=4 last=400 {'error': 'pending gateway request cap reached'}"}
+{"id": "21.1", "verdict": "PASS", "observed": "400 {'password': ['This field is required.']}"}
+{"id": "21.2", "verdict": "PASS", "observed": "401 {'detail': 'no active org membership'}"}
+{"id": "21.3", "verdict": "PASS", "observed": "403 {'error': 'mfa_required', 'detail': 'platform-staff accounts must verify a TOTP code', 'enrolled': True}"}
+{"id": "21.5a", "verdict": "PASS", "observed": "200 {'saloon_id': '3', 'results': []}"}
+{"id": "21.5b", "verdict": "PASS", "observed": "404 {'error': 'farm not found'}"}
+{"id": "21.5c", "verdict": "PASS", "observed": "404 {'error': 'report not found'}"}
+{"id": "21.5d", "verdict": "PASS", "observed": "404 {'error': \"no such member in the caller's org\"}"}
+{"id": "21.14", "verdict": "PASS", "observed": "400 {'error': 'limit must be between 1 and 1000'}"}
+{"id": "21.15", "verdict": "PASS", "observed": "404"}
+{"id": "21.6", "verdict": "PASS", "observed": "400 {'error': 'mute window may not exceed 72 hours'}"}
+{"id": "21.7", "verdict": "PASS", "observed": "409 {'error': 'mute window overlaps an existing window for this saloon'}"}
+{"id": "21.8", "verdict": "PASS", "observed": "400 {'error': 'illegal transition ACTIVE_FLOCK → PRE_HEATING (canonical loop)'}"}
+{"id": "21.13", "verdict": "PASS", "observed": "400 {'error': 'conflicting fields: casualties_today vs mortality_count'}"}
+{"id": "21.12", "verdict": "PASS", "observed": "403 {'error': 'edit window closed (past 00:00 Asia/Tehran)'}"}
+{"id": "21.9", "verdict": "PASS", "observed": "created=0 last=400 {'error': 'pending gateway request cap reached'}"}
+{"id": "21.19", "verdict": "PASS", "observed": "409 {'error': 'gateway sync already in progress'}"}
+{"id": "21.20", "verdict": "PASS", "observed": "400 {'error': 'action must be suspend or resume'}"}
+{"id": "21.4", "verdict": "PASS", "observed": "401 {'detail': 'session revoked'}"}
+{"id": "21.16", "verdict": "PASS", "observed": "HTTP/1.1 403 Access denied deny-logged=True"}
+{"id": "21.18", "verdict": "PASS", "observed": "dlq=True reason=UNSUPPORTED_SCHEMA_VERSION"}
+{"id": "21.17", "verdict": "PASS", "observed": "dlq=True reason=gateway_suspended"}
+{"id": "22.10", "verdict": "PASS", "observed": "E10=None 1"}
+{"id": "22.1", "verdict": "PASS", "observed": "E01=None None 1 0"}
+{"id": "21.10", "verdict": "PASS", "observed": "[401, 401, 401, 429]"}
+{"id": "21.11", "verdict": "PASS", "observed": "400 {'error': 'new password too short (min 10)'}"}
+{"id": "22.2", "verdict": "PASS", "observed": "200"}
+{"id": "22.3", "verdict": "PASS", "observed": "200/200 {'alert_id': 'ff71f68f-530e-4fed-85b2-9be421bae89c', 'acknowledged_by': 1, 'pause_minutes': 10, 'status': 'ACKNOWLEDGED'}"}
+{"id": "22.4", "verdict": "PASS", "observed": "200/200 {'alert_id': 'ff71f68f-530e-4fed-85b2-9be421bae89c', 'resolved': True, 'idempotent': True}"}
+{"id": "22.5", "verdict": "PASS", "observed": "200 {'member_id': 11, 'user_id': 10, 'username': 'offboarded', 'role': 'worker', 'is_active': True, 'joined_at': '2026-09-13T10:22:52.663920+00:00'}"}
+{"id": "22.6", "verdict": "PASS", "observed": "A=201 B=201 {'mute_id': 16, 'saloon_id': '1', 'farm_id': 1, 'starts_at': '2026-09-14T14:35:42+00:00', 'ends_at': '2026-09-14T16:35:42+00:00', 'reason': 'qa-22.6b-371338', 'active': False, 'created_by': 1, 'created_at': '2026-09-14T07:35:43.076127+00:00'}"}
+{"id": "22.7", "verdict": "PASS", "observed": "farms=True alerts=True"}
+{"id": "22.8", "verdict": "PASS", "observed": "404 None"}
+{"id": "22.9", "verdict": "PASS", "observed": "200/200 keys1=['access']"}
+{"id": "22.12", "verdict": "PASS", "observed": "req=True tail=True revoked=True"}
+{"id": "22.11", "verdict": "PASS", "observed": "baseline=True redis-down=True 200 {'saloon_id': '9', 'operational_state': 'PRE_HEATING'}"}
+{"id": "22.13", "verdict": "PASS", "observed": "200 {'status': 'unknown', 'uptime_14d_pct': None, 'probers': [], 'checked_at': '2026-09-14T07:36:20Z'}"}
+{"id": "22.15", "verdict": "FAIL", "observed": "create=201 audit-echo=False delete=409"}
+{"id": "22.2", "verdict": "PASS", "observed": "200"}
+{"id": "22.2", "verdict": "PASS", "observed": "200"}
+{"id": "22.3", "verdict": "PASS", "observed": "200/200 {'alert_id': 'ff71f68f-530e-4fed-85b2-9be421bae89c', 'acknowledged_by': 1, 'pause_minutes': 10, 'status': 'ACKNOWLEDGED'}"}
+{"id": "22.4", "verdict": "PASS", "observed": "200/200 {'alert_id': 'ff71f68f-530e-4fed-85b2-9be421bae89c', 'resolved': True, 'idempotent': True}"}
+{"id": "22.5", "verdict": "PASS", "observed": "200 {'member_id': 11, 'user_id': 10, 'username': 'offboarded', 'role': 'worker', 'is_active': True, 'joined_at': '2026-09-13T10:22:52.663920+00:00'}"}
+{"id": "22.6", "verdict": "PASS", "observed": "A=201 B=201 {'mute_id': 18, 'saloon_id': '1', 'farm_id': 1, 'starts_at': '2026-09-14T14:38:14+00:00', 'ends_at': '2026-09-14T16:38:14+00:00', 'reason': 'qa-22.6b-371491', 'active': False, 'created_by': 1, 'created_at': '2026-09-14T07:38:15.363141+00:00'}"}
+{"id": "22.7", "verdict": "PASS", "observed": "farms=True alerts=True"}
+{"id": "22.8", "verdict": "PASS", "observed": "404 None"}
+{"id": "22.9", "verdict": "PASS", "observed": "200/200 keys1=['access']"}
+{"id": "22.12", "verdict": "PASS", "observed": "req=True tail=True revoked=True"}
+{"id": "22.11", "verdict": "FAIL", "observed": "baseline=False redis-down=False 400 {'error': 'saloon is already in state PRE_HEATING'}"}
+{"id": "22.13", "verdict": "PASS", "observed": "200 {'status': 'unknown', 'uptime_14d_pct': None, 'probers': [], 'checked_at': '2026-09-14T07:38:44Z'}"}
+{"id": "22.15", "verdict": "PASS", "observed": "create=201 audit-md5=True delete=409 {'error': 'still referenced by history'}"}
+{"id": "22.2", "verdict": "PASS", "observed": "200"}
+{"id": "22.3", "verdict": "PASS", "observed": "200/200 {'alert_id': 'ff71f68f-530e-4fed-85b2-9be421bae89c', 'acknowledged_by': 1, 'pause_minutes': 10, 'status': 'ACKNOWLEDGED'}"}
+{"id": "22.4", "verdict": "PASS", "observed": "200/200 {'alert_id': 'ff71f68f-530e-4fed-85b2-9be421bae89c', 'resolved': True, 'idempotent': True}"}
+{"id": "22.5", "verdict": "PASS", "observed": "200 {'member_id': 11, 'user_id': 10, 'username': 'offboarded', 'role': 'worker', 'is_active': True, 'joined_at': '2026-09-13T10:22:52.663920+00:00'}"}
+{"id": "22.6", "verdict": "PASS", "observed": "A=201 B=201 {'mute_id': 20, 'saloon_id': '1', 'farm_id': 1, 'starts_at': '2026-09-14T14:39:15+00:00', 'ends_at': '2026-09-14T16:39:15+00:00', 'reason': 'qa-22.6b-371551', 'active': False, 'created_by': 1, 'created_at': '2026-09-14T07:39:15.683434+00:00'}"}
+{"id": "22.7", "verdict": "PASS", "observed": "farms=True alerts=True"}
+{"id": "22.8", "verdict": "PASS", "observed": "404 None"}
+{"id": "22.9", "verdict": "PASS", "observed": "200/200 keys1=['access']"}
+{"id": "22.12", "verdict": "PASS", "observed": "req=True tail=True revoked=True"}
+{"id": "22.11", "verdict": "PASS", "observed": "baseline=True redis-down=True 200 {'saloon_id': '11', 'operational_state': 'PRE_HEATING'}"}
+{"id": "22.13", "verdict": "PASS", "observed": "200 {'status': 'unknown', 'uptime_14d_pct': None, 'probers': [], 'checked_at': '2026-09-14T07:39:44Z'}"}
+{"id": "22.15", "verdict": "PASS", "observed": "create=201 audit-md5=True delete=409 {'error': 'still referenced by history'}"}
+{"id": "19.2", "verdict": "PASS", "observed": "REHEARSAL=1 backup.sh exit 0; /tmp/qa-backups/morghdari_20260914.dump 466247B (pg_dump continuous_agg hints only)"}
+{"id": "19.3", "verdict": "PASS", "observed": "wal-g backup-push with PG creds (BUG-15 workaround) -> base_0000000100000000000000E7; backup-list shows D9+E7 on MinIO"}
+{"id": "19.5", "verdict": "PASS", "observed": "restore_rehearsal.sh on 466KB dump: restore 49s RTO; hypertables verified; stack healthy; qa_smoke 7/7 after"}
+{"id": "19.4", "verdict": "PASS", "observed": "pitr_rehearsal.sh: marker qamarker19_4_1789372247 absent; parity 15/2/63; hypertables ok; RTO 57s (<=240); DR row logged. Script bugs fixed live (BUG-19)"}
+{"id": "19.6", "verdict": "PASS", "observed": "redis_wipe_drill.sh exit 0, RTO 38s (<=15min): volume destroyed; leg1 rebuild ran (1 open alert re-armed); leg2 warmer rewrote hashes (4 saloon:*:thresholds present); DR row logged. Log scripts/qa_wipe.log"}
+{"id": "22.14", "verdict": "PASS", "observed": "post-wipe in-window (uptime 293s<600s): 10 ACTIVE slots, 0 sensor:status keys, los_watchdog_sweep->0, 0 LOS rows; normal ops after (thresholds present, smoke green)"}
+{"id": "1.26", "verdict": "PASS", "observed": "login throttle auth_login 60/min per attempted username: 60x bad logins 401 then 429 from attempt 61 (4x 429 seen); demo-owner/password12345 still 200 with token"}
+{"id": "6.8", "verdict": "PASS", "observed": "10/10 checks green (TLS 8883 localhost, JWT API auth): user 201, wrong-pw rejected, allow 204, connect ok, publish delivered, revoke 204, revoked not delivered, rotation 200, new ok, old rejected"}
+{"id": "15.7", "verdict": "PASS", "observed": "compat WS wss://localhost/ws/farms/farm-1/telemetry -> connection_established farm_slug=farm-1 saloon_count=5; unknown slug -> hs-403 graceful; zero KeyError in daphne logs (rebuilt backend:vps-01 with BUG-7 both-spellings fix)"}
+{"id": "15.8", "verdict": "PASS", "observed": "HTTP/1.1 101 Switching Protocols redis-down valid-token WS; daphne_alive=True degraded_logged=False"}
+{"id": "19.9", "verdict": "PASS", "observed": "BUG-12 reproduced 3rd time (2026-09-14): docker kill -> exited, RestartCount 0, no auto-restart in 120s (run1) / still exited at +10s (run2); gap bounded (000 probe-timeout then 502 ~3.1s, never infinite); operator docker start -> healthy + 200 in ~5s (run1) / ~8s (run2), both <=40s; no nginx reload needed. Row expectation updated to operator step."}
+{"id": "19.7", "verdict": "PASS", "observed": "GATE1 DEPLOYABLE; GATE2 635 passed; GATE3 trivy 0 fixable"}
+{"id": "20.3a", "verdict": "PASS", "observed": "REPLAY_ANALYSIS rows: ['25d9334d-ffb9-49d3-abaa-6ee0947d893d|REPLAY_ANALYSIS|SS-00010:2026-09-14T11:33:12.133846+00:00']"}
+{"id": "20.3b", "verdict": "PASS", "observed": "replay backlog drained (pending='0'); escalation exclusion per 9.12"}
+{"id": "20.3", "verdict": "PASS", "observed": "offline->buffer->replay->REPLAY_ANALYSIS fresh rows: ['25d9334d-ffb9-49d3-abaa-6ee0947d893d|REPLAY_ANALYSIS|SS-00010:2026-09-14T11:33:12.133846+00:00'] (no live push of old rows)"}
+{"id": "11.6", "verdict": "PASS", "observed": "baseline=True redis-down=True pong=PONG S2=200 {'saloon_id': '13', 'operational_state': 'PRE_HEATING'} S1-AF=200 {'saloon_id': '12', 'operational_state': 'ACTIVE_FLOCK'}"}
+{"id": "12.5", "verdict": "FAIL", "observed": "approve=200 {'gateway_slot_id': 'QA10A-391554', 'status': 'PROVISIONED'}; guard exists only in provisioning_sync (apps/provisioning/api.py:615-619), approve_gateway api.py:765-782 has no registry check"}
+{"id": "8.15", "verdict": "NA", "observed": "pro quota set 30 (restored 50000); 39 msgs published (39 rows expected), inserted=39, meter 78->78 (past limit, nothing dropped). ENFORCEMENT ABSENT: consumers.py:335-340 only bumps meter:current_hour; quota_exempt_tier1_metrics seed 0003:18; mqtt_auth/services.py:103 'quotas land with v1.0'"}
+{"id": "8.13", "verdict": "FAIL", "observed": "muted-thi+THI-breach published (row seen=1, mutes_active=0); NameError=False eval_fail_log=True http500=False thi_alerts=0; suspected path evaluation.py:182-190 (track_breach outside else)"}
+{"id": "4.6", "verdict": "PASS", "observed": "session=200 audit_epoch=1789391699.757643 resp_wall=1789391699.778 audit<=resp+5s=True; bad-org=400 audit_rows 29->29"}
+{"id": "11.10", "verdict": "PASS", "observed": "start 23:50 Tehran yesterday (UTC start 2026-09-13T20:20:00+00:00) -> flock_age_days=1 (canonical _flock_age_days, apps/farms/api.py:91)"}
+{"id": "8.13", "verdict": "PASS", "observed": "fix-in-image=True digest=4 crash=False thi_alerts 19->19"}
+{"id": "11.10", "verdict": "PASS", "observed": "flock_age_days(23:50-yesterday-Tehran)=['1'] (fixed +03:30, no DST)"}
+{"id": "12.5", "verdict": "PASS", "observed": "sync-without-hardware=400 {'error': 'active gateway hardware not registered'}"}
+{"id": "4.6a", "verdict": "PASS", "observed": "audit ts 2026-09-14 18:50:43.951842+00 within [2026-09-14 18:50:43.883779+00 .. 2026-09-14 18:50:44.036966+00]; count 29->30"}
+{"id": "4.6b", "verdict": "PASS", "observed": "bad-opener=400 audit-count 30->30"}
+{"id": "11.6", "verdict": "PASS", "observed": "baseline=True redis-down=True 200 {'saloon_id': '47', 'operational_state': 'PRE_HEATING'}"}
+{"id": "8.15", "verdict": "NA", "observed": "code-verified: hourly message-quota DROP has no runtime enforcement in this snapshot — drain path only bumps the metering counter (apps/telemetry/consumers.py:335 'M7-08 MET-SAAS'); broker-level quotas deferred to the v1.0 quota engine (apps/mqtt_auth/services.py:103); quota_exempt_tier1_metrics is "}
+{"id": "15.9", "verdict": "FAIL", "observed": "idle-close at 1.7s (nginx proxy_read_timeout 300s); err=None"}
+{"id": "4.8", "verdict": "FAIL", "observed": "pre=200 post=401 {'detail': 'Given token not valid for any token type', 'code': 'token_not_valid', 'messages': [{'token_class': 'AccessTo; err=None"}
+{"id": "15.9", "verdict": "FAIL", "observed": "idle-close at 2.5s (nginx proxy_read_timeout 300s)"}
+{"id": "15.9", "verdict": "FAIL", "observed": "idle-close at 50.4s (nginx proxy_read_timeout 300s)"}
+{"id": "16.12", "verdict": "PASS", "observed": "gauge frozen at 1.7894158901950235 while beat down (2 reads equal); staleness 1789415965.9s > 300 (BeatHeartbeatStale rule); advanced after restart=True"}
+{"id": "16.12", "verdict": "PASS", "observed": "gauge frozen at 1789416090.7717152 while beat down (2 reads equal); staleness 334.7s > 300 (BeatHeartbeatStale rule); advanced after restart=True"}
+{"id": "4.8", "verdict": "PASS", "observed": "pre-expiry op 200; at +915s same op 401 token_not_valid (session JWT=AccessToken 900s, same physics as 20.4c; row expectation plan-fixed - the 403 session message is for valid-token-no-session, not expiry)"}
+{"id": "15.9", "verdict": "PASS", "observed": "pong-less idle WS closed at 50.4s = daphne ping_interval 20 + ping_timeout 30 (defaults verified in Server.__init__); BUG-22 socket_timeout regression fixed first (was closing at 2.5s with redis UP); nginx proxy_read_timeout 300s remains the backstop"}
+{"id": "15.7a", "verdict": "PASS", "observed": "connection_established farm=farm-1"}
+{"id": "15.7b", "verdict": "PASS", "observed": "handshake status=404"}
+{"id": "BUG-21-verify", "verdict": "PASS", "observed": "django job health=up lastError='' scrape 07:15:57Z; wget Host:daphne:8000 /api/v1/metrics/ HTTP 200 + metrics body; 0 new DisallowedHost in 5m post-restart (was 900/60m pre-fix)"}
+{"id": "smoke-6", "verdict": "PASS", "observed": "rc=0  | [PASS] C6 OTA checksum generator present (scripts/ota_checksums.py) —  | [PASS] C7 LOS-suppression tunable (los_suppress_after_redis_restart_min) — config key in test_seeds |  | PASS — 4 checks, 4 pass, 0 skip, 0 fail"}
+{"id": "16.13a", "verdict": "PASS", "observed": "status=200 day=2026-09-14 orgs=1 "}
+{"id": "smoke-6", "verdict": "PASS", "observed": "rc=0  | [PASS] C6 OTA checksum generator present (scripts/ota_checksums.py) —  | [PASS] C7 LOS-suppression tunable (los_suppress_after_redis_restart_min) — config key in test_seeds |  | PASS — 4 checks, 4 pass, 0 skip, 0 fail"}
+{"id": "16.13a", "verdict": "PASS", "observed": "status=200 day=2026-09-14 orgs=1 "}
+{"id": "smoke-6", "verdict": "PASS", "observed": "rc=0  | [PASS] C6 OTA checksum generator present (scripts/ota_checksums.py) —  | [PASS] C7 LOS-suppression tunable (los_suppress_after_redis_restart_min) — config key in test_seeds |  | PASS — 4 checks, 4 pass, 0 skip, 0 fail"}
+{"id": "12.7", "verdict": "PASS", "observed": "basic=200 mgr=200 bad=401 bad_body={\"error\":\"gateway Basic credentials or manager role required\"}"}
+{"id": "17.1", "verdict": "PASS", "observed": "poison 1789458490821-0 -> DLQ 1789458498186-0 reason=PROCESSING_FAILED xacked(absent from PEL)"}
+{"id": "15.2a", "verdict": "PASS", "observed": "raw-TLS: HTTP/1.1 101 then WS close 4003 (no token); AUTH-DENY clause=no-token"}
+{"id": "15.2b", "verdict": "PASS", "observed": "raw-TLS: HTTP/1.1 101 then WS close 4003 (bad token); AUTH-DENY clause=bad-token"}
+{"id": "15.2c", "verdict": "PASS", "observed": "raw-TLS: HTTP/1.1 101 then WS close 4003 (qasuper, no org claim)"}
+{"id": "15.2d", "verdict": "PASS", "observed": "raw-TLS: HTTP/1.1 101 then WS close 4003 (other-owner on saloon 1); clause=saloon-or-member saloon_org=None"}
+{"id": "15.2", "verdict": "PASS", "observed": "wire=101+close-4003 x4 (BUG-6 accept-then-close live); server AUTH-DENY clauses logged per case"}
+{"id": "15.3", "verdict": "PASS", "observed": "bad token at full cap: 101 + close 4003, fresh AUTH-DENY clause=bad-token, scard=10 (auth before cap)"}
+{"id": "15.4", "verdict": "PASS", "observed": "11th valid conn: 101 + close 4000, scard stays 10, drains to 0 after close"}
+{"id": "21.16", "verdict": "PASS", "observed": "raw-TLS: HTTP/1.1 101 then WS close 4003 (cross-org token); AUTH-DENY logged"}
+{"id": "11.9", "verdict": "PASS", "observed": "a=409 saloon has an active flock (sid 50/fid 5, left); b=409 saloon has flock history (sid 51/fid 6, flock+saloon cleaned via djshell); c=200 deleted sid 52, SALOON_CREATED survives NULL FK details intact (TS 459363)"}
+{"id": "17.1-port-poison", "verdict": "PASS", "observed": "DLQ 1789461871719-0 PROCESSING_FAILED, xacked=True"}
+{"id": "17.1-port-malformed", "verdict": "PASS", "observed": "DLQ 1789461864924-0 PROCESSING_ERROR, xacked=True"}

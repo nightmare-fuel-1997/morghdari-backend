@@ -1,0 +1,7 @@
+Traceback (most recent call last):
+  File "M:\projects\poultry_vps_deploy\scripts\qa_wave5a.py", line 170, in <module>
+    cleanup_mutes()
+  File "M:\projects\poultry_vps_deploy\scripts\qa_wave5a.py", line 92, in cleanup_mutes
+    api("DELETE", f"/maintenance-mutes/{m['id']}/", token=MGR)
+                                        ~^^^^^^
+KeyError: 'id'
