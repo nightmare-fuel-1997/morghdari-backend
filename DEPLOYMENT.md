@@ -227,12 +227,50 @@ trees have drifted again — stop and reconcile before deploying.
    built and pushed, then deployed by tag. Editing `backend/` on the VPS and
    restarting containers changes nothing.
 
-### Known live issue at the time of writing (2026-10-14)
+### Split-build incident — FOUND AND RESOLVED 2026-10-14
 
-The `vps-02` tag was moved to a new build on 2026-10-14, and `daphne` plus
-`simulator` were recreated onto it — but `celery-worker`, `celery-beat`,
-`subscriber-01` and `subscriber-02` were left on the previous image
-(`668229220018`, built 2026-09-21), which no longer exists in the image store.
-The web tier is therefore running newer code than the async and MQTT tiers.
-Recreating those four containers settles it.
+**What happened.** The `vps-02` tag was moved to a new build
+(`c9046ae8274e`, 08:07 UTC) and `daphne` plus `simulator` were recreated onto
+it — but `celery-worker`, `celery-beat`, `subscriber-01` and `subscriber-02`
+were left running the previous image (`668229220018`, built 2026-09-21). That
+image no longer existed in the image store; only the four running containers
+kept it alive. The web tier was therefore executing newer code than the async
+and MQTT tiers, and the stale tier could not have been recreated from the host.
+
+**How it was found.** Not by a health check — every container reported healthy
+throughout, because each one genuinely was healthy on its own build. It surfaced
+only by comparing the image ID behind each container
+(`docker inspect -f '{{.Image}}' <name>`) rather than trusting the tag, since a
+moved tag hides which build a long-running container is actually on.
+
+**Resolution.** The four stale containers were recreated onto the current tag:
+
+```bash
+cd /opt/morghdari
+docker compose -p morghdari --env-file .env \
+  -f docker-compose.prod.yml -f docker-compose.vps.yml \
+  up -d --no-build --force-recreate \
+  celery-worker celery-beat subscriber-01 subscriber-02
+```
+
+`--no-build` because `docker-compose.vps.yml` adds build contexts and the image
+must come from the registry, not a local rebuild. `docker-compose.sim.yml` was
+deliberately omitted: it defines only the `simulator` service, so leaving it out
+does not touch the four targets — it just makes compose warn about one orphan
+container, which is harmless.
+
+**Pre-flight that made it safe:** `manage.py migrate --check` returned 0 (no
+pending migrations, so the newer image was schema-compatible); the target image
+was already present locally; and `.env` already pinned `MORGHDARI_TAG=vps-02`.
+
+**Verified after:** all six backend services on the single image
+`c9046ae8274e`; celery processing `telemetry.process_realtime_payload` and
+`alerts.escalate_alerts` successfully; both subscribers reconnected to EMQX over
+TLS with `session_present=True` (no MQTT messages lost); zero tracebacks; the
+four API endpoints returning 200.
+
+**Lesson worth keeping:** `docker compose ls` and container health cannot tell
+you which build a container is running. Compare `docker inspect -f '{{.Image}}'`
+across services after any tag move.
+
 
