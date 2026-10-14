@@ -44,7 +44,8 @@ MIRROR = Path(__file__).resolve().parent.parent / "openapi.generated.yaml"
 #   /api/v1/         — the canonical surface (TUTORIAL)
 #   /api/compat/v1/  — the W1–W5 Flutter report aliases (docs/api-compat-flutter-v1.md)
 #   /api/schema, /api/docs, /api/redoc — the docs endpoints themselves
-KEPT_PREFIXES = ("/api/v1/", "/api/compat/v1/", "/api/schema", "/api/docs", "/api/redoc")
+#   /api/ws-docs, /api/ws-schema — the WebSocket protocol docs (Swagger covers REST only)
+KEPT_PREFIXES = ("/api/v1/", "/api/compat/v1/", "/api/schema", "/api/docs", "/api/redoc", "/api/ws-docs", "/api/ws-schema")
 
 def _generate():
     """(schema, errors, warnings) for the current urlconf — no DB access needed."""

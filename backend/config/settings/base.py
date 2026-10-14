@@ -296,7 +296,9 @@ SPECTACULAR_SETTINGS = {
         "reviewer is read-only on daily reports.\n\n"
         "Base URL: https://api.morghdari.com/api/v1/ — the canonical "
         "human-written contract is backend/openapi.yaml (the "
-        "implemented == contract gate); this page is its generated mirror."
+        "implemented == contract gate); this page is its generated mirror.\n\n"
+        "WebSocket live docs (Swagger covers REST only): /api/ws-docs/ "
+        "(human page with JS/Dart snippets) + /api/ws-schema/ (machine JSON)."
     ),
     "VERSION": "1.7.8",
     "CONTACT": {"name": "Morghdari Platform Team"},

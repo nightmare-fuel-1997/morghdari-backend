@@ -10,6 +10,8 @@ info:
     Tenancy: every response is scoped to the caller's org_id claim; cross-org ids answer 404 (never distinguished from unknown ids). Roles: owner > manager > engineer > doctor/worker/installer; reviewer is read-only on daily reports.
 
     Base URL: https://api.morghdari.com/api/v1/ — the canonical human-written contract is backend/openapi.yaml (the implemented == contract gate); this page is its generated mirror.
+
+    WebSocket live docs (Swagger covers REST only): /api/ws-docs/ (human page with JS/Dart snippets) + /api/ws-schema/ (machine JSON).
   contact:
     name: Morghdari Platform Team
   license:
@@ -7832,6 +7834,23 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: Not found — id/slug unknown OR outside the caller's org (never
             distinguished).
+  /api/ws-schema/:
+    get:
+      operationId: ws_schema
+      description: 'Machine-readable WebSocket protocol: endpoints, auth, close codes
+        and message examples. Examples are built from apps.telemetry.ws builders,
+        so they cannot drift from the push code. See /api/ws-docs/ for the human page
+        with JS/Dart snippets.'
+      summary: WebSocket protocol schema (JSON)
+      tags:
+      - Telemetry
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: ''
   /api/v1/metrics/:
     get:
       operationId: api_v1_metrics_retrieve

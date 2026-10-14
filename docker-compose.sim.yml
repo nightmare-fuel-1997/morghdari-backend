@@ -24,7 +24,7 @@ services:
       MQTT_PORT: "8883"
       MQTT_TLS_CA: "/app/certs/ca.crt"
       SIM_ORG_UUID: "ac1d1186-b30d-40ff-a924-82e1022fe9e9"
-      SIM_INTERVAL_SEC: "10"
+      SIM_INTERVAL_SEC: "60"
       DJANGO_SETTINGS_MODULE: "config.settings.production"
       DJANGO_SECRET_KEY: "${DJANGO_SECRET_KEY}"
       DJANGO_ALLOWED_HOSTS: "${DJANGO_ALLOWED_HOSTS}"

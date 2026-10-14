@@ -4,7 +4,7 @@ info:
   version: "1.7.8"
   description: |
     REST API for the Morghdari multi-tenant poultry monitoring platform.
-    WebSocket protocol is documented separately in the Frontend Integration Spec.
+    WebSocket protocol: /api/ws-docs/ (human) + /api/ws-schema/ (JSON); Swagger covers REST only.
 
     v1.7.8 (2026-09-12 — daily reconciliation ledger, v0.9/B5): engineer+
     GET /reconciliation/ (DB rows + DLQ rows + alert list per Tehran day).

@@ -3,7 +3,8 @@
 drop_legacy_compat_aliases: the legacy /api/... Flutter twins share view
 functions with the canonical /api/compat/v1/... routes, so per-view
 exclude=True would kill both mounts. Filter the generated schema instead:
-keep /api/v1/*, /api/compat/v1/* and the docs pages; drop the legacy twins.
+keep /api/v1/*, /api/compat/v1/* and the docs pages (/api/schema, /api/docs,
+/api/redoc, /api/ws-docs, /api/ws-schema); drop the legacy twins.
 The twins stay SERVED (Flutter still calls them) — they are just documented
 once, under their canonical prefix, per the locked OpenAPI scope.
 """
@@ -15,6 +16,8 @@ _KEPT_PREFIXES = (
     "/api/schema",
     "/api/docs",
     "/api/redoc",
+    "/api/ws-docs",
+    "/api/ws-schema",
 )
 
 

@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Morghdari WebSocket Protocol</title>
+<style>
+body { font-family: system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+pre { background: #f4f4f4; padding: 1rem; overflow-x: auto; border-radius: 6px; }
+code { font-size: 0.9em; }
+table { border-collapse: collapse; width: 100%; }
+th, td { border: 1px solid #ddd; padding: 0.5rem; text-align: left; }
+nav a { margin-right: 1rem; }
+</style>
+</head>
+<body>
+<nav>
+<a href="/api/docs/">REST Swagger</a>
+<a href="/api/redoc/">ReDoc</a>
+<a href="/api/ws-schema/">WS JSON schema</a>
+</nav>
+<h1>Morghdari WebSocket Protocol</h1>
+<p>Live dashboard sockets. REST is in Swagger; this page is the WS contract. Machine-readable mirror: <a href="/api/ws-schema/">/api/ws-schema/</a>.</p>
+
+<h2>1. Endpoints</h2>
+<table>
+<tr><th>Socket</th><th>Path</th></tr>
+<tr><td>Saloon (canonical)</td><td><code>WS /ws/saloons/{saloon_id}/telemetry?token=&lt;JWT&gt;</code></td></tr>
+<tr><td>Farm (compat, Flutter)</td><td><code>WS /ws/farms/{farmSlug}/telemetry?token=&lt;JWT&gt;</code><br>canonical twin: <code>/api/compat/v1/ws/farms/{farmSlug}/telemetry?token=&lt;JWT&gt;</code></td></tr>
+</table>
+<p>One socket per dashboard tab. Auth rides <code>?token=</code> because browsers cannot set headers on the WS handshake. Connect is accept-then-close so the code reaches the client.</p>
+
+<h2>2. Close codes</h2>
+<table>
+<tr><th>Code</th><th>Meaning</th></tr>
+<tr><td><code>4003</code></td><td>Auth/org failure: missing or invalid token, token without org claim, unknown or foreign saloon/farm, or no ACTIVE membership. Re-login / check org.</td></tr>
+<tr><td><code>4000</code></td><td>Cap full: <code>ws_max_connections_per_user</code> slots already held (default 10). Close another tab, retry later.</td></tr>
+</table>
+
+<h2>3. Server messages</h2>
+<h3>telemetry.hello (saloon connect)</h3>
+<pre>{
+  "type": "telemetry.hello",
+  "saloon_id": 12,
+  "org_id": "&lt;org uuid&gt;",
+  "thresholds": {}
+}</pre>
+<h3>telemetry.update (live push, post-commit; metrics verbatim from stored row)</h3>
+<pre>{
+  "type": "telemetry.update",
+  "saloon_id": 12,
+  "slot_id": "GW-01",
+  "device_ts": "2026-09-12T10:00:00Z",
+  "is_buffered": false,
+  "metrics": {"temp": {"avg": 24.5}, "humidity": {"avg": 62.0}}
+}</pre>
+<h3>telemetry.gap_fill (reply to gap_fill; ascending, max 200 rows)</h3>
+<pre>{
+  "type": "telemetry.gap_fill",
+  "saloon_id": 12,
+  "rows": [
+    {"slot_id": "GW-01", "device_ts": "2026-09-12T10:00:00Z",
+     "server_received_ts": "2026-09-12T10:00:02Z",
+     "is_buffered": false, "metrics": {"temp": {"avg": 24.5}}}
+  ]
+}</pre>
+<h3>telemetry.rejoined (late group-join after degraded handshake)</h3>
+<pre>{
+  "type": "telemetry.rejoined",
+  "saloon_id": 12,
+  "org_id": "&lt;org uuid&gt;",
+  "thresholds": {}
+}</pre>
+<h3>connection_established (compat farm connect; buffered rows never pushed)</h3>
+<pre>{
+  "type": "connection_established",
+  "farm_slug": "farm-01",
+  "org_id": "&lt;org uuid&gt;",
+  "saloon_count": 2
+}</pre>
+
+<h2>4. Client messages</h2>
+<p>Gap-fill (stateless — server holds no session, client merges by stamp):</p>
+<pre>{ "action": "gap_fill", "since": "2026-09-12T09:55:00Z" }</pre>
+<p>Compat subscribe (TTL heartbeat only):</p>
+<pre>{ "action": "subscribe" }</pre>
+<p>Any other inbound payload is ignored safely and still refreshes the cap TTL.</p>
+
+<h2>5. Snippets</h2>
+<h3>JavaScript</h3>
+<pre>
+const token = await getAccessToken(); // 15-min JWT
+const ws = new WebSocket(
+  `wss://${location.host}/ws/saloons/12/telemetry?token=${token}`
+);
+ws.onmessage = (ev) => {
+  const msg = JSON.parse(ev.data);
+  if (msg.type === "telemetry.update") onReading(msg);
+  if (msg.type === "telemetry.gap_fill") mergeRows(msg.rows);
+};
+ws.onclose = (ev) => {
+  if (ev.code === 4003) redirectToLogin();
+  if (ev.code === 4000) toast("Too many tabs open");
+  else setTimeout(reconnect, 2000);
+};
+// after offline: ws.send(JSON.stringify({action: "gap_fill", since: lastSeenIso}));
+</pre>
+<h3>Dart (Flutter, compat farm socket)</h3>
+<pre>
+final token = await getAccessToken();
+final ch = WebSocketChannel.connect(Uri.parse(
+  'wss://$host/ws/farms/$farmSlug/telemetry?token=$token'));
+ch.stream.listen((raw) {
+  final msg = jsonDecode(raw);
+  if (msg is Map &amp;&amp; msg.containsKey('sent_ts')) onFlatRecord(msg);
+  if (msg['type'] == 'connection_established') onReady(msg);
+}, onDone: () {
+  if (ch.closeCode == 4003) redirectToLogin();
+});
+</pre>
+<p><small>Do not use Swagger "Try it out" for these paths — it sends HTTP, not a WS handshake.</small></p>
+</body>
+</html>
