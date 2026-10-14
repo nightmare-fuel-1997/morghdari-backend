@@ -7,6 +7,7 @@ source. Nothing in here is imported by the running stack.
 |---|---|
 | `qa-harness/` | The live QA drivers used against the deployed VPS stack in September 2026, plus their recorded results and the test plan they implement. |
 | `vps-day-2026-09/` | The operational reports written during the VPS bring-up and hardening days (16–19 September 2026). |
+| `superpowers-plans/` | The September 2026 execution plans (fix-all QA, fix-all bugs, VPS deploy) — recovered from the host's git-ignored agent workspace. |
 
 ## Why this is here
 

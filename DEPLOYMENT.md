@@ -227,6 +227,30 @@ trees have drifted again — stop and reconcile before deploying.
    built and pushed, then deployed by tag. Editing `backend/` on the VPS and
    restarting containers changes nothing.
 
+### Branch map — what is and is not on `main`
+
+`main` is the single source of truth and is what both checkouts track. The
+repository also carries a set of historical branches. They are all pushed to
+`origin`, so nothing is at risk — but only `main` is deployed.
+
+| Branch | Status |
+|---|---|
+| `main` | The only deployed line. Both checkouts track it. |
+| `v0.1-m0` … `v0.9-pilot-backend`, `v0.4-m4` | The per-milestone lines the project was built on; their content is folded into `main`. |
+| `demo/v0.2-showcase`, `demo/v0.3-showcase`, `demo/v0.4-showcase`, `v0.5-m5` | The **demo console** line. See below. |
+| `docs/sync-4s`, `docs/openapi-annotations`, `fix/bug-sweep-2026-09-15`, `chore/high-impact-improvements`, `merge/local+server-2026-09-21` | Working branches whose content is in `main`. |
+
+**The demo/showcase line is intentionally NOT in `main`.** It was removed on
+purpose by `e6d8401` (2026-09-11, "chore: remove the demo web console, owner
+console, and demo seeding scaffolding"): the real frontend is a separate team's
+product, so the second, unversioned UI surface only cost maintenance. That
+commit also dropped `owner-console/`, `apps/telemetry/demo_views.py`, the
+`/demo/*` routes and the demo-only tests. The work is fully preserved on
+`demo/v0.4-showcase` (tip `4074274`) and `v0.5-m5` (tip `94fc613`), both in sync
+with `origin` — recoverable with `git checkout demo/v0.4-showcase -- demo-ui
+demo-ui-src` if it is ever wanted again. Do **not** merge those branches into
+`main` wholesale; the removal was a product decision, not drift.
+
 ### Split-build incident — FOUND AND RESOLVED 2026-10-14
 
 **What happened.** The `vps-02` tag was moved to a new build

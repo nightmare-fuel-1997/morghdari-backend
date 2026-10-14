@@ -92,11 +92,18 @@ htmlcov/
 .sim-scaffold3/
 .sim-scaffold*/
 
-# --- Agent scratch (root working notes, never committed) ---
-/findings.md
-/task_plan.md
-/HANDOFF.md
+# --- Agent scratch ---
+# NOTE (2026-10-14): findings.md, task_plan.md and HANDOFF.md sit at the repo
+# root and ARE tracked on purpose. They are this project's decision record —
+# what each milestone discovered, why it was cut that way, and where it goes
+# next. They were once listed here as "never committed" scratch; that was wrong
+# (and a silent no-op, since ignore rules never apply to already-tracked files).
+# The three rules were removed so this file stops contradicting reality.
+# baseline-recovery.patch is likewise tracked on purpose; the *.patch rule below
+# still guards against stray patch dumps from local tooling, with an explicit
+# negation for the one patch this repo ships.
 *.patch
+!/baseline-recovery.patch
 
 # --- QA scratch (server-side harness, never committed) ---
 .tmp-qa/
