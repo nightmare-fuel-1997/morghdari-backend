@@ -134,7 +134,8 @@ def rc_ok(rc):
 def mqtt_new(client_id):
     """paho 2.x client (CallbackAPIVersion.VERSION2) with TLS unless the
     caller opted into plaintext via EMQX_MQTT_TLS=0."""
-    c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id)
+    c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id,
+                    protocol=mqtt.MQTTv311)  # fleet pin — owner decision 2026-10-18
     if USE_TLS:
         c.tls_set(ca_certs=CA_CERT)
     return c

@@ -116,10 +116,14 @@ def build_client() -> mqtt.Client:
     """Construct the paho client exactly as the docs prescribe (S1)."""
     client_id = _required_env("SUBSCRIBER_CLIENT_ID")
     # clean_session=False (MQTT v3.1.1): persistent session — offline queueing.
+    # Owner decision 2026-10-18 (Tracker §4t): MQTT 3.1.1 (MQTTv311) is the fleet
+    # protocol — pinned explicitly (paho's default is already v3.1.1) so the
+    # standard is grep-able, never left to a library default.
     client = mqtt.Client(
         callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
         client_id=client_id,
         clean_session=False,
+        protocol=mqtt.MQTTv311,
     )
     username = os.environ.get("MQTT_USERNAME", "").strip()
     if username:

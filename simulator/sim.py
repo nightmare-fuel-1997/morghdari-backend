@@ -44,7 +44,9 @@ def metrics(t, seed):
 
 
 def make_client(slot, password):
-    c = mqtt.Client(client_id=f"sim-{slot}", protocol=mqtt.MQTTv5)
+    # Owner decision 2026-10-18 (Tracker §4t): fleet protocol = MQTT 3.1.1
+    # (was the only MQTTv5-pinned client in the repo).
+    c = mqtt.Client(client_id=f"sim-{slot}", protocol=mqtt.MQTTv311)
     c.username_pw_set(slot, password)
     c.tls_set(ca_certs=CA, tls_version=ssl.PROTOCOL_TLS_CLIENT)
     c.tls_insecure_set(True)  # staging-only, same posture as subscribers

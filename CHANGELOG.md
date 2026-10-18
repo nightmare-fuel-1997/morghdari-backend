@@ -3,6 +3,17 @@
 All notable changes per version. Format follows the spiral-roadmap discipline:
 one section per version tag, each listing what risk the version killed.
 
+## [Unreleased] — 2026-10-18 — MQTT 3.1.1 protocol standardization (owner decision · Tracker §4t)
+
+No behavioral change — paho's default protocol was already MQTTv311; this makes the
+fleet standard explicit and retires the MQTTv5 alternative noted in the corpus docs.
+
+- Changed: `simulator/sim.py` — the only client hard-pinning MQTTv5 → now MQTTv311.
+- Changed: subscriber, simulators, live-verify and HIL-harness constructors pin
+  `protocol=mqtt.MQTTv311` explicitly (grep-able standard, not an implicit default).
+- Docs: backend_docs corpus pins (Saas D14, Topic Map §5.5, Blueprint §4, Firmware
+  Spec §2/§9.3, Walkthrough, v0.3 version docs, Tracker §4t, docs CHANGELOG).
+
 ## [v0.9-backend] — 2026-09-12 — pilot backend half (field calendar parked)
 
 Everything a backend owner can finish without a farm: the Hardware Team

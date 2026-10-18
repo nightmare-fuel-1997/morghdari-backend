@@ -214,7 +214,8 @@ class P2TelemetryVisible(Probe):
             ctx.hardware_id(), ctx.args.slot, ["P-A"], device_ts, buffered=False, seq=1)
 
         client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
-                             client_id=f"hil-p2-{os.getpid()}")
+                             client_id=f"hil-p2-{os.getpid()}",
+                             protocol=mqtt.MQTTv311)  # fleet pin — 2026-10-18
         ctx.mqtt_connect(client, tls=ctx.args.mqtt_tls)
         client.loop_start()
         info = client.publish(ctx.telemetry_topic(), json.dumps(payload), qos=1)
@@ -281,7 +282,8 @@ class P3LwtOffline(Probe):
         # identity only ever publishes it (least privilege), so the harness
         # takes separate observer creds (e.g. the backend subscriber user).
         observer = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
-                               client_id=f"hil-p3-obs-{os.getpid()}")
+                               client_id=f"hil-p3-obs-{os.getpid()}",
+                               protocol=mqtt.MQTTv311)  # fleet pin — 2026-10-18
         observer.on_subscribe = on_subscribe
         observer.on_message = on_message
         obs_user, obs_pass = ctx.observer_credentials()
@@ -300,7 +302,8 @@ class P3LwtOffline(Probe):
                     "subscribe-capable user, e.g. the backend subscriber")
 
         dying = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
-                            client_id=f"hil-p3-die-{os.getpid()}")
+                            client_id=f"hil-p3-die-{os.getpid()}",
+                            protocol=mqtt.MQTTv311)  # fleet pin — 2026-10-18
         dying.will_set(topic, json.dumps({"status": "offline", "source": "hil-p3"}),
                        qos=1, retain=True)
         # Same TLS/auth path as every other probe (port 8883 is TLS-only) but
@@ -342,7 +345,8 @@ class P4BufferedReplay(Probe):
                  now.replace(second=0, microsecond=0) - timedelta(minutes=1)]
 
         client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
-                             client_id=f"hil-p4-{os.getpid()}")
+                             client_id=f"hil-p4-{os.getpid()}",
+                             protocol=mqtt.MQTTv311)  # fleet pin — 2026-10-18
         ctx.mqtt_connect(client, tls=ctx.args.mqtt_tls)
         client.loop_start()
         for i, mark in enumerate(marks):
@@ -396,7 +400,8 @@ class P5OtaAck(Probe):
                 got["raw"] = msg.payload.decode()
 
         client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
-                             client_id=f"hil-p5-{os.getpid()}")
+                             client_id=f"hil-p5-{os.getpid()}",
+                             protocol=mqtt.MQTTv311)  # fleet pin — 2026-10-18
         ctx.mqtt_connect(client, tls=ctx.args.mqtt_tls)
         client.on_message = on_message
         client.subscribe(topic, qos=1)
@@ -432,7 +437,8 @@ class P6RotationAck(Probe):
                 got["raw"] = msg.payload.decode()
 
         client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
-                             client_id=f"hil-p6-{os.getpid()}")
+                             client_id=f"hil-p6-{os.getpid()}",
+                             protocol=mqtt.MQTTv311)  # fleet pin — 2026-10-18
         ctx.mqtt_connect(client, tls=ctx.args.mqtt_tls)
         client.on_message = on_message
         client.subscribe(topic, qos=1)

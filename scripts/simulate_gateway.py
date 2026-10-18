@@ -115,6 +115,7 @@ def main(argv: list[str] | None = None) -> int:
     client = mqtt.Client(
         callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
         client_id=f"sim-{args.gateway}-{os.getpid()}",
+        protocol=mqtt.MQTTv311,  # fleet pin — owner decision 2026-10-18 (Tracker §4t)
     )
     username = os.environ.get("MQTT_USERNAME", "").strip()
     if username:

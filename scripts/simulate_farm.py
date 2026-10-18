@@ -376,6 +376,7 @@ def publish_loop(
     client = mqtt.Client(
         callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
         client_id=f"farm-sim-{pack_id}-{slot_id}-{hash((org_id, slot_id)) & 0xFFFF}",
+        protocol=mqtt.MQTTv311,  # fleet pin — owner decision 2026-10-18 (Tracker §4t)
     )
     conn = _connect_args(args, farm_id)
     if conn["username"]:
