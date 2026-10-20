@@ -67,6 +67,12 @@ DECLARE
     'org_offboarding_log',
     -- C5 commands
     'command_logs',
+    -- Phase 0 (2026-10-18): MQTT-native provisioning surfaces.
+    -- device_units is deliberately ABSENT: it is the org-less factory
+    -- inventory (AD-1), the same posture as mqtt_device_credentials.
+    'installation_jobs',
+    'gateway_commands',
+    'device_photos',
     -- C6 audit
     'account_activity_logs'
   ];

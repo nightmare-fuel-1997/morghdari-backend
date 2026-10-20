@@ -4,6 +4,18 @@ from apps.provisioning.api import (
     approve_gateway,
     city_list,
     gateway_config,
+    install_assignable,
+    install_gateway_photo,
+    install_job_assign,
+    install_job_bind,
+    install_job_bind_override,
+    install_job_detail,
+    install_job_session,
+    install_job_sensor_map,
+    install_sensor_photo,
+    install_job_submit,
+    install_jobs,
+    provisioning_config_state,
     gateway_requests,
     location_tree,
     province_list,
@@ -18,10 +30,71 @@ from apps.provisioning.api import (
     village_list,
 )
 
+
 app_name = "provisioning"
 
 urlpatterns = [
+    # Phase 2 slice (b) — installation jobs: queue, detail, assign, session.
+    # Org-less by design: the installer has no org claim until `session/` mints
+    # one (AD-14). Discovered via the admin alias, then read per tenant context.
+    path("provisioning/installations/", install_jobs, name="install-jobs"),
+    path(
+        "provisioning/installations/assignable/",
+        install_assignable,
+        name="install-assignable",
+    ),
+    path(
+        "provisioning/installations/<int:job_id>/",
+        install_job_detail,
+        name="install-job-detail",
+    ),
+    path(
+        "provisioning/installations/<int:job_id>/assign/",
+        install_job_assign,
+        name="install-job-assign",
+    ),
+    path(
+        "provisioning/installations/<int:job_id>/gateway/",
+        install_job_bind,
+        name="install-job-bind",
+    ),
+    path(
+        "provisioning/installations/<int:job_id>/gateway/override/",
+        install_job_bind_override,
+        name="install-job-bind-override",
+    ),
+    path(
+        "provisioning/installations/<int:job_id>/session/",
+        install_job_session,
+        name="install-job-session",
+    ),
+
     # M6-01 geography reads (installer drill-down, contract v1.5.0)
+    path(
+        "provisioning/installations/<int:job_id>/sensors/",
+        install_job_sensor_map,
+        name="install-job-sensor-map",
+    ),
+    path(
+        "provisioning/installations/<int:job_id>/gateway/photo/",
+        install_gateway_photo,
+        name="install-gateway-photo",
+    ),
+    path(
+        "provisioning/installations/<int:job_id>/sensors/<str:slot_id>/photo/",
+        install_sensor_photo,
+        name="install-sensor-photo",
+    ),
+    path(
+        "provisioning/installations/<int:job_id>/submit/",
+        install_job_submit,
+        name="install-job-submit",
+    ),
+    path(
+        "provisioning/config-state/",
+        provisioning_config_state,
+        name="provisioning-config-state",
+    ),
     path("provisioning/location-tree/", location_tree, name="provisioning-location-tree"),
     path("provisioning/provinces/", province_list, name="provisioning-provinces"),
     path("provisioning/cities/", city_list, name="provisioning-cities"),

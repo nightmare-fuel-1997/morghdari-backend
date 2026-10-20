@@ -62,10 +62,13 @@ def _make_world():
     return {"org": org, "saloon": saloon, "slot": slot, "farm": farm}
 
 
-def _status_payload(status):
+def _status_payload(status, slot_id):
+    """MQTT Topic Map §1.2: statuses are ONLINE/OFFLINE and the payload mirrors
+    the topic's gateway_slot_id — the subscriber treats a mismatch as an
+    identity fault (same rule as the telemetry lane)."""
     return json.dumps({
         "status": status, "schema_version": "2.0",
-        "gateway_hardware_id": "hw", "gateway_slot_id": "slot", "pack_id": "P-A",
+        "gateway_hardware_id": "hw", "gateway_slot_id": slot_id,
     }).encode()
 
 
@@ -82,7 +85,7 @@ def test_subscriber_mirrors_retained_offline_into_lwt_key(timescale_db, _fresh_r
         f"{world['org'].org_id}/farms/{world['farm'].pk}"
         f"/gateways/{world['slot'].slot_id}/status"
     )
-    _handle_status(client, topic, _status_payload("offline"))
+    _handle_status(client, topic, _status_payload("OFFLINE", world["slot"].slot_id))
 
     assert client.get(pack_lwt_key(world["saloon"].pk, world["slot"].slot_id)) == "offline"
     del world
@@ -98,8 +101,11 @@ def test_subscriber_ignores_unknown_slots_and_bad_payloads(timescale_db, _fresh_
 
     # unknown slot → no key, no crash
     topic = f"{world['org'].org_id}/farms/1/gateways/ghost-slot/status"
-    _handle_status(client, topic, _status_payload("offline"))
+    _handle_status(client, topic, _status_payload("OFFLINE", "ghost-slot"))
     assert client.keys("sensor:lwt:*") == []
+    # A gateway that publishes exists, so the gateway-level key IS written —
+    # only the (unknown) sensor mirror is skipped. See gateway_lwt_key.
+    assert client.keys("gateway:lwt:*")
 
     # malformed payload → ignored
     good_topic = (
@@ -113,6 +119,11 @@ def test_subscriber_ignores_unknown_slots_and_bad_payloads(timescale_db, _fresh_
     _handle_status(client, good_topic, b'{"status": "suspended"}')
     assert client.keys("sensor:lwt:*") == []
 
-    # badly-shaped topic → ignored    _handle_status(client, "org/farms/1/gateways", _status_payload("offline"))
+    # badly-shaped topic → ignored
+    _handle_status(client, "org/farms/1/gateways", _status_payload("OFFLINE", "slot"))
+    assert client.keys("sensor:lwt:*") == []
+
+    # identity fault → the topic's gateway segment must equal the payload's
+    _handle_status(client, good_topic, _status_payload("OFFLINE", "someone-else"))
     assert client.keys("sensor:lwt:*") == []
     del world

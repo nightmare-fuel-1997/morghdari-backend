@@ -80,3 +80,41 @@ class AccountActivityLog(models.Model):
         indexes = [
             models.Index(F("org"), F("farm"), F("saloon"), F("timestamp").desc(), name="idx_logs_hierarchy"),
         ]
+
+
+class PlatformAuditLog(models.Model):
+    """Org-less audit trail for platform actions (Phase 1, 2026-10-18).
+
+    WHY a second audit table: `account_activity_logs.org_id` is NOT NULL, but
+    the Hardware Team works BEFORE any organization exists — registering a
+    factory unit, issuing its broker credential, re-issuing a claim code. Those
+    are exactly the actions that most need an audit trail (they mint
+    credentials), so they cannot be dropped for lack of an org.
+
+    Deliberately NOT enrolled in RLS: there is no org_id to filter on, the same
+    posture as mqtt_device_credentials. Access is platform-staff-only.
+
+    فارسی: لاگ ممیزیِ بدون سازمان برای اقدام‌های کارخانه — صدور اعتبارنامه و
+    کدِ claim پیش از وجود هر سازمانی؛ به همین دلیل نمی‌توانست در
+    account_activity_logs (که org_id اجباری دارد) ثبت شود.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    timestamp = models.DateTimeField(db_default=Now())
+    # SET_NULL, not RESTRICT: the audit row must outlive the actor's account.
+    actor = models.ForeignKey(
+        "accounts.User", db_column="actor_id", on_delete=models.SET_NULL,
+        null=True, blank=True, related_name="+",
+    )
+    action = models.CharField(max_length=100)
+    target_type = models.CharField(max_length=50, null=True, blank=True)
+    target_id = models.CharField(max_length=100, null=True, blank=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    details = models.JSONField(null=True, blank=True)
+
+    class Meta:
+        db_table = "platform_audit_log"
+        indexes = [
+            models.Index(F("target_type"), F("target_id"), F("timestamp").desc(),
+                         name="idx_platform_audit_target"),
+        ]

@@ -18,6 +18,12 @@ from apps.accounts.views import (
     support_task_dispatch,
     update_member_role,
 )
+from apps.devices.api_units import (
+    unit_claim_code,
+    unit_collection,
+    unit_credential,
+    unit_retire,
+)
 from apps.accounts.api_hardware import (
     hw_actuator_register,
     hw_actuator_retire,
@@ -63,6 +69,25 @@ urlpatterns = [
         name="support-alert-force-resolve",
     ),
     path("platform/support/tasks/drain/", support_task_dispatch, name="support-task-dispatch"),
+    # Phase 1 (2026-10-18): ORG-LESS factory inventory. Distinct from
+    # /platform/support/* on purpose — those require an org-scoped support
+    # session, and the Hardware Team works before any org exists (AD-1/AD-13).
+    path("platform/devices/units/", unit_collection, name="platform-units"),
+    path(
+        "platform/devices/units/<str:unit_id>/credential/",
+        unit_credential,
+        name="platform-unit-credential",
+    ),
+    path(
+        "platform/devices/units/<str:unit_id>/claim-code/",
+        unit_claim_code,
+        name="platform-unit-claim-code",
+    ),
+    path(
+        "platform/devices/units/<str:unit_id>/retire/",
+        unit_retire,
+        name="platform-unit-retire",
+    ),
     # v0.9 H0-H2: Hardware Team write path — register + retire x gateway /
     # sensor / actuator, behind the same audited support session as M7-07 ops.
     path("platform/support/hardware/gateways/", hw_gateway_register, name="hw-gateway-register"),

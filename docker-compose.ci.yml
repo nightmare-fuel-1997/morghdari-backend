@@ -37,6 +37,11 @@ volumes:
 services:
   postgres:
     image: timescale/timescaledb:2.29.2-pg16
+    # Resource caps: this file runs on a developer laptop (8c / ~4GB
+    # Docker VM), not a CI runner. Without these, TimescaleDB + EMQX
+    # + pytest can starve the host. Tune upward on a real runner.
+    mem_limit: 512m
+    cpus: 1.0
     # Bootstrap SUPERUSER 'morghdari_test' provisions the CI database. RLS
     # policies are exercised via a pytest session fixture (SET ROLE / GUC),
     # not via the bootstrap roles — the superuser is fine for CI only.
@@ -54,6 +59,11 @@ services:
 
   redis:
     image: redis:7-alpine
+    # Resource caps: this file runs on a developer laptop (8c / ~4GB
+    # Docker VM), not a CI runner. Without these, TimescaleDB + EMQX
+    # + pytest can starve the host. Tune upward on a real runner.
+    mem_limit: 192m
+    cpus: 0.5
     # Skill MUST-DO (health checks everywhere a service can be): the pytest
     # and migrate-gate jobs genuinely use Redis (cache, ws:active), so a
     # not-ready broker must hold them back like postgres does.
@@ -73,6 +83,11 @@ services:
   # C-05: EMQX 5.5 requires mechanism alongside backend.
   emqx:
     image: emqx:5.5
+    # Resource caps: this file runs on a developer laptop (8c / ~4GB
+    # Docker VM), not a CI runner. Without these, TimescaleDB + EMQX
+    # + pytest can starve the host. Tune upward on a real runner.
+    mem_limit: 512m
+    cpus: 1.0
     environment:
       EMQX_DASHBOARD__DEFAULT_PASSWORD: "dev_password"
       EMQX_DASHBOARD__LISTENERS__HTTP__AUTH_TYPE: "basic"
@@ -80,6 +95,12 @@ services:
       EMQX_AUTHENTICATION__1__BACKEND: "built_in_database"
       EMQX_AUTHORIZATION__NO_MATCH: "deny"
       EMQX_API_KEY__BOOTSTRAP_FILE: "/opt/emqx/etc/api_keys"
+      # FLEET PIN — MQTT 3.1.1 only (hardware-team constraint, owner 2026-10-19).
+      # Mirrors the `zone { mqtt { ... } }` block in emqx/emqx.conf so the pin is
+      # EXERCISED here rather than only asserted: test_m10_03 proves a 5.0 client
+      # is refused while 3.1.1 is accepted. 3=3.1, 4=3.1.1, 5=5.0.
+      EMQX_ZONE__DEFAULT__MQTT__MIN_PROTOCOL_VERSION: "3"
+      EMQX_ZONE__DEFAULT__MQTT__MAX_PROTOCOL_VERSION: "4"
     volumes:
       - ./scripts/emqx-api-keys.txt:/opt/emqx/etc/api_keys:ro
     healthcheck:
@@ -98,6 +119,11 @@ services:
     build:
       context: ./backend
       target: test
+    # Resource caps: this file runs on a developer laptop (8c / ~4GB
+    # Docker VM), not a CI runner. Without these, TimescaleDB + EMQX
+    # + pytest can starve the host. Tune upward on a real runner.
+    mem_limit: 768m
+    cpus: 1.0
     depends_on:
       emqx:
         condition: service_healthy
@@ -122,6 +148,11 @@ services:
     build:
       context: ./backend
       target: test
+    # Resource caps: this file runs on a developer laptop (8c / ~4GB
+    # Docker VM), not a CI runner. Without these, TimescaleDB + EMQX
+    # + pytest can starve the host. Tune upward on a real runner.
+    mem_limit: 1536m
+    cpus: 2.5
     depends_on:
       postgres:
         condition: service_healthy
@@ -141,10 +172,13 @@ services:
     # machinery is mounted read-only instead of duplicated into the image:
     # initdb for the bootstrap SQL, monitoring/ for the MET-AVAIL config
     # assertions (test_m7_08 reads prometheus.yml + alerts.yml at REPO_ROOT —
-    # inside the image that is / and would otherwise miss the tree entirely).
+    # inside the image that is / and would otherwise miss the tree entirely),
+    # emqx/ for the authn-query assertions (test_m10_01 reads emqx.conf, which
+    # is the broker's single source of truth and must not be copied in).
     volumes:
       - ./initdb:/initdb:ro
       - ./monitoring:/monitoring:ro
+      - ./emqx:/emqx:ro
     # Coverage gates live in the command (mirrors docs template); pytest.ini
     # addopts would double-count --cov args otherwise kept minimal here.
     # The module gate runs in the SAME container right after pytest so it reads
@@ -166,10 +200,79 @@ services:
   # pytest conceptually (a migration graph that cannot deploy makes test
   # results moot); compose order is irrelevant since the throwaway DB is its
   # own universe. Uses the same test-stage image (psycopg ships in it).
+  # Bootstrap-lane end-to-end — real EMQX, real credential lane, real reconciler.
+  # Complements live-verify (which proves broker authn/authz/rotation semantics)
+  # by proving the NEW pre-org device lane: a factory unit connects, subscribes
+  # its own device topics, is DENIED the tenant telemetry topic under
+  # no_match=deny, and receives + applies the backend's retained config.
+  # The CI broker profile is built-in-DB authn (see the emqx service), so the
+  # credential is seeded through the management API exactly as emqx_provision.py
+  # does for the dev stack; the postgres-backed authn query in emqx/emqx.conf is
+  # the production/rehearsal profile and is covered by test_m10_01 instead.
+  e2e-bootstrap:
+    build:
+      context: ./backend
+      target: test
+    # Resource caps: this file runs on a developer laptop (8c / ~4GB
+    # Docker VM), not a CI runner. Tune upward on a real runner.
+    mem_limit: 1024m
+    cpus: 1.5
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      emqx:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://morghdari_test:ci_password_only@postgres:5432/morghdari_test
+      REDIS_URL: redis://redis:6379
+      DJANGO_SETTINGS_MODULE: config.settings.test
+      MORGHDARI_INITDB_DIR: /initdb
+      # The live-broker switch. Unset in the `test` service, so the normal suite
+      # skips this module rather than failing without a broker.
+      MQTT_BOOTSTRAP_HOST: emqx
+      MQTT_BOOTSTRAP_PORT: "1883"
+      # The CI broker profile has no TLS listener (built-in-DB authn only).
+      # Production/rehearsal is TLS on 8883 — the simulator honours the flag
+      # rather than assuming either, so the same test covers both profiles.
+      MQTT_BOOTSTRAP_TLS: "0"
+      # The BACKEND's own publisher must reach the same broker, otherwise the
+      # retained-config publish silently degrades to "not configured" and the
+      # round-trip half of this module has nothing to round-trip.
+      MQTT_HOST: emqx
+      MQTT_PORT: "1883"
+      MQTT_TLS: "0"
+      EMQX_API_URL: http://emqx:18083
+      EMQX_API_USER: demo-admin
+      EMQX_API_PASS: dev_password
+    image: morghdari-test:e2e
+    volumes:
+      # /scripts holds firmware_sim.py, the INDEPENDENT device implementation —
+      # mounted, not copied, so it stays out of the app image by design.
+      - ./scripts:/scripts:ro
+      - ./initdb:/initdb:ro
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        # Seed the CI broker's demo-sub (snooper) and authn chain, idempotently.
+        python -c "import json; json.dump({'farms': [{'id': 1}]}, open('/tmp/farm_manifest.json', 'w'))"
+        python /scripts/emqx_provision.py --manifest /tmp/farm_manifest.json --base-url http://emqx:18083
+        # --create-db: the postgres container outlives local runs, so a reused
+        # test DB keeps a stale model state (see AGENT_HANDOFF R19).
+        pytest tests/test_m10_03_bootstrap_lane_live.py -v --create-db --no-cov -p no:cacheprovider
+
   migrate-gate:
     build:
       context: ./backend
       target: test
+    # Resource caps: this file runs on a developer laptop (8c / ~4GB
+    # Docker VM), not a CI runner. Without these, TimescaleDB + EMQX
+    # + pytest can starve the host. Tune upward on a real runner.
+    mem_limit: 768m
+    cpus: 1.0
     depends_on:
       postgres:
         condition: service_healthy
@@ -188,6 +291,11 @@ services:
   # docker socket is how trivy reaches the daemon's local images.
   image-scan:
     image: aquasec/trivy:0.55.2
+    # Resource caps: this file runs on a developer laptop (8c / ~4GB
+    # Docker VM), not a CI runner. Without these, TimescaleDB + EMQX
+    # + pytest can starve the host. Tune upward on a real runner.
+    mem_limit: 1024m
+    cpus: 1.0
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       # Persistent vuln-DB cache: without it every --rm run re-downloads the

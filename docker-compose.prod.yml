@@ -307,6 +307,25 @@ services:
       REDIS_URL: "redis://:${REDIS_PASSWORD}@redis:6379"
       DJANGO_SECRET_KEY: "${DJANGO_SECRET_KEY}"   # same docs-gap fix as daphne
       CELERY_CONSUMER_ID: "$${HOSTNAME}-worker"   # runtime env — a parse-time ${HOSTNAME} would be blank
+      # Phase 0 (2026-10-18): the worker is now the MQTT PUBLISHER (v0.5 E1).
+      # Without these it degrades to "not configured" and every desired-state
+      # publish silently returns False — visible as FAILED in the config-state
+      # view, never as a crash. MQTT_TLS_INSECURE is the same accepted risk the
+      # subscribers carry: the docker hostname is in no public SAN.
+      MQTT_HOST: "emqx"
+      MQTT_PORT: "8883"
+      MQTT_TLS: "1"
+      MQTT_TLS_CA: "/app/certs/ca.crt"
+      MQTT_TLS_INSECURE: "1"
+      PUBLISHER_USERNAME: "${PUBLISHER_USERNAME}"
+      PUBLISHER_PASSWORD: "${PUBLISHER_PASSWORD}"
+      PUBLISHER_CLIENT_ID: "django-backend"
+      # Advertised to the gateway in the desired-state document — the PUBLIC
+      # broker address, never the docker-internal one.
+      MQTT_PUBLIC_HOST: "${MQTT_PUBLIC_HOST:-mqtt.morghdari.com}"
+      MQTT_PUBLIC_PORT: "8883"
+    volumes:
+      - ./certs:/app/certs:ro
     healthcheck:
       test: ["CMD-SHELL", "celery -A config inspect ping --timeout=10 || exit 1"]
       interval: 30s

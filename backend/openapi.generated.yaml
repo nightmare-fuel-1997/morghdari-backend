@@ -2036,7 +2036,6 @@ paths:
           multipart/form-data:
             schema:
               $ref: '#/components/schemas/GatewayRequestCreateRequest'
-        required: true
       security:
       - BearerAuth: []
       - BearerAuth: []
@@ -3717,6 +3716,190 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: Not found — id/slug unknown OR outside the caller's org (never
             distinguished).
+  /api/v1/platform/devices/units/:
+    get:
+      operationId: platform_unit_list
+      description: |-
+        Newest first, capped at 200. `?state=` filters to
+        REGISTERED / BOUND / RETIRED.
+
+        Readable by support as well as hardware: support needs to answer "is this serial
+        already claimed?" without write access to the inventory.
+      summary: List factory units (Hardware Team + Support)
+      parameters:
+      - in: query
+        name: state
+        schema:
+          type: string
+        description: REGISTERED | BOUND | RETIRED
+      tags:
+      - platform-inventory
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnitListResponse'
+          description: ''
+    post:
+      operationId: platform_unit_register
+      description: |-
+        Mints one `device_units` row with its broker credential, its
+        single-use QR claim code, and exactly three ACL rows (subscribe `desired`,
+        subscribe `command`, publish `reported`).
+
+        The unit has NO organization and NO farm — that is the point (AD-1). It may
+        connect to the broker immediately, but its ACL reaches no tenant topic, so it
+        cannot publish telemetry until an installer binds it (Phase 2).
+
+        `password` and `claim_code` are returned exactly once and never logged.
+      summary: Register a factory unit (Hardware Team)
+      tags:
+      - platform-inventory
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UnitRegisterRequestRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/UnitRegisterRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/UnitRegisterRequestRequest'
+        required: true
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnitRegisterResponse'
+          description: ''
+  /api/v1/platform/devices/units/{unit_id}/claim-code/:
+    post:
+      operationId: platform_unit_claim_code
+      description: |-
+        Rotates the claim code and returns the new plaintext once.
+
+        Use when a label is damaged or the unit came back from the field. The previous
+        code stops working immediately — it is replaced, not supplemented. A BOUND unit
+        is a 409: its label is already consumed and the binding is the record.
+      summary: Re-issue a unit's QR claim code (Hardware Team)
+      parameters:
+      - in: path
+        name: unit_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - platform-inventory
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UnitReasonRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/UnitReasonRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/UnitReasonRequest'
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnitClaimCodeResponse'
+          description: ''
+  /api/v1/platform/devices/units/{unit_id}/credential/:
+    post:
+      operationId: platform_unit_credential
+      description: |-
+        Sets a fresh broker password and returns the plaintext once.
+
+        A retired unit is 404 (it must be re-registered, not resurrected). The previous
+        password stops working at the next CONNECT: the broker reads the hash straight
+        from `mqtt_device_credentials`.
+      summary: Issue or rotate a unit's MQTT password (Hardware Team)
+      parameters:
+      - in: path
+        name: unit_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - platform-inventory
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UnitReasonRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/UnitReasonRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/UnitReasonRequest'
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnitCredentialResponse'
+          description: ''
+  /api/v1/platform/devices/units/{unit_id}/retire/:
+    post:
+      operationId: platform_unit_retire
+      description: |-
+        Terminal: the unit stops authenticating (credential deactivated)
+        and loses every ACL row, so `no_match = deny` applies.
+
+        A BOUND unit is a 409 — unbind it first, because retiring it would leave a
+        gateway slot pointing at a unit that can no longer connect. Idempotent on an
+        already-retired unit.
+      summary: Retire a factory unit (Hardware Team)
+      parameters:
+      - in: path
+        name: unit_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - platform-inventory
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UnitRetireRequestRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/UnitRetireRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/UnitRetireRequestRequest'
+        required: true
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnitRetireResponse'
+          description: ''
   /api/v1/platform/support/alerts/{alert_id}/force-resolve/:
     post:
       operationId: support_alert_force_resolve
@@ -4636,6 +4819,39 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: Unauthenticated — missing, expired, or malformed Bearer token.
+  /api/v1/provisioning/config-state/:
+    get:
+      operationId: provisioning_config_state
+      description: |-
+        `?state=pending_sync|stalled|failed|ready` — the derived, never-stored
+        lifecycle from AD-22. This is the view a support engineer opens when a farm says
+        "my gateway shows nothing": PENDING_SYNC means the device was never told
+        anything, STALLED means it was told and has not caught up, FAILED carries the
+        reason, READY means it converged.
+
+        Every row is derived from theVersion counters at read time, so it cannot
+        disagree with the reconciler. Cross-org rows are invisible: an org-less
+        support caller reads through the admin alias and each org's rows are read
+        inside its own tenant context.
+      summary: Four-state convergence view (support/admin)
+      parameters:
+      - in: query
+        name: state
+        schema:
+          type: string
+        description: pending_sync | stalled | failed | ready
+      tags:
+      - platform-installations
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+        '400':
+          description: No response body
+        '403':
+          description: No response body
   /api/v1/provisioning/gateways/{gateway_slot_id}/approve/:
     post:
       operationId: approve_gateway
@@ -4765,6 +4981,375 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: Not found — id/slug unknown OR outside the caller's org (never
             distinguished).
+  /api/v1/provisioning/installations/:
+    get:
+      operationId: install_jobs
+      description: |-
+        Newest first, capped at 200. `?state=` filters to PENDING,
+        ASSIGNED, BOUND, SUBMITTED, COMPLETED or CANCELLED.
+
+        An installer sees the jobs assigned to THEM; support and admin see every job.
+        The queue is deliberately org-less: the installer is platform staff and has no
+        org claim until `session/` mints one (AD-14).
+      summary: Installation queue (installer; support/admin see all)
+      parameters:
+      - in: query
+        name: state
+        schema:
+          type: string
+        description: PENDING | ASSIGNED | BOUND | SUBMITTED | COMPLETED | CANCELLED
+      tags:
+      - platform-installations
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+        '403':
+          description: No response body
+  /api/v1/provisioning/installations/{job_id}/:
+    get:
+      operationId: install_job_detail
+      summary: One installation job
+      parameters:
+      - in: path
+        name: job_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - platform-installations
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+        '403':
+          description: No response body
+        '404':
+          description: No response body
+  /api/v1/provisioning/installations/{job_id}/assign/:
+    post:
+      operationId: install_job_assign
+      description: |-
+        Support action, audited in `platform_audit_log` because the actor
+        is org-less. Moves PENDING → ASSIGNED.
+
+        Reassignment is allowed after the unit is bound, but it is FLAGGED
+        (`reassigned_after_bind`) rather than silently rewriting the assignee, so the
+        job history stays readable (AD-21). A COMPLETED or CANCELLED job is a 409.
+      summary: Assign a job to an installer (support/admin)
+      parameters:
+      - in: path
+        name: job_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - platform-installations
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+        '400':
+          description: No response body
+        '403':
+          description: No response body
+        '404':
+          description: No response body
+        '409':
+          description: No response body
+  /api/v1/provisioning/installations/{job_id}/gateway/:
+    post:
+      operationId: install_job_bind
+      description: |-
+        The installer scans the QR label on the physical gateway and the
+        backend joins it to the job: creates the `gateway_slots` row (slot id = unit id,
+        AD-2), expands the ACL from the 3-row device lane to the full T1–T9 tenant set,
+        consumes the claim code, moves the job to BOUND, and enqueues the first
+        retained-configuration publish.
+
+        **Works with the unit OFFLINE** — nothing here talks to the broker, so a device
+        that is switched off can still be bound and will pick up its configuration on
+        its next connect.
+
+        The claim code is a possession proof, single use: two installers racing on the
+        same label cannot both win (the stamp happens inside the row lock). It is NOT
+        the MQTT password, so a photographed label cannot break authentication — only
+        `retire` can.
+
+        Idempotent for a REPLAYED bind of the same unit to the same job, because an
+        installer with one bar of signal presses Send twice.
+      summary: Bind a factory unit to this job by unit id + claim code (AD-3)
+      parameters:
+      - in: path
+        name: job_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - platform-installations
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+        '400':
+          description: No response body
+        '403':
+          description: No response body
+        '404':
+          description: No response body
+        '409':
+          description: No response body
+  /api/v1/provisioning/installations/{job_id}/gateway/override/:
+    post:
+      operationId: install_job_bind_override
+      description: |-
+        Escape hatch for a label that was destroyed or never arrived.
+        Skips the claim-code proof, which is why `reason` is MANDATORY and the row is
+        audited in both ledger tables with `via_override: true`. The device's MQTT
+        credential is untouched, so an unproven unit can still be retired later.
+      summary: Bind without a claim code (support/admin, lost label)
+      parameters:
+      - in: path
+        name: job_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - platform-installations
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+        '400':
+          description: No response body
+        '403':
+          description: No response body
+        '404':
+          description: No response body
+        '409':
+          description: No response body
+  /api/v1/provisioning/installations/{job_id}/gateway/photo/:
+    post:
+      operationId: install_gateway_photo
+      description: |-
+        AD-20's other half: a photo of the gateway itself, so a later
+        technician can see how it was mounted and wired. Same rules as the sensor photo —
+        multipart `file`, jpeg/png/webp, 5 MB, one primary.
+      summary: Upload an installation photo of the gateway (AD-20)
+      parameters:
+      - in: path
+        name: job_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - platform-installations
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+        '201':
+          description: No response body
+        '400':
+          description: No response body
+        '403':
+          description: No response body
+        '404':
+          description: No response body
+        '409':
+          description: No response body
+  /api/v1/provisioning/installations/{job_id}/sensors/:
+    post:
+      operationId: install_job_sensor_map
+      description: |-
+        The join that makes a sensor slot real: `pack_id` is the 8-hex LoRa
+        node id burned into the sensor at manufacture and printed on it, and this is
+        where it meets the `saloon_sensor_slots` row the installer created.
+
+        Everything the device needs arrives through this join — `sensors[].pack_id`,
+        its saloon, position, label and `metrics` (from the slot's
+        `allowed_metric_keys`, the column that previously had no writer). So the mapping
+        bumps `desired_config_version`, which is what makes the device treat the next
+        retained document as NEW rather than a stale copy.
+
+        One physical sensor can only be in one place: mapping the same `pack_id` to a
+        DIFFERENT slot is a 409. Mapping it to the SAME slot again is idempotent (200),
+        because an installer with one bar of signal presses Send twice.
+      summary: Bind a sensor pack to a sensor slot (AD-23)
+      parameters:
+      - in: path
+        name: job_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - platform-installations
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+        '201':
+          description: No response body
+        '400':
+          description: No response body
+        '403':
+          description: No response body
+        '404':
+          description: No response body
+        '409':
+          description: No response body
+  /api/v1/provisioning/installations/{job_id}/sensors/{slot_id}/photo/:
+    post:
+      operationId: install_sensor_photo
+      description: |-
+        AD-20: "each sensor is an independent entity in our system", so
+        each one gets its own photo — the installer's proof of what was actually mounted
+        where. Accepts a multipart `file` (jpeg/png/webp, max 5 MB) plus an optional
+        `description` and `is_primary`.
+
+        `is_primary` clears the previous primary for the SAME slot, so a target has one
+        cover image rather than a race. The sensor slot must belong to a saloon in this
+        job's farm.
+      summary: Upload an installation photo of a sensor (AD-20)
+      parameters:
+      - in: path
+        name: job_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: slot_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - platform-installations
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+        '201':
+          description: No response body
+        '400':
+          description: No response body
+        '403':
+          description: No response body
+        '404':
+          description: No response body
+  /api/v1/provisioning/installations/{job_id}/session/:
+    post:
+      operationId: install_job_session
+      description: |-
+        Mints a 15-minute access token whose claims add `org_id`,
+        `installer_session: true`, `job_id` and `farm_id`. While that token is used,
+        the tenant middleware sets the org GUC and RLS scopes every query to that org.
+
+        Only the job's assignee (or support/admin) may open one. The claim is
+        deliberately NOT `support_session`: an installer must never inherit a support
+        operator's powers.
+      summary: Open a scoped installer session for one job (AD-14)
+      parameters:
+      - in: path
+        name: job_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - platform-installations
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+        '403':
+          description: No response body
+        '404':
+          description: No response body
+        '409':
+          description: No response body
+  /api/v1/provisioning/installations/{job_id}/submit/:
+    post:
+      operationId: install_job_submit
+      description: |-
+        The installer presses Done after the gateway is mounted and wired.
+        Moves the job BOUND → SUBMITTED, which is the condition AD-17 waits for: once
+        the device also reports that it applied the desired configuration, the slot
+        activates to `PROVISIONED` with NO human approval.
+
+        Requires a bound unit — you cannot submit a job with no device. Submitting
+        twice is idempotent, because the Installer presses Done again when the HTTP
+        response was lost.
+
+        If the device already reported before the installer reached for the phone, the
+        activation check runs immediately on submit rather than waiting for the next
+        report.
+      summary: Submit a bound job (installer finished on site)
+      parameters:
+      - in: path
+        name: job_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - platform-installations
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+        '403':
+          description: No response body
+        '404':
+          description: No response body
+        '409':
+          description: No response body
+  /api/v1/provisioning/installations/assignable/:
+    get:
+      operationId: install_assignable
+      description: |-
+        `?province_id=` narrows the list using `account_role_scopes`
+        (the regional installer scoping from Tracker §4i): an installer whose scope has
+        no province is unrestricted within the org; one scoped to a province sees only
+        farms in it. Only ACTIVE org members with the `installer` role are returned.
+      summary: Installer picker for a job (support/admin)
+      parameters:
+      - in: query
+        name: org_id
+        schema:
+          type: string
+        required: true
+      - in: query
+        name: province_id
+        schema:
+          type: integer
+      tags:
+      - platform-installations
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+        '403':
+          description: No response body
   /api/v1/provisioning/location-tree/:
     get:
       operationId: get_location_tree
@@ -7169,6 +7754,49 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: Not found — id/slug unknown OR outside the caller's org (never
             distinguished).
+  /api/v1/saloons/{saloon_id}/sensor-slots/:
+    post:
+      operationId: saloon_sensor_slots_create
+      description: |-
+        Finding D5 / contradiction X3: `Actor Use-Case & Dependency Map`
+        lists `saloon_sensor_slots` writers as the Hardware Team, the Device Installer
+        (via provisioning sync) and the Farm Manager (pre-registration) — but no writer
+        existed. `provisioning_sync` only *validates* existing sensor slots, so a saloon
+        could never be given one through the API. This endpoint is that writer.
+
+        Any org member may create a slot in their own org's saloon; the installer
+        session (AD-14) works because it carries an org claim for exactly one job's org,
+        and `farm_id` in its claims narrows it further. A slot is a MOUNTING PLAN for a
+        sensor, not the sensor itself — the binding to a physical pack happens later, in
+        `POST …/{job_id}/sensors/` (Phase 2 slice f), which is why `pack_id` is absent
+        here on purpose.
+
+        `slot_id` is optional and generated (`SS-<16 hex>`) when omitted. Re-creating an
+        existing slot id inside the SAME saloon+position is idempotent (200) rather than
+        a 500 from the primary key.
+      summary: Create a saloon sensor slot (the documented writer that never existed)
+      parameters:
+      - in: path
+        name: saloon_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Farms
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '201':
+          description: No response body
+        '400':
+          description: No response body
+        '403':
+          description: No response body
+        '404':
+          description: No response body
+        '409':
+          description: No response body
   /api/v1/saloons/{saloon_id}/telemetry/:
     get:
       operationId: list_saloon_telemetry
@@ -9171,18 +9799,38 @@ components:
       - status
     GatewayRequestCreateRequest:
       type: object
-      description: POST /gateway-requests/ body — manager/owner only, capped per org.
+      description: |-
+        POST /gateway-requests/ body — manager/owner only, capped per org.
+
+        AD-15 (owner 2026-10-18): the request may CREATE the farm, because the org
+        rep enters "the farm's initial information" before the farm exists. Send
+        `farm_spec` for a new farm, or `farm_id` for one that already exists —
+        exactly one of the two, never both and never neither.
+
+        AD-16: `expected_gateways` may be > 1 (a gateway owns a zone of saloons, not
+        the whole farm — Saas.md). Approval materialises one installation job per
+        gateway.
       properties:
         farm_id:
           type: integer
-          description: Farm the gateway will serve.
+          nullable: true
+          description: Existing farm the gateway will serve.
+        farm_spec:
+          type: object
+          additionalProperties: {}
+          nullable: true
+          description: 'New-farm spec: {name, province_id, city_id, village_id?, notes?}.'
+        expected_gateways:
+          type: integer
+          maximum: 32
+          minimum: 1
+          default: 1
+          description: How many gateways this farm needs (AD-16).
         details:
           type: object
           additionalProperties: {}
           nullable: true
           description: Free-form context (contact, install window, notes).
-      required:
-      - farm_id
     GatewayReviewApproved:
       type: object
       description: |-
@@ -12053,6 +12701,182 @@ components:
           format: double
           nullable: true
           description: New max_value (alias of max_value).
+    UnitClaimCodeResponse:
+      type: object
+      properties:
+        unit_id:
+          type: string
+        claim_code:
+          type: string
+          description: One-time plaintext; the stored value is a bcrypt hash.
+      required:
+      - claim_code
+      - unit_id
+    UnitCredentialResponse:
+      type: object
+      properties:
+        unit_id:
+          type: string
+        username:
+          type: string
+        password:
+          type: string
+          description: One-time plaintext; the stored value is a bcrypt hash.
+      required:
+      - password
+      - unit_id
+      - username
+    UnitItem:
+      type: object
+      properties:
+        unit_id:
+          type: string
+        hardware_id:
+          type: string
+        state:
+          type: string
+        model:
+          type: string
+          nullable: true
+        fw_version:
+          type: string
+          nullable: true
+        batch:
+          type: string
+          nullable: true
+        slot_id:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          nullable: true
+        bound_at:
+          type: string
+          nullable: true
+        retired_at:
+          type: string
+          nullable: true
+        credential_active:
+          type: boolean
+          description: False once the unit is retired or its credential is deactivated.
+      required:
+      - credential_active
+      - hardware_id
+      - state
+      - unit_id
+    UnitListResponse:
+      type: object
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/UnitItem'
+        count:
+          type: integer
+      required:
+      - count
+      - results
+    UnitReasonRequest:
+      type: object
+      description: Body for claim-code re-issue and credential rotation.
+      properties:
+        reason:
+          type: string
+          description: Optional justification, recorded in platform_audit_log.
+          maxLength: 255
+    UnitRegisterRequestRequest:
+      type: object
+      description: |-
+        POST /platform/devices/units/ — mint one factory unit.
+
+        `unit_id` is optional: when omitted the backend generates `GW-<16 hex>`. It
+        becomes the permanent logical identity (AD-2) — the MQTT username, and the
+        eventual `gateway_slots.slot_id` — so an operator who supplies it must not
+        later expect to change it.
+      properties:
+        hardware_id:
+          type: string
+          minLength: 1
+          description: Factory serial / MAC printed on the unit. Unique.
+          maxLength: 100
+        unit_id:
+          type: string
+          description: Permanent logical id. Omit to generate `GW-<hex>`.
+          maxLength: 100
+        model:
+          type: string
+          maxLength: 50
+        fw_version:
+          type: string
+          maxLength: 50
+        batch:
+          type: string
+          maxLength: 50
+        notes:
+          type: string
+        reason:
+          type: string
+          description: Optional justification, recorded in platform_audit_log.
+          maxLength: 255
+      required:
+      - hardware_id
+    UnitRegisterResponse:
+      type: object
+      description: |-
+        The two secrets are returned EXACTLY ONCE, here and nowhere else.
+
+        `password` goes into the unit's encrypted flash; `claim_code` goes onto the
+        QR label. Neither is ever readable again — a lost claim code is re-issued
+        (which rotates it), and a lost password is rotated.
+      properties:
+        unit_id:
+          type: string
+        hardware_id:
+          type: string
+        username:
+          type: string
+          description: Always equal to unit_id.
+        password:
+          type: string
+          description: One-time MQTT credential — write to flash, then forget.
+        claim_code:
+          type: string
+          description: One-time QR claim code — print on the label.
+        state:
+          type: string
+        acl_rules:
+          type: integer
+          description: Allow-rows created (always 3 for an unbound unit).
+      required:
+      - acl_rules
+      - claim_code
+      - hardware_id
+      - password
+      - state
+      - unit_id
+      - username
+    UnitRetireRequestRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          description: MANDATORY justification — a blank value is a 400.
+          maxLength: 255
+      required:
+      - reason
+    UnitRetireResponse:
+      type: object
+      properties:
+        unit_id:
+          type: string
+        retired:
+          type: boolean
+        idempotent:
+          type: boolean
+      required:
+      - retired
+      - unit_id
     UserProfile:
       type: object
       description: The `user` envelope — reuses the claim rule, so it cannot disagree

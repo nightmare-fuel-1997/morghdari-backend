@@ -17,6 +17,7 @@ from apps.farms.models import Farm, Saloon
 from apps.geography.models import City, Province
 from apps.mqtt_auth.models import MqttAclRule, MqttDeviceCredential
 from apps.provisioning.api import gateway_requests, provisioning_sync, review_gateway_request
+from apps.provisioning.models import InstallationJob
 from apps.provisioning.services import SYNC_LOCK_KEY
 from apps.system_config.models import SystemConfiguration
 from apps.tenants.models import Organization
@@ -201,13 +202,22 @@ def test_sync_conflict_returns_retry_after(provisioning_world, monkeypatch, fake
 # ---------------------------------------------------------------------------
 
 
-def _submit_request(w, user=None):
-    """Helper: a manager submits a gateway request; returns the request id."""
+def _submit_request(w, user=None, payload=None):
+    """Helper: a manager submits a gateway request; returns the request id.
+
+    `payload` defaults to the pre-AD-15 shape (a reference to an existing farm)
+    so tests that are not about farm creation keep passing unchanged.
+    """
     user = user or w["user"]
+    body = (
+        payload
+        if payload is not None
+        else {"farm_id": w["farm"].pk, "details": {"model": "edge"}}
+    )
     response = _request(
         gateway_requests, "POST", "/api/v1/gateway-requests/", user,
         {"org_id": str(w["org"].org_id), "roles": ["manager"]},
-        {"farm_id": w["farm"].pk, "details": {"model": "edge"}},
+        body,
     )
     assert response.status_code == 201
     return response.data["id"]
@@ -215,79 +225,127 @@ def _submit_request(w, user=None):
 
 @pytest.mark.parametrize("role", ["admin", "support"])
 @pytest.mark.django_db
-def test_review_approval_creates_slot_credentials_and_acl(provisioning_world, django_user_model, role, monkeypatch):
-    """Acceptance 'approval creates slot+credentials': the platform reviewer
-    (admin OR support by default) approves a pending request; the slot, the
-    bcrypt credential and the EMQX allow-rules appear; the plaintext password
-    is returned exactly once and pushed to the broker (mocked here — the
-    live-broker dance is the WALKTHROUGH)."""
+def test_review_approval_creates_jobs_and_no_slot(
+    provisioning_world, django_user_model, role, monkeypatch
+):
+    """AD-15/16/17 (2026-10-18): approval creates INSTALLATION JOBS, never a slot.
+
+    The device already exists at the factory (Phase 1) and is joined to a slot by
+    the installer scanning its QR claim code (Phase 2 slice c), so minting a
+    `gateway_slots` row — with a credential no physical device holds — used to
+    leave an orphan here. Approval now: materialises the farm if the request was
+    creating one, creates one job per expected gateway, flips the status, audits.
+
+    The response therefore carries NO password: there is nothing here to leak.
+    """
     w = provisioning_world
-    emqx_calls = []
-
-    import apps.mqtt_auth.services as svc
-
-    def fake_emqx(method, path, body=None, timeout=5):
-        # Chain probe (2026-09-19 JWT shape): answered present, not recorded.
-        if method == "GET" and path == "/api/v5/authentication":
-            return 200, [{"id": svc.AUTHN_CHAIN_ID}]
-        emqx_calls.append((method, path, body))
-        return 201, None
-
-    monkeypatch.setattr(svc, "_emqx_request", fake_emqx)
-    monkeypatch.setattr(svc, "_emqx_login", lambda: "test-jwt")
-    svc._builtin_chain["known"] = None
-    svc._emqx_token["value"] = None
+    monkeypatch.setattr(
+        "apps.mqtt_auth.services.ensure_gateway_user", lambda *a, **k: True
+    )
     reviewer = django_user_model.objects.create_user(username=f"reviewer-{role}", password="x")
     reviewer.is_platform_staff = True
     reviewer.staff_role = role
     reviewer.save()
-    request_id = _submit_request(w)
+    request_id = _submit_request(w, payload={"farm_id": w["farm"].pk})
 
     response = _request(
         review_gateway_request, "POST",
         f"/api/v1/gateway-requests/{request_id}/review/", reviewer, {},
-        {"decision": "APPROVE", "slot_id": "GW-REVIEW-1"},
+        {"decision": "APPROVE"},
         request_id=request_id,
     )
 
     assert response.status_code == 200
     assert response.data["status"] == "APPROVED"
-    assert response.data["gateway_slot_id"] == "GW-REVIEW-1"
-    assert response.data["username"] == "GW-REVIEW-1"
-    assert response.data["password"]  # one-time plaintext issue
+    assert response.data["farm_id"] == w["farm"].pk
+    assert response.data["jobs_created"] == 1
+    # the whole point: no credential surface at approval time
+    assert "password" not in response.data
+    assert "username" not in response.data
+    assert "gateway_slot_id" not in response.data
 
-    slot = GatewaySlot.objects.get(slot_id="GW-REVIEW-1")
-    assert slot.provisioning_status == "PENDING_INSTALLATION"
-    credential = MqttDeviceCredential.objects.get(username=slot.slot_id)
-    assert credential.password_hash.startswith("$2b$")  # EMQX-native (C7)
-    # Allow rules MUST name the topics the gateway actually uses (org/farm/
-    # gateway segments — the subscriber grammar; a rule on a topic the gateway
-    # never uses would be dead weight under no_match=deny). M8-04-H (C5):
-    # the full firmware contract — 5 publishes (telemetry T1, status T2,
-    # commands/response T4, ota/response T7, diagnostics/response T9) + 4
-    # subscriptions (commands T3, clock/sync T5, ota T6, diagnostics/request T8).
-    from apps.provisioning.api import gateway_acl_rule_items
+    assert not GatewaySlot.objects.filter(request_id=request_id).exists()
+    assert not MqttDeviceCredential.objects.filter(username__startswith="GW-REVIEW").exists()
+    assert not MqttAclRule.objects.filter(username__startswith="GW-REVIEW").exists()
 
-    expected = {
-        (r["topic"], r["action"])
-        for r in gateway_acl_rule_items(str(w["org"].org_id), w["farm"].pk, slot.slot_id)
-    }
-    rules = list(MqttAclRule.objects.filter(username=credential.username))
-    assert len(rules) == len(expected) == 9
-    assert all(r.permission == "allow" for r in rules)
-    assert {(r.topic, r.action) for r in rules} == expected
-    # The EMQX authn user was created with the one-time plaintext (broker-side
-    # authn — EMQX 5.5 rejects pre-hashed password fields).
-    assert any(
-        method == "POST"
-        and body == {"user_id": slot.slot_id, "password": response.data["password"]}
-        for method, _path, body in emqx_calls
+    from apps.provisioning.models import InstallationJob
+
+    job = InstallationJob.objects.get(request_id=request_id)
+    assert job.kind == "INSTALL"
+    assert job.state == "PENDING"
+    assert job.assigned_installer_id is None
+    assert job.farm_id == w["farm"].pk
+    assert job.gateway_slot_id is None
+    assert job.unit_id is None
+
+    row = GatewayRequest.objects.get(pk=request_id)
+    assert row.approved_by_id == reviewer.pk
+
+
+def test_review_approval_materialises_the_farm_from_farm_spec(
+    provisioning_world, django_user_model
+):
+    """AD-15: the request may CREATE the farm — the org rep enters its initial
+    information before it exists."""
+    w = provisioning_world
+    reviewer = django_user_model.objects.create_user(username="reviewer-farm-spec", password="x")
+    reviewer.is_platform_staff = True
+    reviewer.staff_role = "admin"
+    reviewer.save()
+
+    request_id = _submit_request(
+        w,
+        payload={
+            "farm_spec": {
+                "name": "New Shahriar Farm",
+                "province_id": w["province"].pk,
+                "city_id": w["city"].pk,
+            },
+            "expected_gateways": 3,
+        },
     )
-    request_row = GatewayRequest.objects.get(pk=request_id)
-    assert request_row.approved_by_id == reviewer.pk
+    assert GatewayRequest.objects.get(pk=request_id).farm_id is None
+
+    response = _request(
+        review_gateway_request, "POST",
+        f"/api/v1/gateway-requests/{request_id}/review/", reviewer, {},
+        {"decision": "APPROVE"},
+        request_id=request_id,
+    )
+
+    assert response.status_code == 200
+    farm = Farm.objects.get(pk=response.data["farm_id"])
+    assert farm.name == "New Shahriar Farm"
+    assert farm.org_id == w["org"].org_id
+    assert farm.province_id == w["province"].pk
+    assert farm.city_id == w["city"].pk
+    # Farm has no created_by; provenance is the request's requested_by.
+    assert GatewayRequest.objects.get(pk=request_id).requested_by_id == w["user"].pk
+    assert response.data["jobs_created"] == 3
+    assert InstallationJob.objects.filter(request_id=request_id).count() == 3
 
 
-@pytest.mark.django_db
+@pytest.mark.parametrize("payload", [
+    {},
+    {"farm_id": None},
+    {"farm_id": 1, "farm_spec": {"name": "x"}},
+    {"farm_spec": {"name": ""}},
+    {"farm_spec": {"province_id": 1}},
+    {"farm_spec": {"name": "x", "province_id": 1}},          # city missing
+    {"farm_spec": {"name": "x", "city_id": 1}},              # province missing
+    {"farm_id": 1, "expected_gateways": 0},
+    {"farm_id": 1, "expected_gateways": 99},
+])
+def test_request_body_is_validated(provisioning_world, payload):
+    w = provisioning_world
+    response = _request(
+        gateway_requests, "POST", "/api/v1/gateway-requests/", w["user"],
+        {"org_id": str(w["org"].org_id), "roles": ["manager"]},
+        payload,
+    )
+    assert response.status_code == 400, f"{payload} should be rejected"
+
+
 def test_review_reject_records_reason_and_no_slot(provisioning_world, django_user_model):
     w = provisioning_world
     reviewer = django_user_model.objects.create_user(username="reviewer-reject", password="x")

@@ -4,6 +4,7 @@ from django.urls import path
 
 from apps.farms.api import (
     farm_list,
+    saloon_sensor_slot_create,
     farm_overview,
     flock_cycles,
     operational_state,
@@ -24,4 +25,9 @@ urlpatterns = [
         name="saloon-operational-state",
     ),
     path("saloons/<int:saloon_id>/flocks/", flock_cycles, name="flock-cycles"),
+    path(
+        "saloons/<int:saloon_id>/sensor-slots/",
+        saloon_sensor_slot_create,
+        name="saloon-sensor-slots",
+    ),
 ]

@@ -289,6 +289,27 @@ def update_gateway_user_password(username: str, plaintext: str) -> bool:
     return False
 
 
+def bootstrap_acl_rule_items(unit_id: str) -> list[dict]:
+    """The THREE rules a factory-registered, unbound unit needs — and no more.
+
+    AD-1/AD-18 (2026-10-18): before binding, a unit has no org, so it cannot be
+    permitted anywhere near a tenant topic. Its entire broker surface is its own
+    device lane: read the desired config, read one-shot commands, report back.
+
+    Compare with `gateway_acl_rule_items()` (provisioning/api.py), which grants
+    the full T1–T9 tenant set — that set is added at BIND time, after the unit
+    has an org and a farm. Keeping the two functions separate is what makes the
+    pre-binding state strictly less privileged than a provisioned gateway.
+    """
+    from apps.provisioning import topics
+
+    return [
+        {"topic": topics.desired_topic(unit_id), "permission": "allow", "action": "subscribe"},
+        {"topic": topics.command_topic(unit_id), "permission": "allow", "action": "subscribe"},
+        {"topic": topics.reported_topic(unit_id), "permission": "allow", "action": "publish"},
+    ]
+
+
 def sync_gateway_acls(slot) -> dict:
     """Push the slot's mqtt_acl_rules allow-rows into EMQX's built-in-DB
     authorizer. Returns {"synced": n, "reachable": bool}; on broker failure

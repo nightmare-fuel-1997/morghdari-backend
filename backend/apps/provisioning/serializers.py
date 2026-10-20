@@ -110,14 +110,59 @@ class GatewayRequestSerializer(serializers.Serializer):
 
 
 class GatewayRequestCreateSerializer(serializers.Serializer):
-    """POST /gateway-requests/ body — manager/owner only, capped per org."""
+    """POST /gateway-requests/ body — manager/owner only, capped per org.
 
-    farm_id = serializers.IntegerField(help_text="Farm the gateway will serve.")
+    AD-15 (owner 2026-10-18): the request may CREATE the farm, because the org
+    rep enters "the farm's initial information" before the farm exists. Send
+    `farm_spec` for a new farm, or `farm_id` for one that already exists —
+    exactly one of the two, never both and never neither.
+
+    AD-16: `expected_gateways` may be > 1 (a gateway owns a zone of saloons, not
+    the whole farm — Saas.md). Approval materialises one installation job per
+    gateway.
+    """
+
+    farm_id = serializers.IntegerField(
+        required=False, allow_null=True, help_text="Existing farm the gateway will serve."
+    )
+    farm_spec = serializers.DictField(
+        required=False,
+        allow_null=True,
+        help_text="New-farm spec: {name, province_id, city_id, village_id?, notes?}.",
+    )
+    expected_gateways = serializers.IntegerField(
+        required=False, min_value=1, max_value=32, default=1,
+        help_text="How many gateways this farm needs (AD-16).",
+    )
     details = serializers.DictField(
         required=False,
         allow_null=True,
         help_text="Free-form context (contact, install window, notes).",
     )
+
+    def validate(self, attrs):
+        has_farm = attrs.get("farm_id") is not None
+        has_spec = attrs.get("farm_spec") is not None
+        if has_farm and has_spec:
+            raise serializers.ValidationError(
+                {"farm_spec": "send farm_id OR farm_spec, not both"}
+            )
+        if not has_farm and not has_spec:
+            raise serializers.ValidationError(
+                {"farm_id": "farm_id or farm_spec is required"}
+            )
+        if has_spec:
+            spec = attrs["farm_spec"]
+            missing = [
+                key
+                for key in ("name", "province_id", "city_id")
+                if spec.get(key) in (None, "")
+            ]
+            if missing:
+                raise serializers.ValidationError(
+                    {"farm_spec": f"missing required keys: {', '.join(missing)}"}
+                )
+        return attrs
 
 
 class GatewayReviewRequestSerializer(serializers.Serializer):

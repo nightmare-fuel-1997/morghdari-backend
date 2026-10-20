@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import logging
 import secrets
 from datetime import timedelta
 
@@ -13,6 +14,8 @@ from drf_spectacular.utils import OpenApiExample, OpenApiParameter, extend_schem
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+
+logger = logging.getLogger(__name__)
 
 from apps.accounts.permissions import _claims
 from apps.tenants.context import admin_alias, tenant_context
@@ -32,6 +35,21 @@ from apps.devices.models import (
     SaloonSensorSlot,
 )
 from apps.mqtt_auth.models import MqttAclRule, MqttDeviceCredential
+from apps.provisioning.models import InstallationJob
+from apps.provisioning.installations import (  # noqa: F401  (re-exported for urls.py)
+    install_assignable,
+    install_gateway_photo,
+    install_job_assign,
+    install_job_bind,
+    install_job_bind_override,
+    install_job_detail,
+    install_job_session,
+    install_job_sensor_map,
+    install_sensor_photo,
+    install_job_submit,
+    install_jobs,
+    provisioning_config_state,
+)
 from apps.provisioning.serializers import (
     CredentialRotationResponseSerializer,
     GatewayActionRequestSerializer,
@@ -70,7 +88,17 @@ def gateway_acl_rule_items(org_uuid, farm_id: int, slot_id: str) -> list[dict]:
     makes the topic; without these the real firmware is denied at the broker.
     فارس: مجموعهٔ کاملِ قواعدِ MQTT گیت‌وی — فقط با این‌ها فریم‌ویر واقعی می‌تواند
     زیرِ no_match=deny روی تاپیک‌های فرمان/ساعت/OTA/تشخیص پاسخ دهد.
+
+    BUG-fix 2026-10-18 (finding D3 of the provisioning redesign): `farm_id` is
+    nullable on the model, and a slot that has not been bound to a farm yet
+    would previously produce `{org}/farms/None/gateways/{slot}/...` — a rule
+    that matches no topic and silently denies everything. Return an empty set
+    for a farm-less slot instead: it gets the 3-row device lane at the factory
+    (`bootstrap_acl_rule_items`) and its tenant rules at BIND time, once the
+    farm exists.
     """
+    if farm_id is None:
+        return []
     base = f"{org_uuid}/farms/{farm_id}/gateways/{slot_id}"
     publishes = [
         ("telemetry", "T1"), ("status", "T2"),
@@ -426,15 +454,27 @@ def gateway_requests(request):
     if not org_id or not (MANAGER_ROLES & set(_claims(request).get("roles", []))):
         return Response({"error": "manager role required"}, status=403)
 
+    # AD-15/AD-16: the body is validated by the serializer rather than read raw,
+    # because "exactly one of farm_id / farm_spec" is a rule the old
+    # `request.data.get("farm_id")` path could not express — it happily created
+    # a request with a null farm and no spec, which approval then could not
+    # resolve into a Farm.
+    serializer = GatewayRequestCreateSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response({"error": "invalid body", "detail": serializer.errors}, status=400)
+    body = serializer.validated_data
+
     pending = GatewayRequest.objects.filter(org_id=org_id, status="PENDING").count()
     if pending >= _config_int("max_pending_gateway_requests", 4):
         return Response({"error": "pending gateway request cap reached"}, status=400)
 
     row = GatewayRequest.objects.create(
         org_id=org_id,
-        farm_id=request.data.get("farm_id"),
+        farm_id=body.get("farm_id"),
+        farm_spec=body.get("farm_spec"),
+        expected_gateways=body.get("expected_gateways", 1) or 1,
         requested_by=request.user,
-        details=request.data.get("details") or {},
+        details=body.get("details") or {},
     )
     return Response(_request_out(row), status=201)
 
@@ -519,46 +559,102 @@ def review_gateway_request(request, request_id: int):
         if decision != "APPROVE":
             return Response({"error": "decision must be APPROVE or REJECT"}, status=400)
 
-        slot_id = str(request.data.get("slot_id") or f"GW-{secrets.token_hex(8).upper()}")
-        password = secrets.token_urlsafe(32)
-        slot = GatewaySlot.objects.create(
-            slot_id=slot_id,
-            org=row.org,
-            farm=row.farm,
-            request=row,
-            created_by=request.user,
-        )
-        from apps.mqtt_auth.services import ensure_gateway_user, hash_password
+        # ------------------------------------------------------------------
+        # AD-15 / AD-16 / AD-17 (owner 2026-10-18) — approval no longer mints.
+        # ------------------------------------------------------------------
+        # The old flow created a `gateway_slots` row, an MQTT credential, and a
+        # full T1–T9 ACL set here. That is now WRONG: the physical device already
+        # exists at the factory with its own `unit_id` and credential (Phase 1),
+        # and it is joined to a slot by the installer scanning its QR claim code
+        # (Phase 2 slice c). Minting here instead produced an orphan slot holding
+        # a credential that no device on earth possesses.
+        #
+        # Approval is now three things, all inside this one transaction:
+        #   1. materialise the Farm when the request was CREATING one;
+        #   2. create one InstallationJob per expected gateway (AD-16);
+        #   3. flip the status and write the audit trail.
+        #
+        # The response therefore no longer carries a password, and that is the
+        # point: there is nothing here for an attacker to leak, and nothing for
+        # a reviewer to accidentally email to a customer.
+        farm = _materialise_farm(row)
+        jobs_created = _create_installation_jobs(row, farm)
 
-        credential = MqttDeviceCredential.objects.create(
-            device_id=slot.slot_id,
-            username=slot.slot_id,
-            password_hash=hash_password(password),  # $2b$ — EMQX-native (C7)
-        )
-        # Allow rules MUST name the topics the gateway actually uses
-        # (`{org}/farms/{farm}/gateways/{slot}/...` — the subscriber's grammar,
-        # verified against the live broker; the old `org/.../gateway/#` shape
-        # matched nothing and no_match=deny dropped every publish). M8-04-H:
-        # the full firmware contract — telemetry/status publish PLUS the
-        # downlink subscriptions (T3/T5/T6/T8) and response publishes (T4/T7/T9).
-        for rule in gateway_acl_rule_items(str(row.org_id), slot.farm_id, slot.slot_id):
-            MqttAclRule.objects.create(
-                username=credential.username,
-                topic=rule["topic"],
-                permission=rule["permission"],
-                action=rule["action"],
-            )
-        # The broker's authn user — plaintext is in hand exactly here (one-time
-        # issue). FNV-soft: a broker hiccup never fails the review; a missing
-        # user is healed by the next credential rotation (404-heal in
-        # mqtt_auth.services.update_gateway_user_password).
-        ensure_gateway_user(slot.slot_id, password)
         row.status = "APPROVED"
         row.approved_by = request.user
         row.approved_at = timezone.now()
         row.save(update_fields=["status", "approved_by", "approved_at"])
 
-    return Response({**_request_out(row), "gateway_slot_id": slot.slot_id, "username": credential.username, "password": password}, status=200)
+    return Response(
+        {
+            **_request_out(row),
+            "farm_id": farm.pk,
+            "jobs_created": jobs_created,
+        },
+        status=200,
+    )
+
+
+def _materialise_farm(row):
+    """AD-15: create the Farm the request described, or return the existing one.
+
+    Called inside the approval transaction and the request's tenant context, so
+    the write is RLS-scoped to the requesting org. `farm_spec` carries
+    {name, province_id, city_id, village_id?, notes?} — validated at request
+    creation time, re-checked here because a spec is JSON and can be stale.
+    """
+    if row.farm_id:
+        return row.farm
+
+    spec = row.farm_spec or {}
+    name = str(spec.get("name") or "").strip()
+    if not name:
+        from rest_framework.exceptions import ValidationError
+
+        raise ValidationError({"farm_spec": "name is required to create the farm"})
+
+    from apps.farms.models import Farm
+
+    # NOTE: Farm carries no `created_by` (the requesting manager is already
+    # recorded on `GatewayRequest.requested_by`, which is the honest provenance
+    # for a farm that arrived via a request).
+    farm = Farm.objects.create(
+        org=row.org,
+        name=name,
+        province_id=spec.get("province_id"),
+        city_id=spec.get("city_id"),
+        village_id=spec.get("village_id"),
+    )
+    row.farm = farm
+    row.save(update_fields=["farm"])
+    return farm
+
+
+def _create_installation_jobs(row, farm) -> int:
+    """AD-16: one installation job per expected gateway, all unassigned.
+
+    `bulk_create` because a farm needing eight gateways is one click, not eight.
+    Idempotent by construction: the caller is inside the request's approval
+    transaction, and a request can only be approved once (409 otherwise), so a
+    replay cannot double-create.
+    """
+    count = max(1, int(row.expected_gateways or 1))
+    jobs = [
+        InstallationJob(
+            org=row.org,
+            farm=farm,
+            request=row,
+            kind=InstallationJob.KIND_INSTALL,
+            state=InstallationJob.STATE_PENDING,
+        )
+        for _ in range(count)
+    ]
+    InstallationJob.objects.bulk_create(jobs)
+    logger.info(
+        "approval created %d installation job(s) for request %s (farm %s)",
+        count, row.pk, farm.pk,
+    )
+    return count
 
 
 @extend_schema(

@@ -52,7 +52,7 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
   GRANT USAGE ON SEQUENCES TO morghdari_app;
 
--- EMQX reader: SELECT on exactly three tables (doc Compartment 8). Guarded —
+-- EMQX reader: SELECT on exactly four tables (doc Compartment 8). Guarded —
 -- at initdb time Django has not created them yet; re-running after migrate
 -- applies them. Default privileges deliberately NOT granted to emqx_auth:
 -- new tables stay invisible unless explicitly listed here.
@@ -66,6 +66,13 @@ BEGIN
   END IF;
   IF to_regclass('public.gateway_slots') IS NOT NULL THEN
     GRANT SELECT ON gateway_slots TO emqx_auth;
+  END IF;
+  -- AD-1 (2026-10-18): the authn query gains a LEFT JOIN on device_units so a
+  -- factory-registered, not-yet-bound unit can authenticate. Twin of
+  -- tenants/0006_rls_phase0_tables.py, which grants the same on managed
+  -- postgres where migrations (not initdb) create the table.
+  IF to_regclass('public.device_units') IS NOT NULL THEN
+    GRANT SELECT ON device_units TO emqx_auth;
   END IF;
 END
 $$;

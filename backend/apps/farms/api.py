@@ -15,6 +15,7 @@ ACTIVE_FLOCK default so flock rules stay armed).
 دوره‌های پرورش؛ همیشه با فیلتر org از ادعاهای توکن.
 """
 
+import secrets
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -30,7 +31,7 @@ from rest_framework.response import Response
 from apps.accounts.permissions import _claims
 from apps.alerts.models import AlertInstance, SaloonOperationalState
 from apps.common.schemas import CONFLICT_RESPONSE, TAG_FARMS, error_responses
-from apps.devices.models import GatewaySaloonZone, SaloonSensorSlot
+from apps.devices.models import GatewaySaloonZone, SaloonPosition, SaloonSensorSlot
 from apps.farms.serializers import (
     FarmOverviewSerializer,
     FlockCycleCreateResponseSerializer,
@@ -874,3 +875,96 @@ def _date_to_datetime(parsed_date):
     if parsed_date is None:
         return None
     return datetime.combine(parsed_date, datetime.min.time()).replace(tzinfo=TEHRAN)
+
+
+# ---------------------------------------------------------------------------
+# POST /saloons/{saloon_id}/sensor-slots/  — the missing writer (D5 / X3)
+# ---------------------------------------------------------------------------
+
+@extend_schema(
+    tags=["Farms"],
+    operation_id="saloon_sensor_slots_create",
+    summary="Create a saloon sensor slot (the documented writer that never existed)",
+    description="""Finding D5 / contradiction X3: `Actor Use-Case & Dependency Map`
+lists `saloon_sensor_slots` writers as the Hardware Team, the Device Installer
+(via provisioning sync) and the Farm Manager (pre-registration) — but no writer
+existed. `provisioning_sync` only *validates* existing sensor slots, so a saloon
+could never be given one through the API. This endpoint is that writer.
+
+Any org member may create a slot in their own org's saloon; the installer
+session (AD-14) works because it carries an org claim for exactly one job's org,
+and `farm_id` in its claims narrows it further. A slot is a MOUNTING PLAN for a
+sensor, not the sensor itself — the binding to a physical pack happens later, in
+`POST …/{job_id}/sensors/` (Phase 2 slice f), which is why `pack_id` is absent
+here on purpose.
+
+`slot_id` is optional and generated (`SS-<16 hex>`) when omitted. Re-creating an
+existing slot id inside the SAME saloon+position is idempotent (200) rather than
+a 500 from the primary key.""",
+    request=None,
+    responses={201: None, 400: None, 403: None, 404: None, 409: None},
+    examples=[
+        OpenApiExample(
+            "Create a slot for a mounted position",
+            request_only=True,
+            value={"slot_id": "SS-SALOON1-01", "position_id": 12, "allowed_metric_keys": ["temp", "humidity"]},
+        )
+    ],
+)
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def saloon_sensor_slot_create(request, saloon_id: int):
+    """Create a `saloon_sensor_slots` row. The writer D5 says should exist."""
+    org_id = _org_id(request)
+    if org_id is None:
+        return Response({"error": "organization context required"}, status=400)
+
+    saloon = Saloon.objects.filter(org_id=org_id, pk=saloon_id).first()
+    if saloon is None:
+        return Response({"error": "saloon not found"}, status=404)
+
+    position_id = request.data.get("position_id")
+    if not position_id:
+        return Response({"error": "position_id required"}, status=400)
+    if not SaloonPosition.objects.filter(org_id=org_id, saloon=saloon, pk=position_id).exists():
+        return Response({"error": "position not found in this saloon"}, status=400)
+
+    slot_id = str(request.data.get("slot_id") or "").strip()
+    if not slot_id:
+        slot_id = f"SS-{secrets.token_hex(8).upper()}"
+    elif len(slot_id) > 50:
+        return Response({"error": "slot_id too long (max 50)"}, status=400)
+
+    metrics = request.data.get("allowed_metric_keys") or []
+    if not isinstance(metrics, list) or any(not isinstance(m, str) for m in metrics):
+        return Response({"error": "allowed_metric_keys must be a list of strings"}, status=400)
+
+    existing = SaloonSensorSlot.objects.filter(pk=slot_id).only("saloon", "position").first()
+    if existing is not None:
+        if existing.saloon_id == saloon.pk and existing.position_id == int(position_id):
+            return Response(_sensor_slot_out(existing), status=200)
+        return Response(
+            {"error": "slot_id already exists elsewhere",
+             "saloon_id": existing.saloon_id, "position_id": existing.position_id},
+            status=409,
+        )
+
+    row = SaloonSensorSlot.objects.create(
+        slot_id=slot_id,
+        saloon=saloon,
+        org_id=org_id,
+        position_id=position_id,
+        allowed_metric_keys=metrics,
+    )
+    return Response(_sensor_slot_out(row), status=201)
+
+
+def _sensor_slot_out(row) -> dict:
+    return {
+        "slot_id": row.slot_id,
+        "saloon_id": row.saloon_id,
+        "org_id": str(row.org_id),
+        "position_id": row.position_id,
+        "is_active": row.is_active,
+        "allowed_metric_keys": row.allowed_metric_keys,
+    }

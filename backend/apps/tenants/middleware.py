@@ -6,6 +6,10 @@ TOKEN CLAIMS before any user flags:
 
   ① support_session claim true AND org_id present → GUC from that org_id
     (runs REGARDLESS of is_platform_staff — §4.5 support sessions)
+  ①b installer_session claim true AND org_id present → same GUC, different
+    claim (AD-14, 2026-10-18): an installer is platform staff scoped to one
+    installation job's org+farm. Deliberately NOT the support claim, so it
+    cannot open the support-op surface (`_support_op_context`).
   ② elif is_platform_staff claim true → skip: NO GUC, FORCE RLS yields zero
     tenant rows (fail-closed, NOT a backdoor; BYPASSRLS alias stays out of
     v0.2 scope, parked Tracker §6)
@@ -69,6 +73,11 @@ class TenantOrgMiddleware:
         org_id = None
         if claims.get("support_session") is True and claims.get("org_id"):
             org_id = claims["org_id"]  # ① support session wins over the staff skip
+        elif claims.get("installer_session") is True and claims.get("org_id"):
+            # ①b AD-14 (2026-10-18): installer job session. Same GUC as ①, a
+            # DIFFERENT claim name — an installer token must never satisfy
+            # `_support_op_context`, which keeps requiring `support_session`.
+            org_id = claims["org_id"]
         elif claims.get("is_platform_staff") is True:
             return self.get_response(request)  # ② platform staff: no GUC, zero rows
         elif claims.get("org_id"):

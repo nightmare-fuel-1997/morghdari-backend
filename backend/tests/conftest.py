@@ -290,6 +290,7 @@ def django_db_setup(
             **setup_databases_args,
         )
         _materialize_use_migrations_schema(request)
+        _materialize_compat_schema()
 
     yield
 
@@ -303,6 +304,38 @@ def django_db_setup(
                         f"Error when trying to teardown test databases: {exc!r}"
                     )
                 )
+
+
+def _materialize_compat_schema() -> None:
+    """Create `legacy_slug_map` on a fresh test DB (2026-10-20).
+
+    WHY this is NOT gated on the `use_migrations` marker, unlike the reports
+    tables above: `apps.compat.models.LegacySlugMap` is `managed = False`, so
+    syncdb under `--nomigrations` skips it, and its table exists only as RunSQL
+    in `compat/0001_legacy_slug_map`. But `mint_saloon_slug()` runs on EVERY
+    saloon creation, which is core topology — not an optional reports feature.
+    Without this, creating a saloon over the API fails on Postgres with
+    `relation "legacy_slug_map" does not exist`, which is exactly how this was
+    found: the role-widening tests (task 2.16) were the first to create a saloon
+    through the view under CI's cold DB. sqlite (local loop) skips, matching the
+    pragmatism of the other materialisers.
+    """
+    if connection.vendor != "postgresql":
+        return
+    with connection.cursor() as cursor:
+        if cursor.execute(
+            "SELECT to_regclass('public.legacy_slug_map') IS NOT NULL"
+        ).fetchone()[0]:
+            return
+        # compat/0001 exposes a module-level `SQL` constant (not the reports
+        # `_sql()` function shape), so load it directly.
+        spec = importlib.util.spec_from_file_location(
+            "compat_legacy_slug_map",
+            BACKEND_DIR / "apps" / "compat" / "migrations" / "0001_legacy_slug_map.py",
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _execute_sql(cursor, module.SQL)
 
 
 def _materialize_use_migrations_schema(request) -> None:

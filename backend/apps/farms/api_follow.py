@@ -149,6 +149,64 @@ def _audit(request, action, *, org_id, farm=None, saloon=None, details=None):
     )
 
 
+def _installer_session_farm(request, farm_id) -> bool:
+    """AD-14 / task 2.16: may this caller write inside ONE farm as an installer?
+
+    An installer is org-less platform staff; the only reason they can write
+    anything at all is the scoped session `install_job_session` minted for a job.
+    That token carries `org_id`, `installer_session`, `job_id` and `farm_id` —
+    and `farm_id` is the whole authorisation: it names the one farm the installer
+    was dispatched to.
+
+    The claim is deliberately NOT `support_session`: this grants no support
+    operator's powers, only the ability to describe the farm being installed.
+    A missing `farm_id` claim means the session was minted without a farm (which
+    is impossible today) — treated as no access rather than all access.
+    """
+    claims = _claims(request)
+    if not claims.get("installer_session"):
+        return False
+    if not claims.get("org_id") or claims["org_id"] != str(farm_id_org_id(request, farm_id)):
+        return False
+    return claims.get("farm_id") == farm_id
+
+
+def farm_id_org_id(request, farm_id):
+    """The org of a farm, read through whatever context the caller has.
+
+    Read-only and org-agnostic on purpose: an installer session already proves
+    the org, so this is a consistency check, not the authorisation.
+    """
+    from apps.farms.models import Farm
+
+    return Farm.objects.filter(pk=farm_id).values_list("org_id", flat=True).first()
+
+
+def _may_write_farm(request, farm_id) -> bool:
+    """The single gate both writers use (task 2.16).
+
+    Manager/owner of the org, OR an installer session scoped to THIS farm.
+    An installer session for another farm is a 403, not a fallback.
+    """
+    if _roles(request) & MANAGER_ROLES:
+        return True
+    return _installer_session_farm(request, farm_id)
+
+
+def _installer_session_saloon(request, saloon_id) -> bool:
+    """Same rule as `_installer_session_farm`, reached through a saloon.
+
+    `position_create` is addressed by saloon, not farm, so the farm the session
+    was scoped to has to be resolved before the check can run.
+    """
+    from apps.farms.models import Saloon
+
+    farm_id = (
+        Saloon.objects.filter(pk=saloon_id).values_list("farm_id", flat=True).first()
+    )
+    return farm_id is not None and _installer_session_farm(request, farm_id)
+
+
 def _scoped_out_farm(request, farm) -> bool:
     """True when the caller's scope rows exclude this farm (a 403, never a widen)."""
     scoped = scoped_farms(request.user, farm.org_id)
@@ -425,8 +483,10 @@ scope rows → 403. Returns the new `SaloonDetail` (201) and writes a
 @permission_classes([IsAuthenticated])
 def saloon_create(request, farm_id: int):
     org_id = _org_id(request)
-    if org_id is None or not (_roles(request) & MANAGER_ROLES):
-        return _forbidden("manager role required")
+    if org_id is None or not _may_write_farm(request, farm_id):
+        return _forbidden(
+            "manager role required (or an installer session for this farm)"
+        )
 
     farm = Farm.objects.filter(org_id=org_id, pk=farm_id).first()
     if farm is None:
@@ -569,8 +629,13 @@ behave). Foreign/unknown saloon → 404; outside the caller's scope → 403.""",
 @permission_classes([IsAuthenticated])
 def position_create(request, saloon_id: int):
     org_id = _org_id(request)
-    if org_id is None or not (_roles(request) & MANAGER_ROLES):
-        return _forbidden("manager role required")
+    if org_id is None or not (
+        (_roles(request) & MANAGER_ROLES)
+        or _installer_session_saloon(request, saloon_id)
+    ):
+        return _forbidden(
+            "manager role required (or an installer session for this farm)"
+        )
 
     saloon = Saloon.objects.filter(org_id=org_id, pk=saloon_id).first()
     if saloon is None:

@@ -37,6 +37,20 @@ def pack_lwt_key(saloon_id, slot_id) -> str:
     return f"sensor:lwt:{saloon_id}:{slot_id}"
 
 
+def gateway_lwt_key(org_id, gateway_slot_id) -> str:
+    """Gateway-level last-will status, keyed by org + slot (2026-10-18).
+
+    WHY org is part of the key even though the slot id is unique: the topic the
+    gateway publishes on is `{org}/farms/{farm}/gateways/{slot}/status`, and
+    the org segment is the only unforgeable part (the ACL pins it). Keeping the
+    org in the key means a message that arrives on a topic outside the gateway's
+    own ACL — impossible today, but detectable in a log rather than silently
+    overwriting another tenant's status — cannot do so.
+    No TTL on purpose: LWT is durable state, refreshed by the next publish.
+    """
+    return f"gateway:lwt:{org_id}:{gateway_slot_id}"
+
+
 def sensor_status_key(saloon_id, slot_id) -> str:
     # slot pk is a CharField; str() keeps the signature tolerant in tests.
     return f"sensor:status:{saloon_id}:{slot_id}"

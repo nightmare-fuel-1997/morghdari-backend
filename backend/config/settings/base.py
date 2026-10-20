@@ -423,6 +423,15 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 60.0,
         "options": {"queue": "alerts"},
     },
+    # AD-3 (2026-10-18): configuration convergence. Every slot whose device has
+    # not reported the current `desired_config_version` is republished — this is
+    # the ENTIRE retry story for retained desired state, replacing per-command
+    # retry queues. 60 s keeps a broker outage invisible to the installer.
+    "provisioning-config-convergence-sweep": {
+        "task": "provisioning.sweep_config_convergence",
+        "schedule": 60.0,
+        "options": {"queue": "celery"},
+    },
     # M7-08 MET-SAAS: the doc's nightly per-org rollup (data-aggregates-v1
     # `aggregates.build_org_usage` — "nightly 01:10") + the §5.4 daily
     # tenant_cost_estimate_usd export. Runs with the default queue: once a

@@ -1,0 +1,174 @@
+# Production broker profile — the LAST unproven link (2026-10-20).
+#
+# WHY this file exists. Every test so far ran against the CI broker, which
+# authenticates from EMQX's OWN built-in database (users pushed over the
+# management API). Production does NOT do that: `emqx/emqx.conf` authenticates
+# every client with a SQL query against Postgres, including the LEFT JOIN on
+# `device_units` that lets a factory-fresh unit connect before any
+# `gateway_slots` row exists (Phase 1, AD-1). That query had been validated in
+# isolation and the config had booted, but no live device had ever connected
+# through it — which is exactly the kind of gap that only appears on the first
+# real farm.
+#
+# This stack is the minimum that reproduces production faithfully:
+#   * Postgres built from the real `initdb/` scripts (roles, grants, RLS),
+#   * Django migrations applied, then `02_rls.sql` re-run (the order the QA
+#     bring-up script uses — the policies reference tables that only exist after
+#     migrating),
+#   * EMQX mounting `emqx/emqx.conf` VERBATIM, with the TLS listener on 8883,
+#   * the test image running the authn suite against it.
+#
+#   docker compose -f docker-compose.broker-prod.yml -p morghdari_bp up --abort-on-container-exit --exit-code-from e2e
+#
+# Not for production use. It is a rehearsal rig.
+
+services:
+  pg:
+    # Same image CI uses: initdb/00_extensions.sql needs TimescaleDB.
+    image: timescale/timescaledb:2.29.2-pg16
+    environment:
+      POSTGRES_DB: ${DATABASE_NAME:-morghdari_test}
+      POSTGRES_USER: ${POSTGRES_ADMIN_USER:-morghdari_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:-admin_pw}
+    volumes:
+      # The REAL bootstrap: 01_roles.sql creates morghdari_app / emqx_auth /
+      # morghdari_exporter; 02_rls.sql is a no-op on an empty schema and is
+      # re-run after migrations (see `rls` below).
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_ADMIN_USER:-morghdari_admin} -d ${DATABASE_NAME:-morghdari_test}"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    mem_limit: 512m
+
+  # The emqx_auth role is created WITHOUT a password (deliberately — see
+  # initdb/01_roles.sql); production sets it at bootstrap
+  # (scripts/prod_bootstrap.sh). The broker cannot authenticate to Postgres
+  # until this runs, and its failure mode is "every client rejected", so it is
+  # a separate one-shot step rather than a line buried in an entrypoint.
+  pg-roles:
+    image: postgres:16-alpine
+    depends_on:
+      pg:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD:-admin_pw}
+    entrypoint: ["sh", "-c"]
+    command:
+      - >
+        psql -h pg -U ${POSTGRES_ADMIN_USER:-morghdari_admin}
+        -d ${DATABASE_NAME:-morghdari_test} -v ON_ERROR_STOP=1
+        -c "ALTER ROLE emqx_auth PASSWORD '${EMQX_DB_PASSWORD:-emqx_pw}';"
+        -c "ALTER ROLE morghdari_app PASSWORD '${DATABASE_PASSWORD:-app_pw}';"
+    restart: "no"
+
+  migrate:
+    image: morghdari-test:ci
+    depends_on:
+      pg-roles:
+        condition: service_completed_successfully
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+      # production.py raises if this is absent; .env supplies it.
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-rehearsal-only-not-a-secret}
+      DJANGO_ALLOWED_HOSTS: "*"
+      DATABASE_URL: postgres://${POSTGRES_ADMIN_USER:-morghdari_admin}:${POSTGRES_ADMIN_PASSWORD:-admin_pw}@pg:5432/${DATABASE_NAME:-morghdari_test}
+      REDIS_URL: redis://localhost:6379/1
+    command: ["python", "manage.py", "migrate", "--noinput"]
+    restart: "no"
+
+  # Re-apply BOTH bootstrap scripts AFTER migrations, in the order the QA
+  # bring-up uses (ops/qa-harness/qa_bringup.sh steps 3-4).
+  #
+  # 01_roles.sql again is NOT redundant: its grants are written as
+  # `IF to_regclass('public.mqtt_device_credentials') IS NOT NULL THEN GRANT ...`
+  # because they must be safe on an empty database. At container-init time the
+  # tables do not exist yet, so EVERY grant is skipped — and emqx_auth ends up
+  # with no SELECT, which the broker reports as "Not authorized" for perfectly
+  # valid credentials. That is exactly how this rig failed the first time.
+  #
+  # 02_rls.sql again is also load-bearing: `tenants/0003` adds the emqx_auth
+  # read exemption on gateway_slots. Without it, FORCE RLS hides every bound
+  # slot from the authn JOIN.
+  rls:
+    image: timescale/timescaledb:2.29.2-pg16
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD:-admin_pw}
+    volumes:
+      - ./initdb:/initdb:ro
+    entrypoint: ["sh", "-c"]
+    command:
+      - >
+        psql -h pg -U ${POSTGRES_ADMIN_USER:-morghdari_admin}
+        -d ${DATABASE_NAME:-morghdari} -v ON_ERROR_STOP=1
+        -f /initdb/01_roles.sql &&
+        psql -h pg -U ${POSTGRES_ADMIN_USER:-morghdari_admin}
+        -d ${DATABASE_NAME:-morghdari} -v ON_ERROR_STOP=1
+        -f /initdb/02_rls.sql
+    restart: "no"
+
+  emqx:
+    image: emqx:5.5.1
+    depends_on:
+      rls:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_HOST: pg
+      DATABASE_NAME: ${DATABASE_NAME:-morghdari_test}
+      EMQX_DB_USER: emqx_auth
+      EMQX_DB_PASSWORD: ${EMQX_DB_PASSWORD:-emqx_pw}
+      # emqx.conf interpolates ${...} itself for these; the env-var overrides
+      # below exist because the FIRST real boot proved the literal path does
+      # not always win (see the comments in docker-compose.prod.yml).
+      # EMQX does NOT substitute ${VAR} inside emqx.conf — the literal became
+      # the pool hostname and nxdomain'd (production found this on its first
+      # boot; see the comment in docker-compose.prod.yml). The *_SERVER
+      # overrides are what actually wire the pool, and omitting them here the
+      # first time reproduced the same failure.
+      EMQX_AUTHENTICATION__1__SERVER: "pg:5432"
+      EMQX_AUTHENTICATION__1__DATABASE: ${DATABASE_NAME:-morghdari}
+      EMQX_AUTHENTICATION__1__USERNAME: emqx_auth
+      EMQX_AUTHENTICATION__1__PASSWORD: ${EMQX_DB_PASSWORD:-emqx_pw}
+      EMQX_AUTHORIZATION__SOURCES__1__SERVER: "pg:5432"
+      EMQX_AUTHORIZATION__SOURCES__1__DATABASE: ${DATABASE_NAME:-morghdari}
+      EMQX_AUTHORIZATION__SOURCES__1__USERNAME: emqx_auth
+      EMQX_AUTHORIZATION__SOURCES__1__PASSWORD: ${EMQX_DB_PASSWORD:-emqx_pw}
+      EMQX_NODE__COOKIE: broker_prod_rehearsal
+    volumes:
+      # VERBATIM production configuration — the point of the exercise.
+      - ./emqx/emqx.conf:/opt/emqx/etc/emqx.conf:ro
+      # The TLS listener on 8883 needs the real certs.
+      - ./certs:/opt/emqx/certs:ro
+    healthcheck:
+      test: ["CMD-SHELL", "emqx ctl status >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    mem_limit: 512m
+
+  e2e:
+    image: morghdari-test:ci
+    depends_on:
+      emqx:
+        condition: service_healthy
+    volumes:
+      - ./scripts:/scripts:ro
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.test
+      DATABASE_URL: postgres://${POSTGRES_ADMIN_USER:-morghdari_admin}:${POSTGRES_ADMIN_PASSWORD:-admin_pw}@pg:5432/${DATABASE_NAME:-morghdari_test}
+      REDIS_URL: redis://localhost:6379/1
+      # The test module is skipped unless these are set, so the ordinary `test`
+      # service never tries to reach a broker it does not have.
+      MQTT_PROD_BROKER_HOST: emqx
+      MQTT_PROD_BROKER_PORT: "8883"
+      MQTT_PROD_BROKER_TLS: "1"
+    command:
+      - sh
+      - -c
+      - >-
+        pytest tests/test_m12_00_prod_broker_authn_live.py -v
+        --no-cov -p no:cacheprovider --tb=short

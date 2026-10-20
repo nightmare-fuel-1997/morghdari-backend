@@ -304,6 +304,24 @@ def _on_message(client, userdata, message) -> None:
     with _messages_lock:
         _messages_seen += 1  # M7: /metrics counter (best-effort — never blocks ingestion)
     topic = message.topic or ""
+    # BUG-fix 2026-10-18 (finding D1): the gateway STATUS lane was subscribed
+    # since v0.3 but never routed — it fell into the telemetry pipeline, which
+    # rejects anything not ending in `/telemetry`, so every ONLINE/OFFLINE
+    # publish (and every LWT) was dead-lettered as `bad_topic` and
+    # `_handle_status` was never called. Route it before the parser.
+    if _is_status_topic(topic):
+        try:
+            # FOURTH defect, found while writing the regression test: the
+            # handler's `client` argument is the REDIS client (it calls
+            # client.set), but the only caller passes the paho MQTT client from
+            # the on_message signature. Never callable together, so it never
+            # surfaced — and had it been called, the status lane would have died
+            # with AttributeError on every publish. Pass Redis explicitly.
+            _handle_status(_redis(), topic, message.payload)
+        except Exception:
+            # The lane is advisory; a failure must never take ingestion down.
+            logger.exception("status lane failed for topic=%s", topic)
+        return
     # T1 topic shape: {org}/farms/{farm}/gateways/{slot}/... — the ACL pins
     # each gateway to publish under its OWN org's prefix, so segment 0 is the
     # trustworthy org for the RLS-scoped lookups below.
@@ -312,6 +330,17 @@ def _on_message(client, userdata, message) -> None:
         _redis(), topic, message.payload,
         db_fetch=_slot_db_fetch,
         status_fetch=lambda gw: _status_fetch(org_from_topic, gw),
+    )
+
+
+def _is_status_topic(topic: str) -> bool:
+    """`{org}/farms/{farm}/gateways/{slot}/status` — 6 levels, T2."""
+    parts = (topic or "").split("/")
+    return (
+        len(parts) == 6
+        and parts[1] == "farms"
+        and parts[3] == "gateways"
+        and parts[5] == "status"
     )
 
 
@@ -369,30 +398,79 @@ def _redis():
 
 
 def _handle_status(client, topic: str, payload: bytes) -> None:
-    """Mirror retained gateway status into the pack liveness key."""
+    """Record the gateway's retained liveness status (T2).
+
+    BUG-fix 2026-10-18 (finding D1/D2). Two defects, both fixed here:
+
+      1. The function existed but was never called, so every status publish and
+         every LWT was dead-lettered as `bad_topic` by the telemetry parser.
+      2. It looked the gateway segment up as a `SaloonSensorSlot`, which is a
+         different identity — the segment is the `gateway_slot_id`. On the real
+         fleet that lookup returned nothing, so the status was dropped again.
+         The demo/simulator topology happens to reuse slot ids, which is why
+         this went unnoticed.
+
+    Behaviour now: write the durable gateway LWT key
+    `gateway:lwt:{org}:{slot}`, and additionally mirror into the sensor pack key
+    when — and only when — a sensor slot with that id genuinely exists in the
+    same org (the demo topology). The org comes from the TOPIC, which the ACL
+    pins, exactly as for telemetry.
+    """
     import json
 
-    from apps.alerts.services.redis_keys import pack_lwt_key
+    from apps.alerts.services.redis_keys import gateway_lwt_key, pack_lwt_key
     from apps.devices.models import SaloonSensorSlot
 
     parts = topic.split("/")
-    if len(parts) != 6 or parts[1] != "farms" or parts[3] != "gateways" or parts[5] != "status":
+    if not _is_status_topic(topic):
         return
+    org_id, _farm_level, _literal, _gateway_literal, gateway_slot = (
+        parts[0], parts[1], parts[2], parts[3], parts[4],
+    )
+
     try:
         body = json.loads(payload)
     except (TypeError, ValueError):
         return
-    status = body.get("status")
-    if status not in {"online", "offline"}:
+    if not isinstance(body, dict):
         return
-    # The status topic's gateway segment is the sensor-slot identity in the
-    # demo/simulator topology (slot_id doubles as the gateway id); the lwt
-    # key lives per (saloon, slot) so the boss board can surface dead packs.
-    slot = SaloonSensorSlot.objects.filter(slot_id=parts[4], org_id=parts[0]).first()
-    if slot is None:
+
+    # The payload mirrors one field of the topic. If it disagrees, the message
+    # is an identity fault — drop it rather than trust either side.
+    if str(body.get("gateway_slot_id") or "") != gateway_slot:
+        logger.warning("status identity mismatch on %s", topic)
         return
-    # Gateway-level status is retained; no TTL is used for durable LWT state.
-    client.set(pack_lwt_key(slot.saloon_id, slot.slot_id), status)
+
+    status = str(body.get("status") or "").upper()
+    if status not in {"ONLINE", "OFFLINE"}:
+        return
+
+    client.set(gateway_lwt_key(org_id, gateway_slot), status.lower())
+
+    # Demo/simulator topology only: the slot id doubles as a sensor slot id.
+    if _django_ready():
+        from django.db import connection, transaction
+
+        try:
+            if connection.vendor == "postgresql" and org_id:
+                from apps.tenants.context import tenant_context
+
+                with transaction.atomic(), tenant_context(org_id):
+                    slot = (
+                        SaloonSensorSlot.objects.filter(pk=gateway_slot)
+                        .only("saloon_id", "slot_id")
+                        .first()
+                    )
+            else:
+                slot = (
+                    SaloonSensorSlot.objects.filter(pk=gateway_slot)
+                    .only("saloon_id", "slot_id")
+                    .first()
+                )
+            if slot is not None:
+                client.set(pack_lwt_key(slot.saloon_id, slot.slot_id), status.lower())
+        except Exception:
+            logger.exception("status sensor mirror failed for %s", topic)
 
 
 def _on_disconnect(client, userdata, disconnect_flags, reason_code, properties=None):

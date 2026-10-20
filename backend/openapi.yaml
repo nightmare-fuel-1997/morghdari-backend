@@ -1,10 +1,50 @@
 openapi: "3.0.3"
 info:
   title: Morghdari Poultry Monitoring API
-  version: "1.7.8"
+  version: "1.14.0"
   description: |
     REST API for the Morghdari multi-tenant poultry monitoring platform.
     WebSocket protocol: /api/ws-docs/ (human) + /api/ws-schema/ (JSON); Swagger covers REST only.
+
+    v1.14.0 (2026-10-20 — device photos, AD-20 / task 2.9):
+    `POST /provisioning/installations/{id}/gateway/photo/` and
+    `POST .../{id}/sensors/{slot_id}/photo/` — a photo per gateway and per
+    sensor, sharing the saloon-photo validator and its §2 O6 limits rather
+    than re-inventing them.
+
+    v1.13.0 (2026-10-20 — the sensor mapping, AD-23 / task 2.10):
+    `POST /provisioning/installations/{job_id}/sensors/` binds a physical
+    `pack_id` to a sensor slot and bumps `desired_config_version`, so the
+    sensor reaches the device through the retained document.
+
+    v1.12.0 (2026-10-20 — the sensor-slot writer, D5/X3):
+    `POST /saloons/{id}/sensor-slots/` is the `saloon_sensor_slots` writer the
+    Actor Use-Case Map has named since the start and no code ever implemented;
+    provisioning sync only validated slots it could not create.
+
+    v1.11.0 (2026-10-19 — submit and the convergence view, Phase 2 slices d/e):
+    `POST /provisioning/installations/{id}/submit/` completes the no-approval
+    activation path (AD-17), and `GET /provisioning/config-state/` exposes the
+    derived four-state view (AD-22).
+
+    v1.10.0 (2026-10-19 — the bind, Phase 2 slice c): `POST
+    /provisioning/installations/{job_id}/gateway/` joins a factory unit to a job
+    by `unit_id` + claim code — creates the gateway slot, expands the ACL to the
+    tenant set, consumes the code, queues the retained configuration — and works
+    with the unit offline. `/gateway/override/` does the same for a support actor
+    with a mandatory reason.
+
+    v1.9.0 (2026-10-19 — installation jobs, Phase 2 slice b): support assigns a
+    job to an installer (`/provisioning/installations/{id}/assign/`), the
+    installer's own queue and job detail, the installer picker with regional
+    scope, and the scoped job session whose `installer_session` claim is
+    deliberately distinct from `support_session` (AD-14).
+
+    v1.8.0 (2026-10-18 — software-company factory inventory, Phase 1): the
+    Hardware Team registers a gateway unit BEFORE any organization exists, mints
+    its broker credential plus a single-use QR claim code, and retires it. All
+    five paths are org-less by design and gated on is_platform_staff +
+    staff_role (hardware/admin) rather than on an org-scoped support session.
 
     v1.7.8 (2026-09-12 — daily reconciliation ledger, v0.9/B5): engineer+
     GET /reconciliation/ (DB rows + DLQ rows + alert list per Tehran day).
@@ -1088,6 +1128,68 @@ paths:
         '404':
           description: Saloon not found
 
+  /saloons/{saloon_id}/sensor-slots/:
+    post:
+      tags: [Farms]
+      summary: Create a saloon sensor slot (the writer D5 says never existed)
+      description: >
+        Finding D5 / contradiction X3: the Actor Use-Case & Dependency Map lists
+        three writers for `saloon_sensor_slots` (Hardware Team, Device Installer
+        via provisioning sync, Farm Manager pre-registration) and NONE existed —
+        `provisioning_sync` only validates existing slots, so a saloon could never
+        be given one through the API. This endpoint is that writer.
+
+        Any org member may create a slot in their own org's saloon. An installer
+        session (AD-14) works because it carries an org claim for exactly one
+        job's org.
+
+        A slot is a MOUNTING PLAN for a sensor, not the sensor itself: the
+        binding to a physical pack happens later in
+        `POST …/{job_id}/sensors/`, which is why `pack_id` is absent here on
+        purpose. `slot_id` is optional and generated (`SS-<16 hex>`) when omitted.
+        Re-creating the same slot id inside the SAME saloon+position is
+        idempotent (200); a clash with a different saloon is a 409.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: saloon_id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [position_id]
+              properties:
+                slot_id: { type: string, maxLength: 50, description: Omit to generate `SS-<16 hex>`. }
+                position_id: { type: integer }
+                allowed_metric_keys:
+                  type: array
+                  items: { type: string }
+      responses:
+        '200':
+          description: Already existed with the same saloon+position (idempotent)
+          content:
+            application/json:
+              schema:
+                type: object
+        '201':
+          description: Slot created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  slot_id: { type: string }
+                  saloon_id: { type: integer }
+                  org_id: { type: string, format: uuid }
+                  position_id: { type: integer }
+                  is_active: { type: boolean }
+                  allowed_metric_keys:
+                    type: array
+                    items: { type: string }
+        '400': { description: Missing position_id, a foreign position, or non-string metric keys }
+        '404': { description: Saloon not found in the caller's org }
+        '409': { description: slot_id already exists in a different saloon/position }
+
   /saloons/{saloon_id}/telemetry/:
     get:
       tags: [Telemetry]
@@ -1426,6 +1528,497 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/SaloonPosition'
+
+  /provisioning/installations/:
+    get:
+      tags: [Provisioning]
+      summary: Installation queue (installer; support/admin see all)
+      description: >
+        Newest first, capped at 200. `?state=` filters to PENDING, ASSIGNED, BOUND,
+        SUBMITTED, COMPLETED or CANCELLED. An installer sees only the jobs assigned
+        to THEM; support and admin see every job. The queue is deliberately
+        org-less: the installer is platform staff with no org claim until
+        `session/` mints one (AD-14).
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: state, in: query, required: false, schema: { type: string, enum: [PENDING, ASSIGNED, BOUND, SUBMITTED, COMPLETED, CANCELLED] } }
+      responses:
+        '200':
+          description: Queue page
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: integer }
+                        kind: { type: string, enum: [INSTALL, REPAIR, MAINTENANCE] }
+                        state: { type: string }
+                        org_id: { type: string, format: uuid }
+                        farm_id: { type: integer }
+                        farm_name: { type: [string, "null"] }
+                        assigned_installer_id: { type: [integer, "null"] }
+                        assigned_at: { type: [string, "null"] }
+                        reassigned_after_bind: { type: boolean }
+                        unit_id: { type: [string, "null"] }
+                        gateway_slot_id: { type: [string, "null"] }
+                        gateway_slot_state: { type: [string, "null"] }
+                        gateway_state_view: { type: [string, "null"], description: Derived (AD-22), never stored. }
+                        created_at: { type: [string, "null"] }
+                        completed_at: { type: [string, "null"] }
+        '400': { description: Invalid state filter }
+        '403': { description: Caller is not platform staff }
+
+  /provisioning/installations/assignable/:
+    get:
+      tags: [Provisioning]
+      summary: Installer picker for a job (support/admin)
+      description: >
+        `?org_id=` is required; `?province_id=` narrows the list using
+        `account_role_scopes` (the regional installer scoping from Tracker §4i) —
+        an installer with no province scope is unrestricted within the org, one
+        scoped to a province sees only farms in it. Returns ACTIVE org members
+        with the `installer` role only.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: org_id, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: province_id, in: query, required: false, schema: { type: integer } }
+      responses:
+        '200':
+          description: Candidate installers
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        user_id: { type: integer }
+                        username: { type: string }
+                        name: { type: string }
+                        province_id: { type: [integer, "null"] }
+                        regionally_scoped: { type: boolean }
+        '400': { description: org_id missing }
+        '403': { description: Caller cannot assign }
+
+  /provisioning/installations/{job_id}/:
+    get:
+      tags: [Provisioning]
+      summary: One installation job
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: job_id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: The job
+          content:
+            application/json:
+              schema:
+                type: object
+        '403': { description: Caller is not platform staff }
+        '404': { description: Unknown job }
+
+  /provisioning/installations/{job_id}/assign/:
+    post:
+      tags: [Provisioning]
+      summary: Assign a job to an installer (support/admin)
+      description: >
+        Support action, audited in BOTH `platform_audit_log` (the actor is
+        org-less) and `account_activity_logs` (so the tenant can query its own
+        history). Moves PENDING → ASSIGNED.
+
+        Reassignment after the unit is bound is FLAGGED (`reassigned_after_bind`)
+        rather than silently rewriting the assignee, so the job history stays
+        readable (AD-21). An installer may not assign to themselves — someone else
+        must dispatch. COMPLETED / CANCELLED jobs are a 409.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: job_id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [installer_id]
+              properties:
+                installer_id: { type: integer }
+                reason: { type: string, maxLength: 255 }
+      responses:
+        '200':
+          description: Job assigned
+          content:
+            application/json:
+              schema:
+                type: object
+        '400': { description: installer_id missing, or not an active installer member of the job's org }
+        '403': { description: Caller cannot assign }
+        '404': { description: Unknown job }
+        '409': { description: Job is COMPLETED or CANCELLED }
+
+  /provisioning/installations/{job_id}/gateway/:
+    post:
+      tags: [Provisioning]
+      summary: Bind a factory unit to this job by unit id + claim code (AD-3)
+      description: >
+        The installer scans the QR label on the physical gateway and the backend
+        joins it to the job: creates the `gateway_slots` row (slot id = unit id,
+        AD-2), EXPANDS the ACL from the 3-row device lane to the full T1–T9
+        tenant set, consumes the claim code, moves the job to BOUND, and queues
+        the first retained-configuration publish.
+
+        **Works with the unit OFFLINE** — nothing here talks to the broker, so a
+        device still in its box can be bound and picks up its configuration on
+        its next connect.
+
+        The claim code is a possession proof, single use: the stamp happens
+        inside the row lock, so two installers racing on the same label cannot
+        both win. It is NOT the MQTT password — a photographed label cannot
+        break authentication, only `retire` can.
+
+        Idempotent for a REPLAYED bind of the same unit to the same job (an
+        installer with one bar of signal presses Send twice), but a unit already
+        bound to another job is a 409.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: job_id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [unit_id, claim_code]
+              properties:
+                unit_id: { type: string }
+                claim_code: { type: string, description: One-time possession proof from the QR label. }
+      responses:
+        '200':
+          description: Bound (or a replayed bind of the same unit)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  already_bound: { type: boolean }
+                  job: { type: object }
+        '400': { description: Invalid claim code, or a missing body field }
+        '403': { description: Caller is not platform staff }
+        '404': { description: Unknown job, or a retired/unknown unit }
+        '409': { description: Claim code already consumed, or the unit/job is bound elsewhere }
+
+  /provisioning/installations/{job_id}/gateway/override/:
+    post:
+      tags: [Provisioning]
+      summary: Bind without a claim code (support/admin, lost label)
+      description: >
+        Escape hatch for a label that was destroyed or never arrived. Skips the
+        possession proof, which is why `reason` is MANDATORY and the bind is
+        audited in BOTH ledger tables with `via_override: true`. An installer may
+        NOT use this path — the proof is exactly what their role is for. The
+        device's MQTT credential is untouched, so an unproven unit can still be
+        retired later.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: job_id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [unit_id, reason]
+              properties:
+                unit_id: { type: string }
+                reason: { type: string, minLength: 1, maxLength: 255 }
+      responses:
+        '200':
+          description: Bound via override
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  job: { type: object }
+        '400': { description: Missing unit_id, or missing reason }
+        '403': { description: Caller cannot use the override path }
+        '404': { description: Unknown job, or a retired/unknown unit }
+        '409': { description: The unit/job is bound elsewhere }
+
+  /provisioning/installations/{job_id}/session/:
+    post:
+      tags: [Provisioning]
+      summary: Open a scoped installer session for one job (AD-14)
+      description: >
+        Mints a 15-minute access token whose claims add `org_id`,
+        `installer_session: true`, `job_id` and `farm_id`. While that token is
+        used the tenant middleware sets the org GUC and RLS scopes every query to
+        that org.
+
+        The claim is deliberately NOT `support_session` — an installer must never
+        inherit a support operator's powers. Only the job's assignee (or
+        support/admin, for an installer whose phone died; still audited) may open
+        one. An unassigned job is a 409: there is no org to scope the session to.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: job_id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: Session opened — scoped token issued (expires in 15 min)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token: { type: string }
+                  token_type: { type: string, example: Bearer }
+                  org_id: { type: string, format: uuid }
+                  farm_id: { type: integer }
+                  job_id: { type: integer }
+                  expires_in_sec: { type: integer, example: 900 }
+                  expires_at: { type: string }
+        '403': { description: Only the job's assignee (or support/admin) may open a session }
+        '404': { description: Unknown job }
+        '409': { description: Job is not assigned, or is COMPLETED/CANCELLED }
+
+  /provisioning/installations/{job_id}/sensors/:
+    post:
+      tags: [Provisioning]
+      summary: Bind a sensor pack to a sensor slot (AD-23)
+      description: >
+        The join that makes a sensor slot real. `pack_id` is the 8-hex LoRa node
+        id burned into the sensor at manufacture and printed on it; this is where
+        it meets the `saloon_sensor_slots` row the installer created.
+
+        Everything the device needs arrives through this join - `sensors[].pack_id`,
+        its saloon, position, label and `metrics` (from the slot's
+        `allowed_metric_keys`, the column that previously had no writer) - so the
+        mapping bumps `desired_config_version`, which is what makes the device
+        treat the next retained document as NEW rather than a stale copy.
+
+        One physical sensor can only be in one place: mapping the same `pack_id`
+        to a DIFFERENT slot is a 409. Mapping it to the SAME slot again is
+        idempotent (200), because an installer with one bar of signal presses Send
+        twice. The slot must belong to a saloon in THIS job's farm - an installer
+        cannot map a pack onto a building they are not working on.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: job_id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pack_id, slot_id]
+              properties:
+                pack_id: { type: string, pattern: '^[0-9a-fA-F]{8}$', description: The 8-hex LoRa node id. }
+                slot_id: { type: string }
+      responses:
+        '200':
+          description: Already mapped to the same slot (idempotent)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  already_mapped: { type: boolean }
+                  pack_id: { type: string }
+                  slot_id: { type: string }
+        '201':
+          description: Mapping created; the desired version was bumped
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  pack_id: { type: string }
+                  slot_id: { type: string }
+                  config_version: { type: integer }
+        '400': { description: Missing field, or pack_id is not the 8-hex LoRa node id }
+        '403': { description: Caller is not platform staff }
+        '404': { description: Unknown job, or no sensor slot in this job's farm }
+        '409': { description: No gateway bound, job finished, or the pack is mapped elsewhere }
+
+  /provisioning/installations/{job_id}/gateway/photo/:
+    post:
+      tags: [Provisioning]
+      summary: Upload an installation photo of the gateway (AD-20)
+      description: >
+        AD-20's other half: a photo of the gateway itself, so a later technician
+        can see how it was mounted and wired. Multipart `file`, jpeg/png, <=10 MB
+        (the spec §2 O6 limits, shared with the saloon-photo path so the two
+        cannot drift). `description` and `is_primary` are optional; `is_primary`
+        clears any previous primary for the same target, so a target keeps
+        exactly one cover image. Requires a bound gateway (409 otherwise).
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: job_id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+                description: { type: string, maxLength: 255 }
+                is_primary: { type: boolean }
+      responses:
+        '201':
+          description: Photo stored and recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  photo_id: { type: integer }
+                  file_url: { type: string }
+                  where: { type: string, enum: [gateway] }
+                  target: { type: string }
+                  is_primary: { type: boolean }
+        '400': { description: Missing file, unsupported type, or over the size limit }
+        '403': { description: Caller is not platform staff }
+        '404': { description: Unknown job }
+        '409': { description: No gateway bound to this job }
+
+  /provisioning/installations/{job_id}/sensors/{slot_id}/photo/:
+    post:
+      tags: [Provisioning]
+      summary: Upload an installation photo of a sensor (AD-20)
+      description: >
+        AD-20: each sensor is an independent entity in the system, so each one
+        gets its own photo - the installer's proof of what was actually mounted
+        where. Accepts multipart `file` (jpeg/png, <=10 MB) plus optional
+        `description` and `is_primary`.
+
+        `is_primary` clears the previous primary for the SAME slot, so a target
+        has one cover image rather than a race. The sensor slot must belong to a
+        saloon in this job's farm (404 otherwise) - an installer cannot attach
+        evidence to a building they are not working on.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: job_id, in: path, required: true, schema: { type: integer } }
+        - { name: slot_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+                description: { type: string, maxLength: 255 }
+                is_primary: { type: boolean }
+      responses:
+        '201':
+          description: Photo stored and recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  photo_id: { type: integer }
+                  file_url: { type: string }
+                  where: { type: string, enum: [sensor] }
+                  target: { type: string }
+                  is_primary: { type: boolean }
+        '400': { description: Missing file, unsupported type, or over the size limit }
+        '403': { description: Caller is not platform staff }
+        '404': { description: Unknown job, or no sensor slot in this job's farm }
+
+  /provisioning/installations/{job_id}/submit/:
+    post:
+      tags: [Provisioning]
+      summary: Submit a bound job (installer finished on site)
+      description: >
+        Moves the job BOUND → SUBMITTED, which is the condition AD-17 waits for.
+        Once the device also reports that it applied the desired configuration,
+        the slot activates to `PROVISIONED` with NO human approval — this is the
+        technical gate that replaced farm-manager approval.
+
+        Requires a bound unit: you cannot submit a job with no device. Idempotent,
+        because the Installer presses Done again when the HTTP response was lost.
+        If the device already reported before the installer pressed Done, the
+        activation check runs immediately rather than waiting for a report that
+        will never come again.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: job_id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: Submitted (or a replay)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  already_submitted: { type: boolean }
+                  job: { type: object }
+        '403': { description: Caller is not platform staff }
+        '404': { description: Unknown job }
+        '409': { description: Job is not BOUND, or is COMPLETED/CANCELLED }
+
+  /provisioning/config-state/:
+    get:
+      tags: [Provisioning]
+      summary: Four-state convergence view (support/admin, AD-22)
+      description: >
+        `?state=pending_sync|stalled|failed|ready` — the derived, never-stored
+        lifecycle. What a support engineer opens when a farm says "my gateway
+        shows nothing": PENDING_SYNC means the device was never told anything,
+        STALLED means it was told and has not caught up, FAILED carries the reason
+        in `last_publish_error`, READY means it converged.
+
+        Every row is derived from the version counters at read time, so the view
+        cannot disagree with the reconciler. Cross-org rows are invisible: an
+        org-less support caller discovers orgs over the admin alias and reads each
+        org's rows inside its own tenant context.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: state, in: query, required: false, schema: { type: string, enum: [PENDING_SYNC, STALLED, FAILED, READY] } }
+      responses:
+        '200':
+          description: Rows, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        gateway_slot_id: { type: string }
+                        org_id: { type: string, format: uuid }
+                        farm_id: { type: integer }
+                        farm_name: { type: [string, "null"] }
+                        provisioning_status: { type: string }
+                        state: { type: string, enum: [PENDING_SYNC, STALLED, FAILED, READY] }
+                        desired_config_version: { type: integer }
+                        applied_config_version: { type: integer }
+                        last_publish_error: { type: [string, "null"] }
+                        last_reported_at: { type: [string, "null"] }
+                        applied_at: { type: [string, "null"] }
+        '400': { description: Invalid state filter }
+        '403': { description: Caller is not support/admin }
 
   /provisioning/sync/:
     post:
@@ -1826,6 +2419,201 @@ paths:
                   unix_ts:
                     type: integer
                     example: 1700000000
+
+  /platform/devices/units/:
+    post:
+      tags: [Platform Inventory]
+      summary: Register a factory unit (Hardware Team, v1.8.0)
+      description: >
+        Mints one `device_units` row with its broker credential, its single-use QR
+        claim code, and exactly three ACL rows (subscribe `devices/{id}/desired`,
+        subscribe `devices/{id}/command`, publish `devices/{id}/reported`).
+        The unit has NO organization and NO farm: it may connect to the broker, but
+        its ACL reaches no tenant topic, so it cannot publish telemetry until an
+        installer binds it to a farm. `unit_id` is the permanent logical identity —
+        the MQTT username and the eventual gateway_slots.slot_id. `password` and
+        `claim_code` are returned exactly once and never logged; `platform_audit_log`
+        records the action because the org-less actor has nowhere else to write.
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [hardware_id]
+              properties:
+                hardware_id: { type: string, maxLength: 100, example: GW-2026-0042 }
+                unit_id: { type: string, maxLength: 100, description: Omit to generate `GW-<16 hex>`. }
+                model: { type: string, maxLength: 50 }
+                fw_version: { type: string, maxLength: 50 }
+                batch: { type: string, maxLength: 50 }
+                notes: { type: string }
+                reason: { type: string, maxLength: 255 }
+      responses:
+        '201':
+          description: Unit registered — credentials and claim code issued exactly once
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [unit_id, hardware_id, username, password, claim_code, state, acl_rules]
+                properties:
+                  unit_id: { type: string }
+                  hardware_id: { type: string }
+                  username: { type: string, description: Always equal to unit_id. }
+                  password: { type: string, description: One-time MQTT credential — write to flash, then forget. }
+                  claim_code: { type: string, description: One-time QR claim code — print on the label. }
+                  state: { type: string, enum: [REGISTERED] }
+                  acl_rules: { type: integer, example: 3 }
+        '400': { description: Invalid body }
+        '403': { description: Caller is not platform staff with an allowed staff_role }
+        '409': { description: unit_id or hardware_id already registered }
+    get:
+      tags: [Platform Inventory]
+      summary: List factory units (Hardware Team + Support, v1.8.0)
+      description: >
+        Newest first, capped at 200. `?state=` filters to REGISTERED, BOUND or
+        RETIRED. Readable by support as well as hardware so support can answer
+        "is this serial already claimed?" without write access. Never returns a
+        password or a claim code — only a `credential_active` flag.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: state, in: query, required: false, schema: { type: string, enum: [REGISTERED, BOUND, RETIRED] } }
+      responses:
+        '200':
+          description: Inventory page
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        unit_id: { type: string }
+                        hardware_id: { type: string }
+                        state: { type: string, enum: [REGISTERED, BOUND, RETIRED] }
+                        model: { type: [string, "null"] }
+                        fw_version: { type: [string, "null"] }
+                        batch: { type: [string, "null"] }
+                        slot_id: { type: [string, "null"] }
+                        created_at: { type: [string, "null"] }
+                        bound_at: { type: [string, "null"] }
+                        retired_at: { type: [string, "null"] }
+                        credential_active: { type: boolean }
+        '400': { description: Invalid state filter }
+        '403': { description: Caller lacks platform-staff read access }
+
+  /platform/devices/units/{unit_id}/credential/:
+    post:
+      tags: [Platform Inventory]
+      summary: Issue or rotate a unit's MQTT password (Hardware Team, v1.8.0)
+      description: >
+        Sets a fresh broker password and returns the plaintext once. A retired
+        unit is 404 — it must be re-registered, not resurrected. The previous
+        password stops working at the next CONNECT because the broker reads the
+        hash straight from `mqtt_device_credentials`. Identical 404 for "unknown"
+        and "retired", so the endpoint is not an inventory oracle.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: unit_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, maxLength: 255 }
+      responses:
+        '200':
+          description: Fresh password issued (one-time)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  unit_id: { type: string }
+                  username: { type: string }
+                  password: { type: string }
+        '403': { description: Caller is not platform staff with an allowed staff_role }
+        '404': { description: Unknown or retired unit }
+
+  /platform/devices/units/{unit_id}/claim-code/:
+    post:
+      tags: [Platform Inventory]
+      summary: Re-issue a unit's QR claim code (Hardware Team, v1.8.0)
+      description: >
+        Rotates the claim code and returns the new plaintext once — used when a
+        label is damaged or the unit came back from the field. The previous code
+        stops working immediately: it is replaced, not supplemented. A BOUND unit
+        is 409, because its label is already consumed and the binding is the
+        record. The code is stored only as a bcrypt hash and is NOT the MQTT
+        password, so a photographed label cannot break broker authentication.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: unit_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, maxLength: 255 }
+      responses:
+        '200':
+          description: Fresh claim code issued (one-time)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  unit_id: { type: string }
+                  claim_code: { type: string }
+        '403': { description: Caller is not platform staff with an allowed staff_role }
+        '404': { description: Unknown or retired unit }
+        '409': { description: Unit is bound to a gateway slot }
+
+  /platform/devices/units/{unit_id}/retire/:
+    post:
+      tags: [Platform Inventory]
+      summary: Retire a factory unit (Hardware Team, v1.8.0)
+      description: >
+        Terminal: the unit stops authenticating (credential deactivated) and loses
+        every ACL row, so `no_match = deny` applies at the broker. A BOUND unit is
+        409 — unbind it first, because retiring it would leave a gateway slot
+        pointing at a unit that can no longer connect. Idempotent on an
+        already-retired unit. Reason is MANDATORY, matching the H0–H2 convention.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: unit_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 255 }
+      responses:
+        '200':
+          description: Unit retired
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  unit_id: { type: string }
+                  retired: { type: boolean }
+                  idempotent: { type: boolean, description: Present only on a replayed retire. }
+        '400': { description: Missing reason }
+        '403': { description: Caller is not platform staff with an allowed staff_role }
+        '404': { description: Unknown unit }
+        '409': { description: Unit is bound to a gateway slot; unbind it first }
 
   /platform/support/session/:
     post:

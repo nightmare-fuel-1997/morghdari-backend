@@ -31,6 +31,16 @@ class GatewayRequest(models.Model):
     status = models.CharField(max_length=20, default="PENDING")
     rejection_reason = models.TextField(null=True, blank=True)
     details = models.JSONField(null=True, blank=True)
+    # AD-15 (owner 2026-10-18): the request may CREATE the farm, because the
+    # org rep enters "the farm's initial information" before the farm exists.
+    # `farm` was already nullable; this is the structured spec that support's
+    # approval turns into a Farm owned by the requesting org. NULL farm_spec +
+    # non-NULL farm = an existing farm was referenced instead.
+    farm_spec = models.JSONField(null=True, blank=True)
+    # AD-16: one request may cover several gateways (a gateway owns a zone of
+    # saloons, not the whole farm — Saas.md). Approval materialises one
+    # InstallationJob per gateway.
+    expected_gateways = models.PositiveIntegerField(default=1)
 
     class Meta:
         db_table = "gateway_requests"
@@ -38,6 +48,10 @@ class GatewayRequest(models.Model):
             models.CheckConstraint(
                 check=Q(status__in=["PENDING", "APPROVED", "REJECTED"]),
                 name="ck_gateway_requests_status",
+            ),
+            models.CheckConstraint(
+                check=Q(expected_gateways__gte=1),
+                name="ck_gateway_requests_expected_gateways",
             ),
         ]
 
@@ -53,6 +67,15 @@ class GatewaySlot(models.Model):
     created_at = models.DateTimeField(null=True, db_default=Now())
     # Who registered this slot (Hardware Team).
     created_by = models.ForeignKey("accounts.User", db_column="created_by", on_delete=models.RESTRICT, null=True, blank=True, related_name="+")
+    # AD-3/AD-4 (2026-10-18): configuration convergence. The gateway reports the
+    # config_version it actually applied; the backend bumps `desired` on submit.
+    # The four-state view (AD-22) is DERIVED from these two integers — never
+    # stored, so it cannot disagree with them.
+    desired_config_version = models.PositiveIntegerField(default=0)
+    applied_config_version = models.PositiveIntegerField(default=0)
+    applied_at = models.DateTimeField(null=True, blank=True)
+    last_reported_at = models.DateTimeField(null=True, blank=True)
+    last_publish_error = models.TextField(null=True, blank=True)
 
     class Meta:
         db_table = "gateway_slots"
@@ -280,4 +303,116 @@ class ActuatorHardwareRegistry(models.Model):
                 name="idx_active_actuator_hw",
                 condition=Q(removed_at__isnull=True),
             ),
+        ]
+
+
+class DeviceUnit(models.Model):
+    """Factory inventory — the ONLY org-less device identity (AD-1, 2026-10-18).
+
+    WHY this table exists: the Hardware Team registers a unit at the factory,
+    before any farm or organization exists. `gateway_slots.org_id` is NOT NULL
+    and the table is FORCE-RLS'd, so an unbound device cannot live there
+    (design doc §5.2). This table deliberately has NO org_id and therefore NO
+    RLS policy — the same posture as mqtt_device_credentials and
+    mqtt_acl_rules, which are org-less because the broker reads them
+    (initdb/02_rls.sql:24-26). Access control is the platform-staff gate on the
+    endpoints, not RLS.
+
+    AD-2: `unit_id` IS the eventual `gateway_slots.slot_id`. The factory assigns
+    the permanent logical identity, so binding never reflashes the device and
+    never reissues its MQTT credential — binding is one server-side link.
+
+    AD-18: `claim_code_hash` is the possession proof printed in the unit's QR.
+    It is bcrypt-hashed, single-use (cleared at binding), and is NOT the MQTT
+    password, so a photographed label cannot break broker authentication.
+    """
+
+    unit_id = models.CharField(max_length=100, primary_key=True)
+    hardware_id = models.CharField(max_length=100, unique=True)
+    claim_code_hash = models.CharField(max_length=255, null=True, blank=True)
+    claimed_at = models.DateTimeField(null=True, blank=True)
+    model = models.CharField(max_length=50, null=True, blank=True)
+    fw_version = models.CharField(max_length=50, null=True, blank=True)
+    batch = models.CharField(max_length=50, null=True, blank=True)
+    state = models.CharField(max_length=20, default="REGISTERED")
+    # Set at binding. SET_NULL because a slot removal must never destroy the
+    # factory record of the physical unit.
+    slot = models.ForeignKey(
+        GatewaySlot, db_column="slot_id", on_delete=models.SET_NULL,
+        null=True, blank=True, related_name="+",
+    )
+    created_by = models.ForeignKey(
+        "accounts.User", db_column="created_by", on_delete=models.RESTRICT,
+        null=True, blank=True, related_name="+",
+    )
+    created_at = models.DateTimeField(null=True, db_default=Now())
+    bound_at = models.DateTimeField(null=True, blank=True)
+    retired_at = models.DateTimeField(null=True, blank=True)
+    notes = models.TextField(null=True, blank=True)
+
+    class Meta:
+        db_table = "device_units"
+        constraints = [
+            models.CheckConstraint(
+                check=Q(state__in=["REGISTERED", "BOUND", "RETIRED"]),
+                name="ck_device_units_state",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["state"], name="idx_device_units_state"),
+        ]
+
+
+class DevicePhoto(models.Model):
+    """Installation photo of a gateway or a sensor (AD-20, owner 2026-10-18).
+
+    WHY a new table: SaloonPhoto is saloon-scoped only (devices/models.py), but
+    the owner needs a photo per sensor ("each sensor is an independent entity in
+    our system") and one per gateway. A single table with two nullable targets
+    and an exactly-one CHECK keeps the gallery query simple and prevents the
+    half-populated rows a generic FK would allow.
+    """
+
+    id = models.AutoField(primary_key=True)
+    org = models.ForeignKey("tenants.Organization", on_delete=models.RESTRICT, related_name="+")
+    gateway_slot = models.ForeignKey(
+        GatewaySlot, on_delete=models.CASCADE, null=True, blank=True, related_name="+"
+    )
+    sensor_slot = models.ForeignKey(
+        SaloonSensorSlot, on_delete=models.CASCADE, null=True, blank=True, related_name="+"
+    )
+    uploaded_by = models.ForeignKey(
+        "accounts.User", db_column="uploaded_by", on_delete=models.RESTRICT, related_name="+"
+    )
+    uploaded_at = models.DateTimeField(null=True, db_default=Now())
+    file_url = models.CharField(max_length=500)
+    description = models.CharField(max_length=255, null=True, blank=True)
+    is_primary = models.BooleanField(default=False)
+
+    class Meta:
+        db_table = "device_photos"
+        constraints = [
+            # Exactly one target — a photo of nothing, or of both, is a bug.
+            models.CheckConstraint(
+                check=(
+                    Q(gateway_slot__isnull=False, sensor_slot__isnull=True)
+                    | Q(gateway_slot__isnull=True, sensor_slot__isnull=False)
+                ),
+                name="ck_device_photos_one_target",
+            ),
+            # One cover photo per device, mirroring idx_saloon_photos_primary.
+            models.UniqueConstraint(
+                fields=["gateway_slot"],
+                condition=Q(is_primary=True, gateway_slot__isnull=False),
+                name="uq_device_photos_gw_primary",
+            ),
+            models.UniqueConstraint(
+                fields=["sensor_slot"],
+                condition=Q(is_primary=True, sensor_slot__isnull=False),
+                name="uq_device_photos_sensor_primary",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["org", "gateway_slot"], name="idx_device_photos_gw"),
+            models.Index(fields=["org", "sensor_slot"], name="idx_device_photos_sensor"),
         ]

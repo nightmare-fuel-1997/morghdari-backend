@@ -9,6 +9,7 @@ Sources that MUST agree on the tenant-scoped table set:
   1. backend_docs/database.md        — every CREATE TABLE carrying org_id
   2. initdb/02_rls.sql               — the ARRAY[...] bootstrap list
   3. tenants/0002_rls_policies.py    — the frozen in-migration copy
+     + any later migration that enrols NEW tables (0006 = Phase-0 trio)
      + the two hypertables whose RLS lives in telemetry/0002 (C-11)
 
 Usage:
@@ -50,9 +51,23 @@ def initdb_rls_list() -> set[str]:
 
 
 def migration_rls_list() -> set[str]:
-    text = (REPO / "backend" / "apps" / "tenants" / "migrations" / "0002_rls_policies.py").read_text(encoding="utf-8")
-    block = re.search(r"ARRAY\[(.*?)\];", text, re.S).group(1)
-    return set(re.findall(r"'(\w+)'", block)) | HYPERTABLES_RLS_IN_TELEMETRY
+    """The policy table set as the MIGRATIONS apply it.
+
+    0002 is the frozen base list. Later migrations legitimately enrol NEW
+    tables (0006 is the Phase-0 provisioning trio) — they are part of the same
+    union, so the guard stays a true 1:1 against database.md rather than
+    silently ignoring everything added after 0002.
+    """
+    migrations_dir = REPO / "backend" / "apps" / "tenants" / "migrations"
+    tables: set[str] = set()
+    for name in ("0002_rls_policies.py", "0006_rls_phase0_tables.py"):
+        path = migrations_dir / name
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+        for block in re.findall(r"ARRAY\[(.*?)\];", text, re.S):
+            tables |= set(re.findall(r"'(\w+)'", block))
+    return tables | HYPERTABLES_RLS_IN_TELEMETRY
 
 
 def main() -> int:
