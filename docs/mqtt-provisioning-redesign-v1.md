@@ -1313,6 +1313,22 @@ action.
 | 3.2 | `ROTATE_CREDENTIAL` end-to-end (publish → ACK → reconnect → SUCCESS → commit) |
 | 3.3 | `DIAGNOSTICS_REQUEST` end-to-end |
 | 3.4 | Expiry sweep (`expires_at` → EXPIRED) + attempt counter |
+> **PHASE 3 STATUS 2026-10-20: 3.1–3.4 DONE; 3.5 was already fixed.**
+> `reconcile_command_response` implements the Blueprint §11.2 matrix
+> (SENT → ACKNOWLEDGED → APPLIED/FAILED) and the subscriber now subscribes and
+> routes `+/farms/+/gateways/+/commands/response` — the lane that made the whole
+> channel dead. `sweep_command_expiry` runs every 60 s so a SENT command with no
+> answer becomes EXPIRED instead of sitting in flight forever.
+> Two rules worth naming: a late response NEVER resurrects a FAILED/EXPIRED row
+> (it records `late …` in `last_error`), and an unknown command_uuid is IGNORED
+> rather than treated as a fault, because devices replay their outbox.
+> `ROTATE_CREDENTIAL` commits only when the device PRESENTS the new password —
+> a bare SUCCESS is not proof it can authenticate with it.
+> Tests: `test_m13_00_command_channel.py` (18).
+> Note: `ck_gateway_commands_kind` already rejects unknown kinds at the storage
+> layer, so the reconciler's no-op branch is a second line of defence, not the
+> first.
+
 | 3.5 | Status-lane fix (D1/D2) so LWT is honest |
 
 > **Scope note (§1.4).** Tasks 3.1–3.4 are not new design work: they are v0.5

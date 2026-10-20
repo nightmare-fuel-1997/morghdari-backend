@@ -1002,6 +1002,26 @@ CI runs it (TimescaleDB + Redis available):
   the queryset `provisioning_sync` validates against now finds slots created
   this way — the writer and the validator agree. Contract → v1.12.0.
 
+### Phase 3 — the command channel (2026-10-20)
+
+Closes finding D9: a fully-specified subsystem (v0.5 tasks E1–E6 + Blueprint
+§11.2) that vanished by hand-off to a v0.6 that never picked it up.
+
+* **3.1** the subscriber now subscribes AND routes
+  `+/farms/+/gateways/+/commands/response`. Routing happens BEFORE the telemetry
+  parser, because that parser rejects anything not ending in `/telemetry` — the
+  same trap that silently dead-lettered the status lane (D1).
+* **3.2** `ROTATE_CREDENTIAL` commits only when the device PRESENTS the new
+  password. A bare SUCCESS is not proof it can authenticate with it.
+* **3.3** `DIAGNOSTICS_REQUEST` keeps the device's report in the audit ledger.
+* **3.4** `sweep_command_expiry` on the 60 s beat: a SENT command the device
+  never answered becomes EXPIRED instead of sitting in flight forever.
+* **3.5** already fixed (the D1 status-lane routing).
+
+Two rules the tests pin: a late response NEVER resurrects a FAILED/EXPIRED row
+(it records `late …` in `last_error`), and an unknown `command_uuid` is IGNORED
+rather than treated as a fault — devices replay their outbox after a reconnect.
+
 ### The production broker profile — VERIFIED (2026-10-20)
 
 The last unproven link is closed. `docker-compose.broker-prod.yml` reproduces

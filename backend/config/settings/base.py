@@ -432,6 +432,15 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 60.0,
         "options": {"queue": "celery"},
     },
+    # Phase 3 / task 3.4: a SENT command that the device never answered has
+    # nothing to re-drive it. Without this sweep it sits in SENT forever and the
+    # UI shows a command that will never complete. 60 s keeps the displayed
+    # state honest without hammering the table.
+    "provisioning-command-expiry-sweep": {
+        "task": "provisioning.sweep_command_expiry",
+        "schedule": 60.0,
+        "options": {"queue": "celery"},
+    },
     # M7-08 MET-SAAS: the doc's nightly per-org rollup (data-aggregates-v1
     # `aggregates.build_org_usage` — "nightly 01:10") + the §5.4 daily
     # tenant_cost_estimate_usd export. Runs with the default queue: once a

@@ -77,10 +77,11 @@ def test_on_connect_logs_conack_failure_and_skips_subscribe(fake_client, caplog)
 
 
 def test_on_connect_subscribes_telemetry_and_status_on_success(fake_client, caplog):
-    """A successful CONNACK requests BOTH lanes — the telemetry share group
-    and the pack-liveness status topic — and logs the session flag. The
-    "subscribed" confirmation only lands when the broker's SUBACK grants
-    (see the SUBACK tests below): a queued SUBSCRIBE is not a subscription."""
+    """A successful CONNACK requests ALL THREE lanes — the telemetry share
+    group, the pack-liveness status topic, and (Phase 3 / task 3.1) the
+    command-response lane — and logs the session flag. The "subscribed"
+    confirmation only lands when the broker's SUBACK grants (see the SUBACK
+    tests below): a queued SUBSCRIBE is not a subscription."""
     fake_client.subscribe.return_value = (0, 321)  # MQTT_ERR_SUCCESS == 0
 
     class _Ok:
@@ -91,7 +92,7 @@ def test_on_connect_subscribes_telemetry_and_status_on_success(fake_client, capl
 
     assert "connected to broker (session_present=False)" in caplog.text
     topics = [c.args[0] for c in fake_client.subscribe.call_args_list]
-    assert topics == [sub.SHARED_TOPIC, sub.STATUS_TOPIC]
+    assert topics == [sub.SHARED_TOPIC, sub.STATUS_TOPIC, sub.COMMAND_RESPONSE_TOPIC]
     assert "subscribed via" not in caplog.text  # no SUBACK yet — no claim yet
 
 
@@ -110,13 +111,16 @@ def test_on_subscribe_granted_logs_the_lane(fake_client, clean_sub_state, caplog
     holds the subscription — one per lane, naming the grant."""
     sub._pending_subs[11] = sub.SHARED_TOPIC
     sub._pending_subs[12] = sub.STATUS_TOPIC
+    sub._pending_subs[13] = sub.COMMAND_RESPONSE_TOPIC
 
     with caplog.at_level("INFO", logger="morghdari.subscriber"):
         sub._on_subscribe(fake_client, None, 11, [1])
         sub._on_subscribe(fake_client, None, 12, [1])
+        sub._on_subscribe(fake_client, None, 13, [1])
 
     assert "subscribed via" in caplog.text
     assert "subscribed to +/farms/+/gateways/+/status" in caplog.text
+    assert "subscribed to +/farms/+/gateways/+/commands/response" in caplog.text
     assert sub._subscriptions_ok()
 
 
@@ -152,7 +156,7 @@ def test_on_subscribe_denied_is_critical_and_resubscribes(
     # firing the backoff re-sends both subscribes:
     timers[0][1](*timers[0][2])
     topics = [c.args[0] for c in fake_client.subscribe.call_args_list]
-    assert topics == [sub.SHARED_TOPIC, sub.STATUS_TOPIC]
+    assert topics == [sub.SHARED_TOPIC, sub.STATUS_TOPIC, sub.COMMAND_RESPONSE_TOPIC]
 
 
 def test_build_client_uses_the_required_stable_client_id(fake_client, monkeypatch):

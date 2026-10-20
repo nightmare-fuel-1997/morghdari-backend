@@ -279,3 +279,190 @@ def sweep_config_convergence(limit: int = CONVERGENCE_BATCH) -> int:
         except Exception:
             logger.exception("convergence sweep failed for slot=%s", slot_id)
     return republished
+
+
+# ---------------------------------------------------------------------------
+# Command channel (Phase 3, closes D9)
+# ---------------------------------------------------------------------------
+
+@shared_task(name="provisioning.reconcile_command_response")
+def reconcile_command_response(payload: dict, topic_slot_id: str | None = None) -> str:
+    """Apply one D4 command-response. Returns a short outcome code.
+
+    The command channel was fully specified in v0.5 (tasks E1-E6, Blueprint
+    §11.2) and never written: `command_logs` had zero writers and nothing
+    subscribed to the response lane. This is that reconciler.
+
+    The state machine, per the Blueprint matrix:
+        SENT → ACKNOWLEDGED   (device accepted the envelope)
+        ACKNOWLEDGED → APPLIED (device finished; `state` in the report is SUCCESS)
+        any → FAILED           (device reports an error)
+
+    Two rules that are easy to get wrong and expensive to debug:
+      * **Late SUCCESS stays APPLIED but never resurrects a FAILED row.** A
+        device that retries after the sweep expired its command must not make a
+        dead command look alive; we record the outcome in `last_error` instead.
+      * **A response for an unknown command is IGNORED, not an error.** Devices
+        may replay their outbox after a reconnect, and the row may have been
+        superseded. That is normal, not a fault.
+    """
+    if not isinstance(payload, dict):
+        return "MALFORMED"
+
+    command_uuid = str(payload.get("command_uuid") or "").strip()
+    if not command_uuid:
+        return "MALFORMED"
+
+    from apps.provisioning.models import GatewayCommand
+    from apps.tenants.context import admin_alias, tenant_context
+
+    # Discovery over the admin alias: the response arrives on a topic whose org
+    # segment we trust, but the row is org-scoped and FORCE RLS'd, so a plain
+    # read from an org-less consumer sees nothing.
+    head = (
+        GatewayCommand.objects.using(admin_alias())
+        .filter(pk=command_uuid)
+        .values("command_uuid", "org_id", "gateway_slot_id", "kind", "state")
+        .first()
+    )
+    if head is None:
+        logger.info("command response for unknown command %s (ignored)", command_uuid)
+        return "UNKNOWN_COMMAND"
+    if topic_slot_id is not None and str(head["gateway_slot_id"]) != str(topic_slot_id):
+        return "IDENTITY_MISMATCH"
+
+    state = str(payload.get("state") or "").strip().upper()
+    error = payload.get("error")
+    now = timezone.now()
+
+    with transaction.atomic(), tenant_context(head["org_id"]):
+        row = GatewayCommand.objects.select_for_update().filter(pk=command_uuid).first()
+        if row is None:
+            return "UNKNOWN_COMMAND"
+
+        if row.state in (GatewayCommand.STATE_FAILED, GatewayCommand.STATE_EXPIRED):
+            # Never resurrect. Record that the device eventually answered, so the
+            # operator can see the truth without the state lying about liveness.
+            row.last_error = (
+                f"late {state or 'response'} after {row.state}"
+                + (f": {error}" if error else "")
+            )
+            row.save(update_fields=["last_error"])
+            return "LATE_RESPONSE"
+
+        if state == "ACK":
+            if row.state == GatewayCommand.STATE_PENDING:
+                # No PUBACK recorded but the device clearly has it — trust the
+                # device over our own bookkeeping.
+                row.sent_at = row.sent_at or now
+            row.state = GatewayCommand.STATE_ACKNOWLEDGED
+            row.acked_at = now
+            row.save(update_fields=["state", "acked_at", "sent_at"])
+            return "ACKNOWLEDGED"
+
+        if state in ("SUCCESS", "APPLIED"):
+            row.state = GatewayCommand.STATE_APPLIED
+            row.applied_at = now
+            row.acked_at = row.acked_at or now
+            row.last_error = None
+            row.save(update_fields=["state", "applied_at", "acked_at", "last_error"])
+            _on_command_applied(row, payload)
+            return "APPLIED"
+
+        if state in ("FAILED", "ERROR"):
+            row.state = GatewayCommand.STATE_FAILED
+            row.applied_at = now
+            row.last_error = str(error or payload.get("reason") or "device reported failure")
+            row.save(update_fields=["state", "applied_at", "last_error"])
+            return "FAILED"
+
+    return "MALFORMED"
+
+
+def _on_command_applied(row, payload: dict) -> None:
+    """Per-kind effects of a command that the device confirmed.
+
+    Deliberately narrow: each branch is a real, idempotent action, and an
+    unknown kind is a no-op rather than an error — a future kind must not be
+    able to break the reconciler for every other command.
+    """
+    from apps.provisioning.models import GatewayCommand
+
+    if row.kind == GatewayCommand.KIND_ROTATE:
+        # Commit-on-ACK (task 3.2 / E4). The device proves it holds the new
+        # password by presenting it; without that proof we do NOT promote the
+        # staged hash, because a "SUCCESS" alone is not evidence the device can
+        # authenticate with it.
+        from apps.mqtt_auth.services import commit_pending_rotation
+
+        presented = str(payload.get("password") or "")
+        if not presented:
+            logger.warning(
+                "ROTATE_CREDENTIAL %s reported APPLIED without the new password "
+                "— leaving the rotation staged (commit needs proof)", row.pk,
+            )
+            return
+        if not commit_pending_rotation(str(row.gateway_slot_id), presented):
+            logger.warning(
+                "ROTATE_CREDENTIAL %s: presented password did not match the "
+                "staged hash — rotation NOT committed", row.pk,
+            )
+        return
+
+    if row.kind == GatewayCommand.KIND_DIAGNOSTICS:
+        # Task 3.3: keep the device's report where an operator can read it.
+        from apps.accounts.system import get_system_user
+        from apps.auditing.models import AccountActivityLog
+
+        AccountActivityLog.objects.create(
+            actor=get_system_user(),
+            org_id=row.org_id,
+            action="GATEWAY_DIAGNOSTICS_REPORT",
+            details={
+                "gateway_slot_id": str(row.gateway_slot_id),
+                "command_uuid": str(row.pk),
+                "report": payload.get("result") or payload.get("diagnostics") or {},
+            },
+        )
+        return
+
+    # PROVISION / REBOOT / REFRESH: the state transition above is the whole
+    # effect. Config convergence is driven by the reported lane, not by this.
+
+
+@shared_task(name="provisioning.sweep_command_expiry")
+def sweep_command_expiry(limit: int = 200) -> int:
+    """Beat sweep: expire commands past `expires_at` (task 3.4).
+
+    WHY this exists separately from the publish path: `publish_command` expires a
+    command it is asked to send too late, but a command that was SENT and never
+    answered has nothing to re-drive it. Without this sweep such a row sits in
+    SENT forever, the UI shows a command that will never complete, and the
+    attempts counter never stops looking like progress.
+
+    Terminal states are left alone — only in-flight rows expire.
+    """
+    from apps.provisioning.models import GatewayCommand
+    from apps.tenants.context import admin_alias, tenant_context
+
+    now = timezone.now()
+    overdue = list(
+        GatewayCommand.objects.using(admin_alias())
+        .filter(
+            expires_at__isnull=False,
+            expires_at__lt=now,
+            state__in=["PENDING", "SENT", "ACKNOWLEDGED"],
+        )
+        .values_list("command_uuid", "org_id")[:limit]
+    )
+
+    expired = 0
+    for command_uuid, org_id in overdue:
+        with transaction.atomic(), tenant_context(org_id):
+            updated = GatewayCommand.objects.filter(
+                pk=command_uuid, state__in=["PENDING", "SENT", "ACKNOWLEDGED"]
+            ).update(state="EXPIRED", last_error="expired before the device answered")
+            expired += updated
+    if expired:
+        logger.info("command expiry sweep: %d command(s) expired", expired)
+    return expired

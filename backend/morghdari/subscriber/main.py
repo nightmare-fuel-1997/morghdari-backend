@@ -40,6 +40,12 @@ logger = logging.getLogger("morghdari.subscriber")
 
 SHARED_TOPIC = "$share/telemetry_workers/+/farms/+/gateways/+/telemetry"
 STATUS_TOPIC = "+/farms/+/gateways/+/status"
+# Phase 3 / task 3.1 (closes D9): the downlink command-response lane. v0.5
+# specified it (task E2) and nothing ever subscribed, so every ACK/SUCCESS a
+# device sent was dropped by the broker's no_match=deny and the command journal
+# could never leave SENT. Not a shared subscription: each response belongs to
+# exactly one command and must be handled once.
+COMMAND_RESPONSE_TOPIC = "+/farms/+/gateways/+/commands/response"
 SUBSCRIBE_QOS = 1
 
 # v0.7 M7-10 live-drill fix: a denied SUBACK (granted 0x80) used to be
@@ -144,7 +150,7 @@ def _request_subscriptions(client) -> None:
     after any denied SUBACK. The mid->topic map lets the SUBACK handler name
     the lane instead of logging a bare mid.
     """
-    for topic in (SHARED_TOPIC, STATUS_TOPIC):
+    for topic in (SHARED_TOPIC, STATUS_TOPIC, COMMAND_RESPONSE_TOPIC):
         result, mid = client.subscribe(topic, qos=SUBSCRIBE_QOS)
         if result == mqtt.MQTT_ERR_SUCCESS:
             _pending_subs[mid] = topic
@@ -174,7 +180,7 @@ def _on_subscribe(client, userdata, mid, granted_qos, properties=None):
         timer.start()
         return
     _granted_topics.add(topic)
-    if topic == STATUS_TOPIC:
+    if topic in (STATUS_TOPIC, COMMAND_RESPONSE_TOPIC):
         logger.info("subscribed to %s (granted qos=%s)", topic, codes)
     else:
         logger.info("subscribed via %s (mid=%s, granted qos=%s)", topic, mid, codes)
@@ -182,7 +188,7 @@ def _on_subscribe(client, userdata, mid, granted_qos, properties=None):
 
 def _subscriptions_ok() -> bool:
     """Both lanes currently granted — drives the subscriber_subscribed gauge."""
-    return {SHARED_TOPIC, STATUS_TOPIC} <= _granted_topics
+    return {SHARED_TOPIC, STATUS_TOPIC, COMMAND_RESPONSE_TOPIC} <= _granted_topics
 
 
 def _on_connect(client, userdata, flags, reason_code, properties=None):
@@ -309,6 +315,13 @@ def _on_message(client, userdata, message) -> None:
     # rejects anything not ending in `/telemetry`, so every ONLINE/OFFLINE
     # publish (and every LWT) was dead-lettered as `bad_topic` and
     # `_handle_status` was never called. Route it before the parser.
+    if _is_command_response_topic(topic):
+        # Phase 3 / task 3.1: route BEFORE the telemetry parser, which rejects
+        # anything not ending in `/telemetry` (the same trap that silently
+        # dead-lettered the status lane — finding D1).
+        _handle_command_response(topic, message.payload)
+        return
+
     if _is_status_topic(topic):
         try:
             # FOURTH defect, found while writing the regression test: the
@@ -331,6 +344,44 @@ def _on_message(client, userdata, message) -> None:
         db_fetch=_slot_db_fetch,
         status_fetch=lambda gw: _status_fetch(org_from_topic, gw),
     )
+
+
+def _is_command_response_topic(topic: str) -> bool:
+    """`{org}/farms/{farm}/gateways/{slot}/commands/response` — 7 levels, T4."""
+    parts = (topic or "").split("/")
+    return (
+        len(parts) == 7
+        and parts[1] == "farms"
+        and parts[3] == "gateways"
+        and parts[5] == "commands"
+        and parts[6] == "response"
+    )
+
+
+def _handle_command_response(topic: str, payload: bytes) -> None:
+    """Hand one device response to the reconciler.
+
+    Off the paho callback thread via Celery, for the same reason telemetry is:
+    the DB work must not block the network loop, and a failing row must not
+    stall the lane. Failures are logged and swallowed — the command's
+    `expires_at` sweep is the backstop, so a lost response degrades to EXPIRED
+    rather than to a wedged subscriber.
+    """
+    import json
+
+    parts = topic.split("/")
+    slot_id = parts[4] if len(parts) > 4 else ""
+    try:
+        body = json.loads(payload or b"{}")
+    except Exception:  # noqa: BLE001
+        logger.warning("command response on %s was not JSON; dropped", topic)
+        return
+    try:
+        from apps.provisioning.tasks import reconcile_command_response
+
+        reconcile_command_response(body, topic_slot_id=slot_id)
+    except Exception:  # noqa: BLE001
+        logger.exception("command response handling failed for %s", topic)
 
 
 def _is_status_topic(topic: str) -> bool:
