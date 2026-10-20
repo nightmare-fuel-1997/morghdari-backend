@@ -30,6 +30,15 @@ from urllib.parse import urlparse
 import paho.mqtt.client as mqtt
 import redis
 
+# Device-lane topic filters come from the contract module rather than being
+# re-typed here. `apps.provisioning.topics` is a pure-string module (verified:
+# it imports without Django configured), so this is safe at module scope even
+# though the subscriber initialises Django lazily.
+from apps.provisioning.topics import (
+    command_response_subscription,
+    reported_subscription,
+)
+
 from .pipeline import handle_message
 
 logging.basicConfig(
@@ -46,6 +55,27 @@ STATUS_TOPIC = "+/farms/+/gateways/+/status"
 # could never leave SENT. Not a shared subscription: each response belongs to
 # exactly one command and must be handled once.
 COMMAND_RESPONSE_TOPIC = "+/farms/+/gateways/+/commands/response"
+# FOUND 2026-10-20 while reviewing the simulated-device coverage: the DEVICE
+# lanes were not subscribed by anything. `devices/{slot}/reported` is how a
+# factory unit reports APPLIED/FAILED (AD-3 — it carries no org segment, by
+# design, because an unbound unit has no org), and nothing listened to it.
+#
+# The consequence is severe and was invisible to every test: the gateway slot
+# never learned the device had applied its config, `applied_config_version`
+# never moved, and the submit → PROVISIONED check (applied == desired) could
+# never pass. The live tests "passed" only because they call
+# `reconcile_reported()` directly, bypassing the broker. These two lanes make
+# the config-apply and command paths real end to end.
+#
+# Both are SHARED subscriptions: each message must be handled exactly once, and
+# with more than one replica a plain subscribe would hand every copy to every
+# replica. Same group as telemetry so the whole subscriber tier scales together.
+#
+# IMPORTED from apps.provisioning.topics rather than written out, so the
+# subscriber's subscription and the topic contract are one source of truth: a
+# hand-copied filter is how the two device lanes were missing in the first place.
+REPORTED_DEVICE_TOPIC = reported_subscription()
+COMMAND_RESPONSE_DEVICE_TOPIC = command_response_subscription()
 SUBSCRIBE_QOS = 1
 
 # v0.7 M7-10 live-drill fix: a denied SUBACK (granted 0x80) used to be
@@ -150,7 +180,13 @@ def _request_subscriptions(client) -> None:
     after any denied SUBACK. The mid->topic map lets the SUBACK handler name
     the lane instead of logging a bare mid.
     """
-    for topic in (SHARED_TOPIC, STATUS_TOPIC, COMMAND_RESPONSE_TOPIC):
+    for topic in (
+        SHARED_TOPIC,
+        STATUS_TOPIC,
+        COMMAND_RESPONSE_TOPIC,
+        REPORTED_DEVICE_TOPIC,
+        COMMAND_RESPONSE_DEVICE_TOPIC,
+    ):
         result, mid = client.subscribe(topic, qos=SUBSCRIBE_QOS)
         if result == mqtt.MQTT_ERR_SUCCESS:
             _pending_subs[mid] = topic
@@ -180,15 +216,26 @@ def _on_subscribe(client, userdata, mid, granted_qos, properties=None):
         timer.start()
         return
     _granted_topics.add(topic)
-    if topic in (STATUS_TOPIC, COMMAND_RESPONSE_TOPIC):
+    if topic in (
+        STATUS_TOPIC,
+        COMMAND_RESPONSE_TOPIC,
+        REPORTED_DEVICE_TOPIC,
+        COMMAND_RESPONSE_DEVICE_TOPIC,
+    ):
         logger.info("subscribed to %s (granted qos=%s)", topic, codes)
     else:
         logger.info("subscribed via %s (mid=%s, granted qos=%s)", topic, mid, codes)
 
 
 def _subscriptions_ok() -> bool:
-    """Both lanes currently granted — drives the subscriber_subscribed gauge."""
-    return {SHARED_TOPIC, STATUS_TOPIC, COMMAND_RESPONSE_TOPIC} <= _granted_topics
+    """All five lanes currently granted — drives the subscriber_subscribed gauge."""
+    return {
+        SHARED_TOPIC,
+        STATUS_TOPIC,
+        COMMAND_RESPONSE_TOPIC,
+        REPORTED_DEVICE_TOPIC,
+        COMMAND_RESPONSE_DEVICE_TOPIC,
+    } <= _granted_topics
 
 
 def _on_connect(client, userdata, flags, reason_code, properties=None):
@@ -310,16 +357,25 @@ def _on_message(client, userdata, message) -> None:
     with _messages_lock:
         _messages_seen += 1  # M7: /metrics counter (best-effort — never blocks ingestion)
     topic = message.topic or ""
-    # BUG-fix 2026-10-18 (finding D1): the gateway STATUS lane was subscribed
-    # since v0.3 but never routed — it fell into the telemetry pipeline, which
-    # rejects anything not ending in `/telemetry`, so every ONLINE/OFFLINE
-    # publish (and every LWT) was dead-lettered as `bad_topic` and
-    # `_handle_status` was never called. Route it before the parser.
+    # Route the five non-telemetry lanes BEFORE the pipeline, which rejects
+    # anything not ending in `/telemetry`. Two earlier defects came from
+    # routing late: the status lane was subscribed since v0.3 and dead-lettered
+    # for every publish (finding D1), and the command-response lane was never
+    # subscribed at all (finding D9). Both looked like "nothing is happening"
+    # while the server was perfectly healthy.
+    parts = topic.split("/")
     if _is_command_response_topic(topic):
-        # Phase 3 / task 3.1: route BEFORE the telemetry parser, which rejects
-        # anything not ending in `/telemetry` (the same trap that silently
-        # dead-lettered the status lane — finding D1).
-        _handle_command_response(topic, message.payload)
+        _handle_command_response(topic, message.payload, parts[4] if len(parts) > 4 else "")
+        return
+    if _is_command_response_device_topic(topic):
+        # Pre-bind command responses: the device has no org yet, so the answer
+        # can only arrive on its own lane. Without this, commands sent before
+        # binding (factory diagnostics, credential rotation) never complete.
+        _handle_command_response(topic, message.payload, parts[1] if len(parts) > 1 else "")
+        return
+    if _is_reported_device_topic(topic):
+        # THE config-apply lane (AD-3). See `_handle_reported_device`.
+        _handle_reported_device(topic, message.payload, parts[1] if len(parts) > 1 else "")
         return
 
     if _is_status_topic(topic):
@@ -358,19 +414,23 @@ def _is_command_response_topic(topic: str) -> bool:
     )
 
 
-def _handle_command_response(topic: str, payload: bytes) -> None:
+def _handle_command_response(topic: str, payload: bytes, slot_id: str) -> None:
     """Hand one device response to the reconciler.
 
-    Off the paho callback thread via Celery, for the same reason telemetry is:
-    the DB work must not block the network loop, and a failing row must not
-    stall the lane. Failures are logged and swallowed — the command's
-    `expires_at` sweep is the backstop, so a lost response degrades to EXPIRED
-    rather than to a wedged subscriber.
+    Called for BOTH command-response lanes — the tenant one
+    (`{org}/farms/{farm}/gateways/{slot}/commands/response`, after binding) and
+    the device one (`devices/{slot}/command/response`, before binding). The
+    caller has already parsed the slot id out, because the two shapes differ.
+
+    Runs the reconciler directly rather than through Celery: it is a short,
+    bounded row update, and a lost response degrades to EXPIRED via the
+    `expires_at` sweep, so the lane can afford to be synchronous without
+    blocking the network loop on anything slow. Failures are logged and
+    swallowed — a wedged subscriber would be far more expensive than a missed
+    response.
     """
     import json
 
-    parts = topic.split("/")
-    slot_id = parts[4] if len(parts) > 4 else ""
     try:
         body = json.loads(payload or b"{}")
     except Exception:  # noqa: BLE001
@@ -379,9 +439,53 @@ def _handle_command_response(topic: str, payload: bytes) -> None:
     try:
         from apps.provisioning.tasks import reconcile_command_response
 
-        reconcile_command_response(body, topic_slot_id=slot_id)
+        reconcile_command_response(body, topic_slot_id=slot_id or None)
     except Exception:  # noqa: BLE001
         logger.exception("command response handling failed for %s", topic)
+
+
+def _handle_reported_device(topic: str, payload: bytes, slot_id: str) -> None:
+    """The DEVICE reported lane — `devices/{slot}/reported` (AD-3).
+
+    This is how a factory unit tells us it applied its configuration, and until
+    2026-10-20 NOTHING subscribed to it. The slot's `applied_config_version`
+    therefore never moved, and the submit → PROVISIONED check (applied ==
+    desired) could never pass. Every test that appeared to prove the configure
+    path was calling `reconcile_reported()` directly, bypassing the broker.
+
+    Direct call, not Celery: same reasoning as the command lane — bounded work
+    with a periodic sweep as the safety net.
+    """
+    import json
+
+    try:
+        body = json.loads(payload or b"{}")
+    except Exception:  # noqa: BLE001
+        logger.warning("reported on %s was not JSON; dropped", topic)
+        return
+    try:
+        from apps.provisioning.tasks import reconcile_reported
+
+        reconcile_reported(body, topic_slot_id=slot_id or None)
+    except Exception:  # noqa: BLE001
+        logger.exception("reported handling failed for %s", topic)
+
+
+def _is_reported_device_topic(topic: str) -> bool:
+    """`devices/{slot}/reported` — 3 levels, AD-3's org-less uplink."""
+    parts = (topic or "").split("/")
+    return len(parts) == 3 and parts[0] == "devices" and parts[2] == "reported"
+
+
+def _is_command_response_device_topic(topic: str) -> bool:
+    """`devices/{slot}/command/response` — 4 levels, pre-bind command responses."""
+    parts = (topic or "").split("/")
+    return (
+        len(parts) == 4
+        and parts[0] == "devices"
+        and parts[2] == "command"
+        and parts[3] == "response"
+    )
 
 
 def _is_status_topic(topic: str) -> bool:

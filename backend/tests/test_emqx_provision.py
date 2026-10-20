@@ -66,12 +66,63 @@ def test_subscriber_rules_are_subscribe_only():
     only subscribe — never publish. The telemetry rule uses the EFFECTIVE
     filter (EMQX checks $share subscriptions with the group prefix stripped)."""
     rules = prov.subscriber_rules("demo-sub")
-    assert len(rules) == 2
     assert all(r["permission"] == "allow" and r["action"] == "subscribe" for r in rules)
     assert set(r["topic"] for r in rules) == {
         "+/farms/+/gateways/+/telemetry",
         "+/farms/+/gateways/+/status",
+        "+/farms/+/gateways/+/commands/response",
+        "devices/+/reported",
+        "devices/+/command/response",
     }
+
+
+def test_the_subscribers_rules_match_what_it_subscribes():
+    """THE regression test for the D9 tail.
+
+    Phase 3's command-response lane was finally subscribed in
+    `subscriber/main.py`, and never authorized anywhere: the broker denied the
+    SUBACK, the handler logged CRITICAL and resubscribed forever, and the
+    command channel — which had just been built — still could not deliver a
+    single response. The same gap hid the two device lanes entirely.
+
+    Three lists must agree, and they live in three files, which is precisely
+    why they drifted:
+      * `main.py`'s subscription set (with the $share prefix stripped)
+      * `seed_subscriber_credentials.SUBSCRIBER_TOPICS` (production seeding)
+      * `emqx_provision.subscriber_rules` (the local/dev provisioning path)
+
+    Any addition to one is a bug in the others — this test says so.
+    """
+    import importlib.util
+    from pathlib import Path
+
+    from morghdari.subscriber import main as sub
+
+    seeder_spec = importlib.util.spec_from_file_location(
+        "seed_subscriber_credentials",
+        Path(__file__).resolve().parents[1]
+        / "apps" / "mqtt_auth" / "management" / "commands"
+        / "seed_subscriber_credentials.py",
+    )
+    seeder = importlib.util.module_from_spec(seeder_spec)
+    seeder_spec.loader.exec_module(seeder)
+
+    subscribed = {
+        t.removeprefix("$share/telemetry_workers/") for t in (
+            sub.SHARED_TOPIC,
+            sub.STATUS_TOPIC,
+            sub.COMMAND_RESPONSE_TOPIC,
+            sub.REPORTED_DEVICE_TOPIC,
+            sub.COMMAND_RESPONSE_DEVICE_TOPIC,
+        )
+    }
+
+    assert subscribed == set(seeder.SUBSCRIBER_TOPICS), (
+        "subscriber/main.py subscribes to lanes the seeder does not authorize"
+    )
+    assert {r["topic"] for r in prov.subscriber_rules()} == set(seeder.SUBSCRIBER_TOPICS), (
+        "emqx_provision.subscriber_rules disagrees with the seeder"
+    )
 
 
 def test_desired_users_covers_every_farm_plus_the_subscriber():

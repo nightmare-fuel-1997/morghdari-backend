@@ -290,11 +290,20 @@ def update_gateway_user_password(username: str, plaintext: str) -> bool:
 
 
 def bootstrap_acl_rule_items(unit_id: str) -> list[dict]:
-    """The THREE rules a factory-registered, unbound unit needs — and no more.
+    """The FOUR rules a factory-registered, unbound unit needs — and no more.
 
     AD-1/AD-18 (2026-10-18): before binding, a unit has no org, so it cannot be
     permitted anywhere near a tenant topic. Its entire broker surface is its own
     device lane: read the desired config, read one-shot commands, report back.
+
+    FOUND 2026-10-20 (the third instance of the D9 tail — subscribe/subscribed
+    but never AUTHORIZED): the fourth rule, publish on `command/response`, was
+    missing. The command channel (Phase 3) cannot work without it: a pre-bind
+    unit's ACK and SUCCESS replies were denied by `no_match=deny`, so a command
+    answered before binding simply never reached us. The same shape of gap had
+    already broken the status lane (D1) and the command lane itself (D9) — the
+    lesson is that a lane added on one side needs its permission on BOTH sides,
+    and every one of the three lists that has to agree is a place it can drift.
 
     Compare with `gateway_acl_rule_items()` (provisioning/api.py), which grants
     the full T1–T9 tenant set — that set is added at BIND time, after the unit
@@ -307,6 +316,7 @@ def bootstrap_acl_rule_items(unit_id: str) -> list[dict]:
         {"topic": topics.desired_topic(unit_id), "permission": "allow", "action": "subscribe"},
         {"topic": topics.command_topic(unit_id), "permission": "allow", "action": "subscribe"},
         {"topic": topics.reported_topic(unit_id), "permission": "allow", "action": "publish"},
+        {"topic": topics.command_response_topic(unit_id), "permission": "allow", "action": "publish"},
     ]
 
 

@@ -395,7 +395,16 @@ def _on_command_applied(row, payload: dict) -> None:
         # authenticate with it.
         from apps.mqtt_auth.services import commit_pending_rotation
 
-        presented = str(payload.get("password") or "")
+        # The proof lives in the action's own `result` (the device's answer
+        # envelope nests it there), but firmware has put it at the top level too,
+        # and rejecting a correct rotation over shape would lock a fleet out.
+        # Accept either, and prefer the nested one.
+        result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+        presented = str(
+            payload.get("password")
+            or result.get("password")
+            or ""
+        )
         if not presented:
             logger.warning(
                 "ROTATE_CREDENTIAL %s reported APPLIED without the new password "

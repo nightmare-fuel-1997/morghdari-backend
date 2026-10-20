@@ -30,6 +30,9 @@ import json
 import os
 import sys
 import time
+from datetime import timedelta
+
+from django.utils import timezone
 from pathlib import Path
 
 import pytest
@@ -732,3 +735,191 @@ def _run_full_installation_loop(django_user_model):
 def test_full_installation_loop_end_to_end_tx(django_user_model):
     """transaction=True wrapper so the bind's on_commit publish really fires."""
     _run_full_installation_loop(django_user_model)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3, against a DEVICE — the channel that had no device-level test
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db(transaction=True)
+def test_a_command_reaches_the_device_and_comes_back(django_user_model):
+    """`transaction=True` for the same reason the loop test needs it: the
+    publisher and the reconciler both read over the ADMIN ALIAS, which is a
+    separate connection and cannot see rows this test has not committed. Under a
+    rollback-only transaction `publish_command` finds no row and returns False,
+    which looks exactly like a broker problem."""
+    """The command channel, driven by a real device over a real broker.
+
+    Phase 3's reconciler is covered by unit tests against synthetic payloads.
+    Nothing had ever put a command ENVELOPE on the wire and had a device answer
+    it, which is precisely the gap that let the whole channel sit unwritten for
+    two releases: the server side can look finished while the device side has
+    never once been executed.
+
+    Asserted here, in order:
+      1. the backend's `publish_command` publishes the envelope;
+      2. the device receives it, ACKs, acts, and reports SUCCESS;
+      3. the reconciler drives SENT -> ACKNOWLEDGED -> APPLIED;
+      4. ROTATE_CREDENTIAL commits only after the device PRESENTS the new
+         password — the proof rule, now exercised for real.
+    """
+    from apps.provisioning.models import GatewayCommand
+    from apps.provisioning.tasks import publish_command, reconcile_command_response
+    from firmware_sim import SimulatedGateway
+
+    from apps.devices.models import DeviceUnit, GatewaySlot
+    from apps.farms.models import Farm
+    from apps.geography.models import City, Province
+    from apps.tenants.models import Organization
+
+    tag = int(time.time()) % 100000
+    unit_id = f"GW-E2E-CMD-{tag}"
+    _staff_name, issued = _register(django_user_model, unit_id=unit_id)
+    password = issued["password"]
+    chain = _chain_id()
+
+    # `gateway_commands.gateway_slot_id` is a FK to `gateway_slots`, so a command
+    # cannot exist for a unit with no slot — a bare factory unit is not a valid
+    # command target. Bind it first, which is also the only way a device can be
+    # on the TENANT command lane.
+    province = Province.objects.create(name=f"P-CMD-{tag}")
+    city = City.objects.create(province=province, name=f"C-CMD-{tag}")
+    org = Organization.objects.create(name=f"cmd-org-{tag}")
+    farm = Farm.objects.create(org=org, name=f"cmd-farm-{tag}", province=province, city=city)
+    slot = GatewaySlot.objects.create(
+        slot_id=unit_id, org=org, farm=farm,
+        provisioning_status="PROVISIONED",
+        desired_config_version=1, applied_config_version=1,
+    )
+    DeviceUnit.objects.filter(pk=unit_id).update(slot=slot, state="BOUND")
+
+    # The BIND normally adds the tenant ACL rows. Without them the device's
+    # answers are dropped by `no_match=deny`: `commands_seen` records what the
+    # device INTENDED to publish, not what the broker accepted, so a missing
+    # rule looks like a device that stopped mid-command.
+    from apps.mqtt_auth.models import MqttAclRule
+    from apps.provisioning.api import gateway_acl_rule_items
+
+    for item in gateway_acl_rule_items(str(org.org_id), farm.pk, unit_id):
+        MqttAclRule.objects.get_or_create(
+            username=unit_id, topic=item["topic"],
+            defaults={"permission": item["permission"], "action": item["action"]},
+        )
+
+    try:
+        _seed_broker_user(unit_id, password, chain)
+        _seed_publisher(chain)
+
+        device = SimulatedGateway(
+            unit_id, password, host=BOOTSTRAP_HOST, port=BOOTSTRAP_PORT,
+            tls=BOOTSTRAP_TLS,
+        )
+        try:
+            assert device.connect() == 0
+            device.subscribe()
+            time.sleep(0.8)
+
+            # ---- 1. the backend publishes a diagnostics command ------------
+            command = GatewayCommand.objects.create(
+                org_id=str(org.org_id),
+                gateway_slot_id=unit_id,
+                kind="DIAGNOSTICS_REQUEST",
+                payload={},
+                state="PENDING",
+                expires_at=timezone.now() + timedelta(minutes=5),
+            )
+            assert publish_command(str(command.pk)) is True
+
+            # ---- 2. the device answers ------------------------------------
+            # Wait for the TERMINAL response. The device publishes ACK and
+            # SUCCESS milliseconds apart, but polling for "any response" reads a
+            # live list and sees only the first — a race that looks like a device
+            # that stopped mid-command.
+            deadline = time.time() + 10
+            while time.time() < deadline and not any(
+                r.get("state") in ("SUCCESS", "FAILED") for r in device.commands_seen
+            ):
+                time.sleep(0.05)
+            replies = list(device.commands_seen)
+            assert replies, "the device never answered the command"
+            assert [r["state"] for r in replies][:1] == ["ACK"], (
+                f"the first answer should be ACK: {replies}"
+            )
+            assert replies[-1]["state"] == "SUCCESS", (
+                f"device never reached SUCCESS: {replies}"
+            )
+
+            # ---- 3. the reconciler walks the whole matrix -----------------
+            for message in replies:
+                if message["state"] in ("ACK", "SUCCESS"):
+                    outcome = reconcile_command_response(
+                        message, topic_slot_id=unit_id
+                    )
+                    assert outcome != "MALFORMED"
+            command.refresh_from_db()
+            assert command.state == "APPLIED", command.state
+
+            # ---- 4. rotation commits only on proof -------------------------
+            from apps.mqtt_auth.models import MqttDeviceCredential
+            from apps.mqtt_auth.services import hash_password, stage_rotation
+
+            MqttDeviceCredential.objects.update_or_create(
+                device_id=unit_id,
+                defaults={"username": unit_id,
+                          "password_hash": hash_password(password),
+                          "is_active": True},
+            )
+            stage_rotation(unit_id, "rotated-pass-2")
+            rotate = GatewayCommand.objects.create(
+                org_id=str(org.org_id),
+                gateway_slot_id=unit_id,
+                kind="ROTATE_CREDENTIAL",
+                payload={"new_password": "rotated-pass-2"},
+                state="PENDING",
+                expires_at=timezone.now() + timedelta(minutes=5),
+            )
+            assert publish_command(str(rotate.pk)) is True
+
+            deadline = time.time() + 10
+            while time.time() < deadline and not any(
+                r.get("command_uuid") == str(rotate.pk) and r.get("state") == "SUCCESS"
+                for r in device.commands_seen
+            ):
+                time.sleep(0.05)
+            rotate_replies = [
+                r for r in device.commands_seen
+                if r.get("command_uuid") == str(rotate.pk)
+            ]
+            assert any(r["state"] == "SUCCESS" for r in rotate_replies), rotate_replies
+            for message in rotate_replies:
+                reconcile_command_response(message, topic_slot_id=unit_id)
+
+            credential = MqttDeviceCredential.objects.get(username=unit_id)
+            assert credential.pending_password_hash is None, (
+                "the device presented the new password and the rotation still "
+                "did not commit"
+            )
+        finally:
+            device.disconnect()
+    finally:
+        # NOTE: no manual DELETEs. `django_db` already wraps this test in a
+        # rollback-only transaction, and deleting the Farm triggers the alerts
+        # post_save/cache signal, which queries `daily_reports` — a table that
+        # only exists in a migration-built schema (the e2e DB is syncdb-built), so
+        # an explicit delete fails with a ProgrammingError in teardown. The
+        # rollback is both sufficient and quieter.
+        _drop_broker_user(unit_id, chain)
+
+
+def _org_id_for(unit_id: str) -> str:
+    """The org of the slot holding this unit (the bind in the loop test creates
+    it); for a bare factory unit there is none, so a platform org is used."""
+    from apps.devices.models import GatewaySlot
+
+    org_id = GatewaySlot.objects.filter(pk=unit_id).values_list("org_id", flat=True).first()
+    if org_id:
+        return str(org_id)
+    from apps.tenants.models import Organization
+
+    org, _ = Organization.objects.get_or_create(name="platform")
+    return str(org.org_id)

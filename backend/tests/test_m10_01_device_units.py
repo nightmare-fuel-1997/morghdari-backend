@@ -96,8 +96,8 @@ def test_register_mints_unit_credential_and_exactly_three_acls(django_user_model
     assert verify_password(body["password"], credential.password_hash)
 
     rules = MqttAclRule.objects.filter(username=body["unit_id"])
-    assert rules.count() == 3
-    assert body["acl_rules"] == 3
+    assert rules.count() == 4  # + command/response (D4) since 2026-10-20
+    assert body["acl_rules"] == 4
 
     # The claim code is stored as a hash, never readable again.
     assert verify_password(body["claim_code"], unit.claim_code_hash)
@@ -137,7 +137,7 @@ def test_register_writes_a_platform_audit_row_without_secrets(django_user_model)
     row = PlatformAuditLog.objects.get(target_id=body["unit_id"])
     assert row.action == "PLATFORM_UNIT_REGISTER"
     assert row.actor == user
-    assert row.details["acl_rules"] == 3
+    assert row.details["acl_rules"] == 4
     assert body["password"] not in str(row.details)
     assert body["claim_code"] not in str(row.details)
 
@@ -147,7 +147,12 @@ def test_register_writes_a_platform_audit_row_without_secrets(django_user_model)
 # ---------------------------------------------------------------------------
 
 def test_unbound_unit_acl_reaches_no_tenant_topic(django_user_model):
-    """AD-1: three literal rows, no wildcard, no tenant prefix."""
+    """AD-1: four literal rows, no wildcard, no tenant prefix.
+
+    The fourth is `command/response` (2026-10-20): without it a pre-bind unit's
+    ACK/SUCCESS replies are denied and Phase 3's command channel cannot work
+    until the device has been bound to a farm.
+    """
     user = _staff(django_user_model, "hw-7")
     body = _register(django_user_model, user).data
     unit_id = body["unit_id"]
@@ -157,20 +162,26 @@ def test_unbound_unit_acl_reaches_no_tenant_topic(django_user_model):
         f"devices/{unit_id}/desired",
         f"devices/{unit_id}/command",
         f"devices/{unit_id}/reported",
+        f"devices/{unit_id}/command/response",
     }
     for topic in topics:
         assert "+" not in topic and "#" not in topic
         assert "/farms/" not in topic
 
 
-def test_bootstrap_acl_helper_emits_exactly_three_rows():
+def test_bootstrap_acl_helper_emits_exactly_four_rows():
+    # FOUR rows since 2026-10-20: the device's own command-response lane was
+    # missing, so a pre-bind unit's ACK/SUCCESS replies were denied by
+    # no_match=deny and Phase 3's command channel could not work at all before
+    # binding. The lane needs a permission on BOTH sides; this is the device's.
     items = bootstrap_acl_rule_items("GW-X")
-    assert len(items) == 3
+    assert len(items) == 4
     actions = {(i["action"], i["topic"]) for i in items}
     assert actions == {
         ("subscribe", "devices/GW-X/desired"),
         ("subscribe", "devices/GW-X/command"),
         ("publish", "devices/GW-X/reported"),
+        ("publish", "devices/GW-X/command/response"),
     }
 
 

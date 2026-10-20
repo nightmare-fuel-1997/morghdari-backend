@@ -23,6 +23,7 @@ never needs paho installed.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 import logging
 import queue
 import time
@@ -43,6 +44,17 @@ def command_topic(unit_id: str) -> str:
 
 def reported_topic(unit_id: str) -> str:
     return f"devices/{unit_id}/reported"
+
+
+def command_response_topic(unit_id: str) -> str:
+    """`devices/{unit_id}/command/response` — the device-lane response topic.
+
+    Deliberately NOT the tenant `commands/response` lane: an UNBOUND device has
+    no org, so it cannot publish on the tenant lane yet. The server accepts both
+    and correlates by `command_uuid`, which is what makes the command channel
+    usable before the device is bound.
+    """
+    return f"devices/{unit_id}/command/response"
 
 
 def tenant_topic(org_id: str, farm_id: int, slot_id: str, suffix: str) -> str:
@@ -76,6 +88,11 @@ class SimulatedGateway:
         self.client_id = f"{client_id_prefix}-{unit_id}"
 
         self.applied_version = 0          # persists across "reboots"
+        # command-channel bookkeeping (§3.6)
+        self.commands: list = []           # (state, command_uuid|action) decisions
+        self.commands_seen: list = []      # every response body published
+        self.reboots = 0
+        self._boot_ts = time.time()
         self.state = {}                   # what the device currently believes
         self.faults = []                  # refused documents, for assertions
         self.published = []               # every publish() result, for assertions
@@ -175,7 +192,12 @@ class SimulatedGateway:
         self.received.put((msg.topic, msg.payload))
         if msg.topic == desired_topic(self.unit_id):
             self._on_desired(msg.payload)
-        # command messages are out of scope for v1 of the simulator
+        elif msg.topic == command_topic(self.unit_id):
+            # §3.6 of the hardware contract (the command channel). The simulator
+            # previously subscribed
+            # to this topic and IGNORED it, which is exactly the v1 gap that
+            # left Phase 3 (the command channel) untested against any device.
+            self._on_command(msg.payload)
 
     def _on_desired(self, payload: bytes) -> None:
         """§3.3 — validate, monotonic-guard, apply, persist, report."""
@@ -228,6 +250,190 @@ class SimulatedGateway:
             reported_topic(self.unit_id), json.dumps(body), qos=1
         )
         self.reports.put(body)
+
+    # ------------------------------------------------------------------
+    # §3.6 — the command channel (Phase 3). Three events, never collapsed.
+    # ------------------------------------------------------------------
+
+    def _on_command(self, payload: bytes) -> None:
+        """Accept one command envelope and answer it on `commands/response`.
+
+        The hardware contract's rules, in the order that matters:
+          * the envelope must carry a `command_uuid` and an `expires_at`; a
+            command past its expiry is ANSWERED (so the server can correlate)
+            but not APPLIED — silently ignoring it would leave the command row
+            in SENT until the sweep expires it, which is the "stalled command"
+            this whole channel exists to prevent;
+          * ACK first, then act, then SUCCESS. The three events are distinct and
+            each is a separate publish, because the server's state machine
+            records them separately;
+          * an unknown action is a FAILED response with a reason, never a silent
+            drop.
+        """
+        try:
+            envelope = json.loads(payload or b"{}")
+        except (TypeError, ValueError):
+            self.commands.append(("MALFORMED", payload[:64].decode("utf-8", "replace")))
+            return
+
+        command_uuid = str(envelope.get("command_uuid") or "")
+        action = str(envelope.get("action") or "").upper()
+        if not command_uuid:
+            self.commands.append(("NO_UUID", action))
+            return
+
+        expires_raw = envelope.get("expires_at")
+        expired = False
+        if expires_raw:
+            try:
+                expires = datetime.fromisoformat(str(expires_raw))
+            except (ValueError, TypeError):
+                expires = None
+            if expires is not None:
+                if expires.tzinfo is None:
+                    # No offset in the payload: assume UTC, never local. A device
+                    # that treats it as local time on a +03:30 box believes every
+                    # command expired 3.5 hours ago, and the server sees a
+                    # perfectly good command answered "EXPIRED".
+                    expires = expires.replace(tzinfo=timezone.utc)
+                expired = expires < datetime.now(timezone.utc)
+
+        if expired:
+            self._respond_ok(command_uuid, "EXPIRED", {"reason": "command expired on device"})
+            self.commands.append(("EXPIRED", command_uuid))
+            return
+
+        handlers = {
+            "REFRESH_CONFIG": self._cmd_refresh,
+            "REBOOT": self._cmd_reboot,
+            "DIAGNOSTICS_REQUEST": self._cmd_diagnostics,
+            "ROTATE_CREDENTIAL": self._cmd_rotate,
+        }
+        handler = handlers.get(action)
+        if handler is None:
+            self._respond_err(command_uuid, f"unknown action {action!r}")
+            self.commands.append(("UNKNOWN_ACTION", action))
+            return
+
+        self._respond_ok(command_uuid, "ACK", {})
+        try:
+            result = handler(envelope.get("params") or {})
+        except Exception as exc:  # noqa: BLE001 — a device fault must not wedge the lane
+            self._respond_err(command_uuid, f"{type(exc).__name__}: {exc}")
+            self.commands.append(("FAILED", command_uuid))
+            return
+        self._respond_ok(command_uuid, "SUCCESS", result)
+        self.commands.append(("SUCCESS", command_uuid))
+
+    def _respond_ok(self, command_uuid: str, state: str, result: dict) -> None:
+        if self._client is None:
+            # Never silently: a lost session during a command means the device
+            # cannot answer, and the server needs to see that rather than find a
+            # PENDING row forever.
+            raise RuntimeError("no MQTT client: cannot publish the command response")
+        body = {
+            "schema_version": SCHEMA_VERSION,
+            "slot_id": self.unit_id,
+            "command_uuid": command_uuid,
+            "state": state,
+            "result": result,
+        }
+        self._client.publish(command_response_topic(self.unit_id), json.dumps(body), qos=1)
+        self.commands_seen.append(body)
+
+    def _respond_err(self, command_uuid: str, error: str) -> None:
+        if self._client is None:
+            raise RuntimeError("no MQTT client: cannot publish the command response")
+        body = {
+            "schema_version": SCHEMA_VERSION,
+            "slot_id": self.unit_id,
+            "command_uuid": command_uuid,
+            "state": "FAILED",
+            "error": error,
+        }
+        self._client.publish(command_response_topic(self.unit_id), json.dumps(body), qos=1)
+        self.commands_seen.append(body)
+
+    def _cmd_refresh(self, params: dict) -> dict:
+        """A refresh re-applies the retained document — the behaviour a device
+        needs when the server wants certainty, not optimism."""
+        return {"applied_config_version": self.applied_version}
+
+    def _cmd_reboot(self, params: dict) -> dict:
+        self.reboots += 1
+        return {"reboots": self.reboots}
+
+    def _cmd_diagnostics(self, params: dict) -> dict:
+        return {
+            "uptime_s": max(0, int(time.time() - self._boot_ts)),
+            "applied_config_version": self.applied_version,
+            "rssi": -71,
+        }
+
+    def _cmd_rotate(self, params: dict) -> dict:
+        """§3.6 rule 5 — adopt the new credential and PROVE it by presenting it.
+
+        Two things this deliberately does NOT do:
+
+        * It does **not** reconnect. The broker still holds the OLD password
+          until the server commits the staged rotation, so reconnecting here is
+          refused and the current session dies — which would take the device
+          offline over a rotation. The session stays valid; the device reconnects
+          under the new credential on its next natural reconnect, after the
+          commit.
+        * It does not drop the old password until the server confirms. A device
+          that switches credentials before the commit is one failed commit away
+          from being locked out permanently.
+
+        The SUCCESS response carries the password because that IS the proof the
+        server requires before it promotes the staged hash.
+        """
+        new_password = str(params.get("new_password") or "")
+        if not new_password:
+            raise ValueError("rotate without a new password")
+        self.password = new_password
+        return {"password": new_password, "rotated": True, "reconnect": "deferred"}
+
+    def publish_telemetry(self) -> bool:
+        """The uplink the broker's ACL must permit (contract §3.5 / T1)."""
+        body = {
+            "schema_version": SCHEMA_VERSION,
+            "slot_id": self.unit_id,
+            "config_version": self.applied_version,
+            "t": int(time.time()),
+            "sensors": [
+                {"pack_id": (s or {}).get("pack_id"), "temp": 21.5, "humidity": 55}
+                for s in (self.state or {}).get("sensors") or []
+            ],
+        }
+        from firmware_sim import tenant_topic  # noqa: PLC0415 — same module
+
+        topic = tenant_topic(
+            str((self.state or {}).get("org_id") or "deadbeef"),
+            (self.state or {}).get("farm_id") or 1,
+            self.unit_id,
+            "telemetry",
+        )
+        info = self._client.publish(topic, json.dumps(body), qos=1)
+        info.wait_for_publish(timeout=5)
+        return info.is_published()
+
+    def publish_status(self, state: str = "oneline") -> bool:
+        """The status/LWT lane (§3.5 / T2) — the one that was subscribed for
+        versions and never routed."""
+        body = {"schema_version": SCHEMA_VERSION, "slot_id": self.unit_id, "state": state}
+        from firmware_sim import tenant_topic  # noqa: PLC0415 — same module
+
+        topic = tenant_topic(
+            str((self.state or {}).get("org_id") or "deadbeef"),
+            (self.state or {}).get("farm_id") or 1,
+            self.unit_id,
+            "status",
+        )
+        info = self._client.publish(topic, json.dumps(body), qos=1)
+        info.wait_for_publish(timeout=5)
+        return info.is_published()
+
 
     def wait_for_config(self, timeout: float = 10.0) -> dict | None:
         """Block until a config has been applied. Returns the report body."""

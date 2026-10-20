@@ -59,19 +59,32 @@ def sim_rules(farm_id: int) -> list:
 
 
 def subscriber_rules(subscriber_user: str = "demo-sub") -> list:
-    """The subscriber may only SUBSCRIBE the telemetry lane and the
-    pack-liveness status topics; it never publishes (no publish rules, so
-    publish hits no_match=deny). The telemetry topic is the EFFECTIVE filter:
-    EMQX checks shared-group subscriptions with the $share/group prefix
-    STRIPPED (observed on 5.5 — a rule on the full $share form never matches,
-    and the subscription is denied), so the rule must name what the broker
-    actually checks. This still covers the subscriber's real subscription
-    ($share/telemetry_workers/+/farms/+/gateways/+/telemetry)."""
+    """The subscriber may only SUBSCRIBE its five lanes; it never publishes
+    (no publish rules, so publish hits no_match=deny). The telemetry topic is
+    the EFFECTIVE filter: EMQX checks shared-group subscriptions with the
+    $share/group prefix STRIPPED (observed on 5.5 — a rule on the full $share
+    form never matches, and the subscription is denied), so the rule must name
+    what the broker actually checks. This still covers the subscriber's real
+    subscription ($share/telemetry_workers/+/farms/+/gateways/+/telemetry).
+
+    This list must match morghdari/subscriber/main.py's subscription set and
+    seed_subscriber_credentials.py's SUBSCRIBER_TOPICS. Until 2026-10-20 it had
+    only the first two, so the command-response and both device lanes were
+    subscribed-and-DENIED — the subscriber would log CRITICAL and resubscribe
+    forever on a lane the design requires it to hold.
+    """
     return [
         {"permission": "allow", "action": "subscribe",
          "topic": "+/farms/+/gateways/+/telemetry"},
         {"permission": "allow", "action": "subscribe",
          "topic": "+/farms/+/gateways/+/status"},
+        {"permission": "allow", "action": "subscribe",
+         "topic": "+/farms/+/gateways/+/commands/response"},
+        # AD-3 device lanes: org-less, so no org segment to prefix.
+        {"permission": "allow", "action": "subscribe",
+         "topic": "devices/+/reported"},
+        {"permission": "allow", "action": "subscribe",
+         "topic": "devices/+/command/response"},
     ]
 
 

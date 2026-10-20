@@ -396,3 +396,21 @@ def timescale_db(seeded_rls_db, django_db_blocker):
                 if not cursor.execute("SELECT to_regclass('public.saloon_telemetry') IS NOT NULL").fetchone()[0]:
                     _execute_sql(cursor, _sql_from_migration(BACKEND_DIR / "apps" / "telemetry" / "migrations" / "0002_timescale_hypertables.py"))
     yield
+
+
+@pytest.fixture
+def clean_sub_state():
+    """The subscriber's SUBACK bookkeeping is module-global — each test starts blank.
+
+    Shared (was local to `test_subscriber_boot.py`) since 2026-10-20: the
+    device-lane tests in `test_m13_01_device_lanes.py` assert on the same
+    `_granted_topics` set, and two private copies of a clear-the-globals fixture
+    is how one of them silently stops clearing.
+    """
+    from morghdari.subscriber import main as _sub
+
+    _sub._pending_subs.clear()
+    _sub._granted_topics.clear()
+    yield
+    _sub._pending_subs.clear()
+    _sub._granted_topics.clear()

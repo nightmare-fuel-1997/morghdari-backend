@@ -9,8 +9,11 @@ This command models each subscriber service account as a PROVISIONED slot:
         --client-id subscriber-01 --username subscriber-svc --password '...'
 
 Idempotent (update_or_create on the slot/credential); ACL allow rows cover
-exactly what the subscriber subscribes (the shared telemetry group + the
-status topic) — deny-by-default comes from the broker's no_match=deny.
+exactly the FIVE lanes the subscriber holds (shared telemetry group, status,
+tenant command responses, and the two device lanes) — deny-by-default comes
+from the broker's no_match=deny. A lane subscribed but not allowed here is a
+lane the broker denies, so this list and main.py's subscriptions are one
+contract, not two.
 
 Platform org: the subscriber tier is PLATFORM infrastructure, not tenant
 data — with no --org-id given, the command resolves/creates a dedicated
@@ -37,8 +40,27 @@ PLATFORM_ORG_NAME = "Morghdari Platform"
 # scripts/emqx_provision.py::subscriber_rules documents the same finding), so
 # a rule on the full $share form never matches and no_match=deny rejects the
 # subscription. The stripped form still covers the real $share subscription.
+#
+# ADDITION ORDER MATTERS FOR THE FIX IN 2026-10-20: this list had TWO entries
+# and the subscriber holds FIVE subscriptions. The three that were missing
+# (the tenant command-response lane, and the two DEVICE lanes) are not
+# hypothetical — a subscription without an allow rule is a lane the broker
+# denies, which the SUBACK handler reports as CRITICAL and retries forever.
+# That is how Phase 3 arrived: the lane was finally subscribed, and nothing
+# authorized it. When adding a subscription to main.py, add it here too.
 SHARED_TOPIC = "+/farms/+/gateways/+/telemetry"   # effective filter of $share/telemetry_workers/...
 STATUS_TOPIC = "+/farms/+/gateways/+/status"
+COMMAND_RESPONSE_TOPIC = "+/farms/+/gateways/+/commands/response"
+# The device lanes (AD-3): org-less, so they cannot be prefixed by an org.
+REPORTED_DEVICE_TOPIC = "devices/+/reported"
+COMMAND_RESPONSE_DEVICE_TOPIC = "devices/+/command/response"
+SUBSCRIBER_TOPICS = (
+    SHARED_TOPIC,
+    STATUS_TOPIC,
+    COMMAND_RESPONSE_TOPIC,
+    REPORTED_DEVICE_TOPIC,
+    COMMAND_RESPONSE_DEVICE_TOPIC,
+)
 
 
 class Command(BaseCommand):
@@ -73,6 +95,10 @@ class Command(BaseCommand):
         )
         self.stdout.write(f"gateway_slots[{client_id}] {'created' if created else 'updated'} (PROVISIONED)")
 
+        previous_username = MqttDeviceCredential.objects.filter(
+            device_id=client_id
+        ).values_list("username", flat=True).first()
+
         cred, created = MqttDeviceCredential.objects.update_or_create(
             device_id=client_id,
             defaults={
@@ -85,7 +111,23 @@ class Command(BaseCommand):
         )
         self.stdout.write(f"mqtt_device_credentials[{username}] {'created' if created else 'updated'}")
 
-        for topic in (SHARED_TOPIC, STATUS_TOPIC):
+        # If the username for this slot changed, remove the old username's
+        # rules. They are unreachable once the credential is gone (authn is
+        # checked before authz), so this is hygiene rather than a security
+        # hole — but `prod_bootstrap.sh` runs this command on every boot, and
+        # after a ROC (SUBSCRIBER_USERNAME rotated in operations) the stale rows
+        # make the ACL table disagree with the credentials, which is exactly the
+        # kind of divergence this whole module exists to prevent.
+        if previous_username and previous_username != username:
+            removed, _ = MqttAclRule.objects.filter(
+                username=previous_username
+            ).delete()
+            if removed:
+                self.stdout.write(
+                    f"acl[{previous_username}]: {removed} stale rule(s) removed"
+                )
+
+        for topic in SUBSCRIBER_TOPICS:
             _, created = MqttAclRule.objects.update_or_create(
                 username=username,
                 topic=topic,

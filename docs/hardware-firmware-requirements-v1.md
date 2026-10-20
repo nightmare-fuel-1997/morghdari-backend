@@ -80,17 +80,22 @@ Retry with exponential backoff, forever. A device that cannot reach the broker
 must keep trying — not give up, and not require a reset. At this point the
 device has **no organization and no farm**, and that is a valid, supported state.
 
-### 3.2 Subscribe to exactly three topics — all built from your own id
+### 3.2 Subscribe to exactly four topics — all built from your own id
 
 | Topic | Direction | Notes |
 |---|---|---|
 | `devices/{unit_id}/desired` | we → you | **retained**; arrives immediately on subscribe |
 | `devices/{unit_id}/command` | we → you | not retained; one-shot |
 | `devices/{unit_id}/reported` | you → us | your config/status reports |
+| `devices/{unit_id}/command/response` | you → us | your answers to commands (§3.6) |
 
 You have **no other permissions** in this state. Specifically you cannot publish
 telemetry — there is no topic you are permitted to use. That is deliberate, not
 a fault: installers bind you to a farm before telemetry is meaningful.
+
+(The response topic is separate from `reported` on purpose: a command answer
+belongs to one `command_uuid`, while a config report describes your current
+state. Mixing them would make our routing depend on guessing from the payload.)
 
 ### 3.3 When `desired` arrives: apply it and report
 
@@ -140,6 +145,45 @@ topic set). From then on:
 Status is retained: publish `{"status": "ONLINE"}` on connect and register a Last
 Will with `{"status": "OFFLINE"}` on the same topic so an unclean death is
 visible. The status values are **uppercase** (`ONLINE` / `OFFLINE`).
+
+### 3.6 When a command arrives: answer it in three events
+
+A command envelope arrives on `devices/{unit_id}/command` before you are bound
+(you have no org yet, so there is no tenant topic to answer on) and on
+`{org}/farms/{farm}/gateways/{slot}/commands` after binding. Answer on the
+matching `…/response` topic — the device-lane one before binding, the tenant one
+after. We correlate the two by `command_uuid`, which is why they can differ.
+
+```json
+{"schema_version": "1.0", "command_uuid": "…", "action": "REFRESH_CONFIG",
+ "params": {}, "expires_at": "2026-10-20T09:20:00Z"}
+```
+
+Five rules, all learned from a device simulator we built to check this:
+
+1. **Answer every command, including an expired one.** If `expires_at` has
+   passed, reply `EXPIRED` rather than ignoring the envelope. An ignored
+   command leaves our journal in `SENT` until our own sweep expires it, which
+   is exactly the "stalled command" this channel exists to prevent. A reply we
+   can correlate is always better than silence.
+2. **Three events, never collapsed.** Publish `ACK` first (you accepted the
+   envelope), then act, then `SUCCESS`. They are separate publishes, because our
+   state machine records them separately — an `ACK`-only reply tells an operator
+   the device is alive but still working.
+3. **`expires_at` is UTC.** If the timestamp carries no offset, treat it as UTC —
+   never as local time. Our reference device compared a UTC clock as local time
+   on a +03:30 machine and concluded every command had expired 3.5 hours
+   earlier. If your RTC has no timezone, that is fine: just don't add one.
+4. **An unknown action is a `FAILED` reply with a short reason**, never a silent
+   drop and never an unanswered envelope.
+5. **`ROTATE_CREDENTIAL` is the one command with a proof requirement.** Reply
+   `SUCCESS` with the new password **inside `result`**:
+   `{"state": "SUCCESS", "result": {"password": "<new>"}}`. We do not commit the
+   new password until we see that proof, because a bare `SUCCESS` does not tell
+   us the device can authenticate with it. **Do not reconnect during the
+   rotation** — the broker still holds the old password until we commit, so a
+   reconnect now is refused and you take yourself offline for nothing. Adopt the
+   new credential, prove it, and reconnect on your next natural reconnect.
 
 ---
 
@@ -231,14 +275,17 @@ too; it needs nothing but a broker and the credentials it is given.
 
 ---
 
-## 8. Summary — your five-line contract
+## 8. Summary — your six-line contract
 
 1. Store `unit_id` + password in encrypted flash; the QR label carries
    `unit_id` + `claim_code`.
 2. On boot, connect with `username = unit_id`, retry forever.
 3. Subscribe to `devices/{unit_id}/desired` and `/command`; publish to
-   `devices/{unit_id}/reported`. Nothing else.
+   `devices/{unit_id}/reported` and `/command/response`. Nothing else.
 4. On `desired`: validate `slot_id`, check `config_version` is newer, apply the
    **whole** document, persist the version, report `APPLIED` on `reported`.
-5. After binding, use the tenant topics the document gives you; retained LWT
+5. On `command`: reply `ACK` → act → `SUCCESS`, always answer (expired included),
+   treat `expires_at` as UTC, and prove a credential rotation with the new
+   password in `result` — without reconnecting.
+6. After binding, use the tenant topics the document gives you; retained LWT
    `ONLINE` / `OFFLINE` on `…/status`.

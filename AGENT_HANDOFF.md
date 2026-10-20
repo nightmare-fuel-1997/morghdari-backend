@@ -1002,6 +1002,98 @@ CI runs it (TimescaleDB + Redis available):
   the queryset `provisioning_sync` validates against now finds slots created
   this way — the writer and the validator agree. Contract → v1.12.0.
 
+### The device lanes were never subscribed — and three lists had drifted (2026-10-20)
+
+The finding that matters most today, and it invalidates part of what was
+claimed above: **the subscriber never subscribed to the device lanes.**
+
+`devices/{slot}/reported` is the org-less uplink by which a factory unit
+reports that it applied its configuration (AD-3). No subscription existed for
+it anywhere. So in production `applied_config_version` never moved, and the
+submit → PROVISIONED check (applied == desired) — the whole zero-touch promise —
+could never pass. Every test that appeared to prove the configure path called
+`reconcile_reported()` directly, bypassing the broker. The live e2e suite was
+green for the same reason: it drove the reconcilers itself.
+
+The same defect class appeared three times in a row, each time on a different
+list:
+
+1. **D1 (earlier)** — the status lane was subscribed but never *routed*.
+2. **D9 (Phase 3)** — the command-response lane was never *subscribed*.
+3. **Today** — the device lanes were never subscribed, AND Phase 3's lane was
+   subscribed but never *authorized*: `seed_subscriber_credentials.py` and
+   `emqx_provision.subscriber_rules()` both seeded two rules for a subscriber
+   that holds five subscriptions.
+4. Also today — the DEVICE had no publish rule for its own `command/response`,
+   so a pre-bind unit's ACK/SUCCESS replies were denied by `no_match=deny`.
+
+Fixed on all four fronts, plus two structural guards so it cannot recur:
+
+- `subscriber/main.py` subscribes to and routes both device lanes; the filters
+  are imported from `apps.provisioning.topics` rather than retyped, so the
+  contract and the subscription are one source of truth.
+- `topics.py` gained `command_response_topic()` / `command_response_subscription()`
+  and parses the 4-level form.
+- `bootstrap_acl_rule_items()` grants the device publish on its own
+  `command/response`.
+- `seed_subscriber_credentials` and `emqx_provision.subscriber_rules` authorize
+  all five lanes; the seeder also removes a previous username's rules when one
+  is rotated, so a ROC cannot leave the ACL table disagreeing with the
+  credentials.
+- **`test_emqx_provision.test_the_subscribers_rules_match_what_it_subscribes`**
+  pins the three lists against each other — the drift is now a test failure.
+- `tests/test_m13_01_device_lanes.py` asserts the subscriptions EXIST, that
+  readiness requires all five, and that both lanes route to their reconcilers
+  instead of the telemetry pipeline.
+- `tests/test_m13_02_subscriber_seed.py` covers what the seeder actually
+  writes (five rules, bcrypt, platform org, idempotency).
+
+**Still not exercised anywhere:** MQTT → subscriber → Celery, for any lane.
+The live tests call the reconcilers directly because the Django subscriber is
+not running in those containers. The gate below is unit-level only.
+
+### The command channel, against a DEVICE (2026-10-20)
+
+Owner asked the right question: "did you test everything against a simulator
+device?" The answer was **no**, and the gap was the newest code. Phase 3's
+reconciler was covered only by unit tests against synthetic payloads — nothing
+had ever put a command ENVELOPE on the wire and had a device answer it. That is
+precisely the gap that let the channel sit unwritten for two releases: the server
+side can look finished while the device side has never once been executed.
+
+Fixed by teaching the simulator commands (§3.4) and adding
+`test_a_command_reaches_the_device_and_comes_back`, which asserts the whole
+chain: publish → device ACKs → acts → SUCCESS → reconciler reaches APPLIED →
+rotation commits on the presented password. **6/6 live tests pass.**
+
+**Three real defects found, in order of severity:**
+
+1. **The rotation proof was read from the wrong place.** `_on_command_applied`
+   looked for `payload.password`; the response envelope nests the action's
+   answer under `result`. A correct rotation would have been silently refused
+   forever — the fleet keeps the old password and the server logs a warning
+   nobody reads. Now accepts either, nested preferred.
+2. **The simulator disconnected during rotation.** It reconnected under the new
+   password, but the broker still holds the OLD one until the commit, so the
+   reconnect was refused and the device took itself offline over a rotation.
+   It now adopts the credential, proves it, and defers the reconnect.
+3. **A UTC timestamp was compared in local time.** `time.mktime(expires)`
+   interpreted the envelope's UTC clock as local; on a +03:30 box every command
+   looks 3.5 hours stale, and a perfectly good command is answered `EXPIRED`.
+   Now parsed with `datetime.fromisoformat` against `datetime.now(timezone.utc)`.
+   A real manufacturer could make exactly this mistake, so the hardware doc
+   should state the rule.
+
+**Still NOT covered by a simulated device** — worth stating plainly, because
+"6/6 pass" would overclaim otherwise:
+- the **telemetry** lane (the subscriber's primary job) — the simulator can
+  publish it but nothing consumes it end to end;
+- the **status / LWT** lane — same;
+- the **subscriber service itself** — the live tests call
+  `reconcile_reported()` directly because the Django subscriber is not running in
+  that container, so MQTT → subscriber → Redis → Celery has never been exercised
+  by anything at all.
+
 ### The first-device rehearsal (2026-10-20)
 
 Owner context: **no devices are installed anywhere; the project is still in
