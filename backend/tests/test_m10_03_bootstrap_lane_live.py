@@ -37,6 +37,13 @@ import pytest
 # --------------------------------------------------------------------------
 # environment
 # --------------------------------------------------------------------------
+# Which authn backend the broker uses. `builtin_db` (the CI broker) needs every
+# device pushed over the management API; `postgres` (the production profile)
+# reads the credential straight from `mqtt_device_credentials`, so the
+# registration endpoint has ALREADY done the work and seeding is not just
+# unnecessary but impossible (there is no management API key in that stack).
+BROKER_AUTHN = os.environ.get("MQTT_BROKER_AUTHN", "builtin_db").strip().lower()
+
 BOOTSTRAP_HOST = os.environ.get("MQTT_BOOTSTRAP_HOST", "").strip()
 BOOTSTRAP_PORT = int(os.environ.get("MQTT_BOOTSTRAP_PORT", "1883"))
 # The CI broker profile is plaintext; production/rehearsal is TLS on 8883.
@@ -87,6 +94,15 @@ def _api(method: str, path: str, body=None):
 
 
 def _chain_id() -> str:
+    """The built_in_database authn chain id, for the CI broker profile.
+
+    On the production profile there is no such chain and no management API to
+    ask — the broker authenticates against Postgres. Returning a sentinel keeps
+    every call site unchanged while making the dependency explicit: nothing on
+    this path may touch the management API when BROKER_AUTHN is `postgres`.
+    """
+    if BROKER_AUTHN == "postgres":
+        return ""
     status, payload = _api("GET", "/api/v5/authentication")
     assert status == 200, f"authentication list -> HTTP {status}"
     for chain in payload or []:
@@ -96,7 +112,15 @@ def _chain_id() -> str:
 
 
 def _seed_broker_user(unit_id: str, password: str, chain: str) -> None:
-    """Mirror what the backend's registration writes, into the CI broker."""
+    """Mirror what the backend's registration writes, into the CI broker.
+
+    A NO-OP on the production profile: there the broker authenticates against
+    Postgres, and registration has already written the credential row — pushing
+    the same user over the management API would be redundant and, in that stack,
+    impossible (no API key is configured).
+    """
+    if BROKER_AUTHN == "postgres":
+        return
     status, _ = _api("DELETE", f"/api/v5/authentication/{chain}/users/{unit_id}")
     status, _ = _api(
         "POST", f"/api/v5/authentication/{chain}/users",
@@ -123,6 +147,11 @@ def _seed_broker_user(unit_id: str, password: str, chain: str) -> None:
 
 
 def _drop_broker_user(unit_id: str, chain: str) -> None:
+    """Remove the CI broker's copy of the user. No-op on the production profile:
+    there is no management API to call, and the credential lives in Postgres
+    where the test's own cleanup removes it."""
+    if BROKER_AUTHN == "postgres":
+        return
     _api("DELETE", f"/api/v5/authentication/{chain}/users/{unit_id}")
 
 
@@ -140,7 +169,13 @@ def _seed_publisher(chain: str) -> None:
     uses, which is what keeps this run honest about the whole path — including
     the publish permission, which is otherwise invisible until a device is
     waiting on a config that never arrives.
+
+    On the production profile the principal is already in Postgres, seeded by
+    `manage.py seed_publisher_credentials` in the container command, so this is
+    a no-op — the same command production runs at bootstrap.
     """
+    if BROKER_AUTHN == "postgres":
+        return
     _api("DELETE", f"/api/v5/authentication/{chain}/users/{PUBLISHER_USER}")
     status, _ = _api(
         "POST", f"/api/v5/authentication/{chain}/users",
@@ -486,11 +521,16 @@ def _run_full_installation_loop(django_user_model):
     city = City.objects.create(province=province, name=f"C-{tag}")
     org = Organization.objects.create(name=f"e2e-org-{tag}")
 
-    manager = django_user_model.objects.create_user(username="e2e-manager", password="x")
+    # Run-unique, like every other fixture below: this flow COMMITS (the broker
+    # is a separate process and must see the rows), so a second run against the
+    # same database would otherwise collide on the username unique index.
+    manager = django_user_model.objects.create_user(
+        username=f"e2e-manager-{tag}", password="x"
+    )
     OrgMember.objects.create(user=manager, org=org, role="manager", is_active=True)
-    reviewer = _staff(django_user_model, "e2e-reviewer", "admin")
-    support = _staff(django_user_model, "e2e-support", "support")
-    installer = _installer(django_user_model, "e2e-installer", org)
+    reviewer = _staff(django_user_model, f"e2e-reviewer-{tag}", "admin")
+    support = _staff(django_user_model, f"e2e-support-{tag}", "support")
+    installer = _installer(django_user_model, f"e2e-installer-{tag}", org)
 
     def _as(user, view, method, path, data=None, claims=None, **kwargs):
         request = getattr(APIRequestFactory(), method.lower())(
@@ -501,7 +541,7 @@ def _run_full_installation_loop(django_user_model):
         return view(request, **kwargs)
 
     # ---- 1. the factory registers a unit, with NO organisation ------------
-    factory = _as(_staff(django_user_model, "e2e-factory", "hardware"),
+    factory = _as(_staff(django_user_model, f"e2e-factory-{tag}", "hardware"),
                   unit_collection, "POST", "/api/v1/platform/devices/units/",
                   {"hardware_id": f"AA:BB:CC:{tag:06X}", "unit_id": unit_id,
                    "model": "GW-4", "batch": "e2e"})
@@ -620,9 +660,13 @@ def _run_full_installation_loop(django_user_model):
                       claims={"org_id": str(org.org_id)}, saloon_id=saloon.pk)
         assert created.status_code == 201, created.data
 
+        # Run-unique: `pack_id` is a physical serial and the mapping is
+        # one-pack-one-slot globally, so a fixed value collides on a second run
+        # against the same database (this flow commits — see the header).
+        pack_id = f"{tag:08x}"
         mapped = _as(installer, install_job_sensor_map, "POST",
                      f"/api/v1/provisioning/installations/{job.pk}/sensors/",
-                     {"pack_id": "a1b2c3d4", "slot_id": f"SS-E2E-{tag}"},
+                     {"pack_id": pack_id, "slot_id": f"SS-E2E-{tag}"},
                      claims={}, job_id=job.pk)
         assert mapped.status_code == 201, mapped.data
         assert mapped.data["config_version"] == 2
@@ -633,7 +677,7 @@ def _run_full_installation_loop(django_user_model):
         assert second["config_version"] == 2
         assert device.faults == [], device.faults
         packs = [sensor["pack_id"] for sensor in device.state.get("sensors") or []]
-        assert "a1b2c3d4" in packs, "sensor never arrived in the device's config"
+        assert pack_id in packs, "sensor never arrived in the device's config"
         assert device.state["sensors"][0]["metrics"] == ["temp", "humidity"]
 
         reconcile_reported(

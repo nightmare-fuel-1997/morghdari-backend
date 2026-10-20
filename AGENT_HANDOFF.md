@@ -1002,6 +1002,42 @@ CI runs it (TimescaleDB + Redis available):
   the queryset `provisioning_sync` validates against now finds slots created
   this way — the writer and the validator agree. Contract → v1.12.0.
 
+### The first-device rehearsal (2026-10-20)
+
+Owner context: **no devices are installed anywhere; the project is still in
+development.** That reframes the remaining work — and it means Phase 4's
+deprecation scaffolding protects nobody.
+
+What it exposed: the full install loop had only ever run against the CI broker
+(built-in-DB authn), and the production profile had only ever been asked "will
+you let this unit connect". **A first real device does both at once, and that
+combination was untested.**
+
+`scripts/first_device_rehearsal.py` now runs the SAME flow function the live
+test uses (imported, not copied) against the production broker profile:
+register → request → approve → assign → bind → device applies → sensor →
+submit → PROVISIONED, authenticated by Postgres the whole way. **It passes, and
+re-runs cleanly.**
+
+It is a script, not a pytest module, for a specific reason: pytest isolates the
+test database, so the rows land in `test_<name>` while the broker queries the
+real one — every device is refused "not authorised" for a reason that has
+nothing to do with the code. Forcing them together means fighting
+create/flush/teardown against a schema owned by real migrations.
+
+Four rig gaps found on the way, each of which looked like a code bug:
+- the publisher verifies TLS and needs `MQTT_TLS_CA`; production sets it, the
+  rig did not → `CERTIFICATE_VERIFY_FAILED`, which looks like a broken device;
+- the cert's SAN does not cover the internal name `emqx`, so production also
+  sets `MQTT_TLS_INSECURE=1` (documented accepted risk);
+- `REDIS_URL` must carry no db path (settings append `/0`);
+- the flow needs a real Redis for `transition()`'s lock.
+
+Also made the flow **re-runnable**: it commits (the broker must see the rows),
+so its fixed usernames and `pack_id` collided on a second run. All are now
+run-unique — a real property, since the CI e2e uses a fresh database and never
+showed the problem.
+
 ### Phase 3 — the command channel (2026-10-20)
 
 Closes finding D9: a fully-specified subsystem (v0.5 tasks E1–E6 + Blueprint

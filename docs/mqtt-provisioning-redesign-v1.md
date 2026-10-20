@@ -1338,6 +1338,23 @@ action.
 > journal. Task 3.5 is genuinely new (the status lane was never correctly
 > wired).
 
+> **PHASE 4 STATUS 2026-10-20: NOT NEEDED AS WRITTEN.** The owner confirmed
+> there are no devices installed anywhere — the project is still in development.
+> Both tasks were migration scaffolding for a fleet that does not exist:
+>
+> * **4.1** refers to `system_configuration.mqtt_config_enabled`, a switch that
+>   was never created. `grep` finds no occurrence in code, SQL or docs, so the
+>   MQTT path is already the only path.
+> * **4.2** would add `Deprecation`/`Sunset` headers to the HTTP config endpoint
+>   to warn devices still on the old path. There are no such devices, so the
+>   headers would warn nobody while implying a migration happened.
+>
+> What the phase was really protecting against — "the first real device meets a
+> configuration nothing has exercised" — is now covered instead by
+> `scripts/first_device_rehearsal.py`, which runs the complete install loop on
+> the production broker profile. Revisit Phase 4 only if a fleet of
+> HTTP-config-era devices ever exists.
+
 ### Phase 4 — Cutover and retirement
 
 | Task | Content |

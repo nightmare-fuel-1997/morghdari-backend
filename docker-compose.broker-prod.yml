@@ -150,6 +150,78 @@ services:
       retries: 30
     mem_limit: 512m
 
+  # THE FIRST-DEVICE REHEARSAL: the complete install loop, on the production
+  # broker profile. `e2e` above proves the authn query; this proves the PRODUCT
+  # — register -> request -> approve -> assign -> bind -> device applies ->
+  # submit -> PROVISIONED — with the broker authenticating from Postgres the
+  # whole way.
+  #
+  # It exists because those two facts had only ever been proven separately: the
+  # full loop ran against the CI broker (built-in-DB authn), and the production
+  # profile was only ever asked "will you let this unit connect". A first real
+  # device does both at once, which is exactly the combination nothing tested.
+  # The install flow needs Redis for real: `transition()` takes a lock and the
+  # slot status is cached. Production has one; a rig without it fails at the
+  # activation step with a connection error that looks like an application bug.
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    mem_limit: 256m
+
+  e2e-full:
+    image: morghdari-test:ci
+    depends_on:
+      emqx:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./scripts:/scripts:ro
+      # The broker's cert is self-signed; the publisher verifies TLS, so it
+      # needs the CA exactly as production gives it (MQTT_TLS_CA in
+      # docker-compose.prod.yml). Without this the retained publish fails with
+      # CERTIFICATE_VERIFY_FAILED and the device never receives its config —
+      # which looks like a broken device, not a broken rig.
+      - ./certs:/certs:ro
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.test
+      DATABASE_URL: postgres://${POSTGRES_ADMIN_USER:-morghdari_admin}:${POSTGRES_ADMIN_PASSWORD:-admin_pw}@pg:5432/${DATABASE_NAME:-morghdari}
+      REDIS_URL: redis://redis:6379
+      MQTT_TLS_CA: /certs/ca.crt
+      # Production pairs the CA with MQTT_TLS_INSECURE=1 (docker-compose.prod.yml,
+      # "ACCEPTED-RISK 2026-09-19"): the cert's SAN does not cover the internal
+      # service name `emqx`, so hostname verification cannot pass inside the
+      # network. Same accepted risk here, stated rather than hidden.
+      MQTT_TLS_INSECURE: "1"
+      MQTT_BOOTSTRAP_HOST: emqx
+      MQTT_BOOTSTRAP_PORT: "8883"
+      MQTT_BOOTSTRAP_TLS: "1"
+      # The switch this whole service exists for: the broker reads credentials
+      # from Postgres, so the test must NOT push users over the management API.
+      MQTT_BROKER_AUTHN: postgres
+      # The backend's own publisher, which delivers the retained document.
+      MQTT_HOST: emqx
+      MQTT_PORT: "8883"
+      MQTT_TLS: "1"
+      PUBLISHER_USERNAME: django-backend
+      PUBLISHER_PASSWORD: ${PUBLISHER_PASSWORD:-rehearsal-publisher-pass}
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        # The publisher principal, exactly as production seeds it at bootstrap.
+        python manage.py seed_publisher_credentials \
+          --username django-backend --password "$$PUBLISHER_PASSWORD"
+        # A script, not pytest: pytest isolates the test database, so the rows
+        # would land somewhere the broker never looks. See the script's header.
+        python /scripts/first_device_rehearsal.py
+
   e2e:
     image: morghdari-test:ci
     depends_on:
