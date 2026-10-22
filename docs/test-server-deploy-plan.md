@@ -329,6 +329,14 @@ rapid SSH connections in a short window, which is the usual trigger.
 3. If it is the provider's firewall rather than fail2ban, allowlist this machine's
    IP or use the server's console/VNC.
 
+**Re-checked 14:00 (from outside, no SSH):** the app still reports
+`{"status":"healthy","version":"0.8-DR"}` — the *running* build is unchanged, as
+intended. Broker TLS still fine, SSH still blocked. One new thing to look at when
+access returns: the health payload reports `queue_depth.realtime = 100002`, which
+is either a ~100k-message telemetry backlog or a cumulative counter. Worth one
+look **before** deploying, because restarting the worker will flush or stall
+whatever is sitting in that queue.
+
 **Then continue at step 4's verification:**
 
 ```
