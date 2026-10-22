@@ -6,10 +6,62 @@ deployment's wiring no longer hold, and one of them silently breaks the
 simulator. The plan below fixes them in an order where each step is verifiable
 before the next.
 
-Everything here is from reading the repository. Nothing has been run against a
-server yet — the SSH details are still outstanding, and the local Docker engine
-is unavailable on this machine (its WSL2 backend cannot start), so the
-verification steps marked *(server)* have not been executed.
+**Status: in progress.** §1–§4 were written before touching the server. §5 is the
+server inspection, now done — it corrected two of my own assumptions (see the
+note on RLS there), and it lowered the risk rather than raising it: the existing
+simulator gateways are `PROVISIONED` and their credentials still authenticate,
+so they survive the deploy unchanged. §6 is the live runbook; items are marked
+done as they complete.
+
+---
+
+## 5. Server inspection — done 2026-10-22
+
+Host `82.115.17.252` (`srv1661423174`, Ubuntu 24.04, Docker 29.1.3). Checkout at
+`/opt/morghdari`, branch `main`, **working tree clean**, deployed tag `vps-02`,
+image built 7 days ago. All ten containers up and healthy; the simulator is
+publishing continuously.
+
+| Check | Result |
+|---|---|
+| Compose files in use | `docker-compose.prod.yml` + `docker-compose.vps.yml` (+ `sim.yml`) |
+| Deployed commit | `8031059` — **6 commits behind**, clean fast-forward confirmed |
+| Broker config | `emqx/emqx.conf` mounted verbatim, plus `*_SERVER`/`*_DATABASE`/credential env overrides |
+| Authn enforced? | **Yes, proven empirically** — see below |
+| Simulated gateways | `GW-SIM-01`, `GW-SIM-F3`, `GW-SIM-F4` — all **PROVISIONED** (farms 2/3/4) |
+| Their credentials | active, bcrypt `$2b$`, 9 ACL rows each — **they still authenticate** |
+| `.sim.env` | 371 bytes, mode `600`, owned by `ubuntu`; 3 entries, fields `username`/`password`/`farm_id` |
+| Telemetry | **278,792 rows** in `saloon_telemetry`, newest ~2.5 h old — data is landing |
+| Subscribers | `subscriptions=2` — confirms finding F4 |
+| Other slot | `GW-TEST-01` `PENDING_INSTALLATION` (a leftover test unit) |
+
+**Authn probe (decisive, run from a one-off container against the live broker):**
+
+| Attempt | CONNACK |
+|---|---|
+| unknown username | `5` not authorised |
+| known user, wrong password | `4` bad credentials |
+| `GW-SIM-F3` + its real password | **`0` accepted** |
+
+**A correction to my own earlier reading, worth recording.** My first query of
+`gateway_slots` returned *0 rows*, which would have meant the simulator could
+not authenticate at all. That was an artifact of **RLS**: the table is
+row-security-scoped, and the Django application role sees nothing without a
+tenant context, while the `emqx_auth` role is exempt (that exemption is
+`tenants/0003`). Querying as the admin role showed the six real rows. The
+empirical probe settled it. The lesson is the one this project keeps teaching:
+**a query that returns empty is not the same as a table that is empty** —
+especially with RLS in play.
+
+**What this changes:** the deploy is lower-risk than §3 assumed. The three
+simulated gateways authenticate under the new query too, because they are
+`PROVISIONED` and the new authn query's first branch is
+`gs.provisioning_status IN ('PENDING_INSTALLATION','PENDING_APPROVAL','PROVISIONED')`.
+Their credentials, ACL rows and pack mappings are untouched by the migration.
+
+**Backup taken** (before any change): `/root/backups/predeploy-20261022/` —
+7.2 MB `pg_dump -Fc`, plus copies of `.env` and `.sim.env` (mode `600`), plus the
+deployed SHA. 35 GB free on disk.
 
 ---
 
@@ -236,16 +288,56 @@ stays git-ignored and is read from the server's own environment.
 
 ---
 
-## 9. What I need from you
+## 9. Runbook — progress and exact resume point
 
-1. **SSH details** for the test server: host, port, username, and the auth
-   method you prefer (key file path, or password — I will not store either in
-   the repo).
-2. **Which stack it runs** — `docker-compose.prod.yml` alone, or with the
-   `vps.yml` overlay, and the tag currently deployed (`/opt/morghdari/.deploy_tag`
-   if it follows the VPS convention).
-3. **Whether the database must be preserved** (I have assumed yes) and whether
-   a backup/restore window is acceptable for the migration rehearsal.
-4. **Your call on the status/LWT improvement** in §6.
+Updated as steps complete. **Everything up to the blocked step is done and
+verified; nothing is broken and nothing is half-applied.**
 
-With 1–3 I can start at step 1 of the plan immediately.
+| # | Step | State |
+|---|---|---|
+| 1 | Inspect, change nothing | **done** — see §5 |
+| 2 | Back up | **done** — `/root/backups/predeploy-20261022/` (7.2 MB dump, `.env`, `.sim.env`, deployed SHA) |
+| 3 | Fetch + checkout | **done** — `/opt/morghdari` fast-forwarded `8031059` → `e375892`, tree clean, containers untouched |
+| 4 | Build the image | **started, unverified** — `nohup docker build --target runtime -t ghcr.io/morghdari/backend:vps-03 backend/`, log at `/tmp/build-vps03.log` |
+| 5 | Rehearse migration on a copy | not started |
+| 6 | Migrate for real + re-apply `initdb/01_roles.sql` and `02_rls.sql` | not started |
+| 7 | Re-seed subscriber ACLs (`subscriber-01`, `subscriber-02`) | not started |
+| 8 | Re-seed the publisher credential | not started |
+| 9 | Recreate app services with `vps-03`, `--no-build`, health-gate | not started |
+
+**Blocked at:** SSH to `82.115.17.252:22` stopped accepting connections during
+step 4. Diagnosed from outside:
+
+| Port | State |
+|---|---|
+| 22 (SSH) | **TCP dropped** |
+| 80 / 443 (nginx) | open — `https://…/api/v1/health/` returns `{"status":"healthy","version":"0.8-DR",…}` with database and Redis `ok` |
+| 8883 (broker) | open — TLS handshake succeeds, `TLS_AES_256_GCM_SHA384` |
+| 18083 / 8000 | not exposed (expected) |
+
+ICMP ping succeeds throughout. So the host, the application and the broker are
+all healthy; **only SSH is unreachable**, which is the signature of an IP-level
+block (fail2ban or a provider firewall) rather than a server fault. I made ~20
+rapid SSH connections in a short window, which is the usual trigger.
+
+**What to do to resume** — any one of these:
+
+1. Wait for the ban to expire (commonly 10 min – 1 h) and retry; the build will
+   have finished by then and step 4 just needs verifying.
+2. From another shell on the server, check and clear it:
+   `fail2ban-client status sshd` then `fail2ban-client set sshd unbanip <ip>`.
+3. If it is the provider's firewall rather than fail2ban, allowlist this machine's
+   IP or use the server's console/VNC.
+
+**Then continue at step 4's verification:**
+
+```
+tail -5 /tmp/build-vps03.log
+docker images ghcr.io/morghdari/backend:vps-03 --format "{{.Tag}} {{.Size}}"
+```
+
+and proceed to step 5. Nothing already done needs repeating, and no step that
+has run can have left the system in a worse state than it is now — the running
+containers are still on `vps-02` with the old schema.
+
+---
