@@ -324,10 +324,23 @@ rapid SSH connections in a short window, which is the usual trigger.
 
 1. Wait for the ban to expire (commonly 10 min – 1 h) and retry; the build will
    have finished by then and step 4 just needs verifying.
-2. From another shell on the server, check and clear it:
-   `fail2ban-client status sshd` then `fail2ban-client set sshd unbanip <ip>`.
-3. If it is the provider's firewall rather than fail2ban, allowlist this machine's
-   IP or use the server's console/VNC.
+2. From another shell on the server, check and clear it. **This machine's public
+   IP is `104.167.199.165`** (it may have rotated — an allowlist that names an
+   older address produces exactly this symptom):
+   ```
+   fail2ban-client status sshd
+   fail2ban-client set sshd unbanip 104.167.199.165
+   ufw status numbered          # is 22 restricted to a specific source IP?
+   ufw allow from 104.167.199.165 to any port 22
+   ```
+3. If it is the provider's firewall rather than the host, allowlist the IP above
+   or use the server's console/VNC.
+
+**Diagnosis so far** (14:10, ~70 min after the block began): ICMP ping succeeds,
+ports 80/443 open and serving, broker 8883 completes a TLS handshake, app health
+returns `{"status":"healthy","version":"0.8-DR"}`. Port 22 alone is dropped. A
+*refused* port would mean sshd died; a *dropped* port means a filter in front of
+it — fail2ban, `ufw`, or the provider.
 
 **Re-checked 14:00 (from outside, no SSH):** the app still reports
 `{"status":"healthy","version":"0.8-DR"}` — the *running* build is unchanged, as
