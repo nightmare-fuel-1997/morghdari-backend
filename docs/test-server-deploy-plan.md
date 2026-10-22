@@ -288,22 +288,56 @@ stays git-ignored and is read from the server's own environment.
 
 ---
 
-## 9. Runbook — progress and exact resume point
-
-Updated as steps complete. **Everything up to the blocked step is done and
-verified; nothing is broken and nothing is half-applied.**
+## 9. Deployment — COMPLETE and verified (2026-10-22/23)
 
 | # | Step | State |
 |---|---|---|
 | 1 | Inspect, change nothing | **done** — see §5 |
 | 2 | Back up | **done** — `/root/backups/predeploy-20261022/` (7.2 MB dump, `.env`, `.sim.env`, deployed SHA) |
-| 3 | Fetch + checkout | **done** — `/opt/morghdari` fast-forwarded `8031059` → `e375892`, tree clean, containers untouched |
-| 4 | Build the image | **started, unverified** — `nohup docker build --target runtime -t ghcr.io/morghdari/backend:vps-03 backend/`, log at `/tmp/build-vps03.log` |
-| 5 | Rehearse migration on a copy | not started |
-| 6 | Migrate for real + re-apply `initdb/01_roles.sql` and `02_rls.sql` | not started |
-| 7 | Re-seed subscriber ACLs (`subscriber-01`, `subscriber-02`) | not started |
-| 8 | Re-seed the publisher credential | not started |
-| 9 | Recreate app services with `vps-03`, `--no-build`, health-gate | not started |
+| 3 | Fetch + checkout | **done** — `8031059` → `e375892`, clean fast-forward |
+| 4 | Build the image | **done** — `ghcr.io/morghdari/backend:vps-03`, 501 MB, built on the server |
+| 5 | Rehearse migration on a copy | **done** — all five migrations applied cleanly to 278,798 real rows |
+| 6 | Migrate for real + grants + RLS | **done** — as `morghdari_admin` (house path), then `01_roles.sql` + `02_rls.sql` |
+| 7 | Re-seed subscriber ACLs | **done** — both subscribers now hold **5** subscriptions (were 2) |
+| 8 | Seed the publisher credential | **done** — `django-backend`, bcrypt, 6 publish-only ACL rows; password generated on the server, stored only in the git-ignored `.env` |
+| 9 | Recreate services | **done** — all six backend services on `vps-03`, health-gated |
+
+**Verified after the deploy:**
+
+| Check | Result |
+|---|---|
+| `https://…/api/v1/health/` | `200`, database + Redis `ok` |
+| Containers | daphne / celery-worker / celery-beat / subscriber-01 / subscriber-02 / simulator / postgres all healthy; emqx, nginx, redis untouched |
+| Images actually running | all six backend services on `backend:vps-03` (`25a3935bee60`); postgres on `postgres-walg:vps-03` (same image ID as `vps-02`, retagged) |
+| Subscribers | `subscriptions=5` each — the two new device lanes are live |
+| Simulator | still publishing `1 msg x 3 gateways`; all 3 clients connected |
+| Data | 282,036 telemetry rows, newest seconds old — no data lost |
+| Authn, bound gateway | `GW-SIM-F3` → authenticates |
+| Authn, **unbound** unit | a `REGISTERED` unit with no slot and no org → **authenticates** (the new LEFT JOIN branch) |
+
+**Three things worth recording:**
+
+1. **`MORGHDARI_TAG` is shared by two images.** `docker-compose.prod.yml` uses
+   `${MORGHDARI_TAG}` for both `backend` and `postgres-walg`. Bumping the tag
+   therefore needs `postgres-walg:<tag>` to exist too, or `up -d` fails on
+   postgres. Fixed by retagging the running `vps-02` image (identical ID) as
+   `vps-03` — the postgres image is unchanged by this deploy.
+2. **nginx keeps a stale upstream after the app containers are recreated.**
+   `up -d` left nginx returning `502` while daphne was healthy — a reload fixes
+   it. `scripts/deploy.sh` already does this; a manual `up -d` does not.
+3. **`.env` had no publisher credential at all.** `PUBLISHER_USERNAME` /
+   `PUBLISHER_PASSWORD` were absent, so the new celery worker (which is now the
+   MQTT publisher) would have had no way to authenticate. Generated on the
+   server and seeded; nothing was printed or committed.
+
+**Also worth knowing:** the live migration script ran twice — a network error
+re-executed it, so the first run applied the migrations and lost its output to
+the command timeout, and the second correctly reported "no migrations to
+apply". The end state was verified independently rather than assumed.
+
+**Known cosmetic issue:** the health payload still reports `version: 0.8-DR`.
+That string comes from a settings constant, not the image, so it does not track
+the tag. The authoritative evidence of the running build is the image ID above.
 
 **Blocked at:** SSH to `82.115.17.252:22` stopped accepting connections during
 step 4. Diagnosed from outside:
