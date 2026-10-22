@@ -1,0 +1,251 @@
+# Test-server deployment — assessment and plan (2026-10-22)
+
+**Verdict: yes, deploy the latest version to the existing test server — but not by
+running `deploy.sh` as-is.** The code is ready; four things about the previous
+deployment's wiring no longer hold, and one of them silently breaks the
+simulator. The plan below fixes them in an order where each step is verifiable
+before the next.
+
+Everything here is from reading the repository. Nothing has been run against a
+server yet — the SSH details are still outstanding, and the local Docker engine
+is unavailable on this machine (its WSL2 backend cannot start), so the
+verification steps marked *(server)* have not been executed.
+
+---
+
+## 1. What the previous deployment actually was
+
+Reconstructed from the repo, not from the server:
+
+| Piece | Where | Evidence |
+|---|---|---|
+| Stack | `docker-compose.prod.yml` + `docker-compose.vps.yml` overlay, `--env-file .env` | the two-file convention in `DEPLOYMENT.md` §8; `vps.yml` overrides `daphne`, `celery-worker`, `celery-beat`, `postgres` only |
+| Simulator | `docker-compose.sim.yml` → `simulator/sim.py` | `sim.yml` runs `python /sim/sim.py`; mounts `./.sim.env` at `/sim/creds.json` |
+| Broker | `emqx/emqx.conf` mounted verbatim, TLS 8883 | `docker-compose.prod.yml` §emqx |
+| Sim credentials | `./.sim.env`, git-ignored | `.gitignore` line 35; `sim.yml` line 34 |
+
+`simulator/sim.py` is 88 lines and does exactly one thing: reads
+`/sim/creds.json` (a map of `slot → {password, farm_id}`), opens one TLS MQTT
+connection per gateway, and publishes a schema-2.0 telemetry payload every
+`SIM_INTERVAL_SEC`. Two sensor packs per gateway (`P-A`, `P-B`). It does **not**
+publish status/LWT, does **not** subscribe to commands, and does **not** apply
+configuration.
+
+Its docstring records the dependency that no longer holds: credentials were
+"minted by the review-approve flow, never hand-made."
+
+---
+
+## 2. What changed since (measured, not estimated)
+
+`git diff --stat 0677a44..HEAD` — 30 files in `backend/apps`, **+4308 / −46**.
+
+**Untouched (this is the good news for the frontend):** `apps/telemetry` has
+**zero** changes. `apps/alerts` is +14 additive lines in
+`services/redis_keys.py` (LWT keys for the status lane). The frontend's
+data-reading surface — farms, saloons, dashboards, telemetry queries, alerts —
+is contract-identical.
+
+**Changed in ways that matter:**
+
+| Area | Change |
+|---|---|
+| Provisioning | New flow: factory unit → request → review (creates farm + jobs, **mints nothing**) → assign → bind by claim code → apply → submit → `PROVISIONED` |
+| New tables | `device_units`, `installation_jobs`, `device_photos`, `platform_audit_log` + RLS |
+| Broker authn | Now a LEFT JOIN: an **unbound** factory unit may authenticate (Phase 1) |
+| Subscriber | Now holds **five** lanes (was three) |
+| Simulator path | `emqx_provision.py` still seeds the broker's **built-in database**, which `emqx.conf` does not use |
+
+---
+
+## 3. Five findings that change the plan
+
+### F1 — The simulator's credential source no longer exists (blocking)
+
+The review-approve response used to return `gateway_slot_id`, `username` and a
+one-time `password` (see `0677a44:apps/provisioning/api.py`). Those fields fed
+`.sim.env`. The new response returns `farm_id` and `jobs_created` and **no
+credential at all** — deliberately, because approval no longer mints anything.
+
+**Consequence:** a fresh deploy cannot produce a `.sim.env` the way it used to.
+The old simulator keeps working only for gateways whose credentials already
+exist in the database.
+
+### F2 — `emqx_provision.py` cannot create simulator users on this broker
+
+It writes to EMQX's built-in database through the management API
+(`AUTHN_CHAIN_ID = "password_based:built_in_database"`). `emqx.conf`
+authenticates **only** against Postgres. Only `docker-compose.dev.yml` overrides
+to `built_in_database` — and that is dev-only by the config's own note.
+
+**Consequence:** the old "provision sim users" step is a no-op here. New
+simulated gateways must get their identity through the backend, the same way a
+real device does.
+
+### F3 — Sim telemetry is invisible to the frontend unless the slot is PROVISIONED
+
+Gate 5.5 in `morghdari/subscriber/pipeline.py`: telemetry from a
+`PENDING_APPROVAL` gateway is held in the Redis stream
+`telemetry:pending_approval` — **never written to the database**. The frontend
+would show an empty farm while the simulator publishes happily.
+
+**Consequence:** a simulated gateway must be driven all the way to `PROVISIONED`
+before its data is worth anything. That is a product rule, not a bug, but it
+changes what "the simulator works" means.
+
+### F4 — The subscriber's new lanes will be denied until its ACL is re-seeded
+
+Yesterday's fix gave the subscriber five subscriptions
+(`test_m13_01_device_lanes.py`). `seed_subscriber_credentials` now writes five
+ACL rows — but the server's `subscriber-01`/`subscriber-02` rows were seeded
+with the old two. `mqtt_acl_rules` is read live by the broker, so the two new
+lanes will be denied with a `SUBACK DENIED` critical log and an endless
+resubscribe loop.
+
+**Consequence:** re-run `seed_subscriber_credentials` for both subscribers as
+part of the deploy. One command each, idempotent.
+
+### F5 — Migrations and grants have never run against a database with data
+
+Four migrations are new (`accounts/0005`, `devices/0002`,
+`provisioning/0002`, `tenants/0006`), plus RLS policies. `accounts/0005` was
+itself broken until yesterday (`e375892`) — it called
+`set_unusable_password()` on a historical model, which would have failed every
+real `migrate`. It has only ever run on fresh databases.
+
+Also load-bearing, from the September QA bring-up: `initdb/01_roles.sql` grants
+are written `IF to_regclass(...) IS NOT NULL`, so at container-init time **every
+grant is skipped**. Production re-runs `01_roles.sql` **and** `02_rls.sql`
+*after* migrating (`qa_bringup.sh` steps 3–4). Skipping that leaves `emqx_auth`
+with no SELECT, and the broker then answers "not authorized" for perfectly
+valid credentials — which looks exactly like a broken device.
+
+**Consequence:** rehearse the migration on a **copy** of the database first.
+
+---
+
+## 4. Recommendation, and the trade-off I rejected
+
+**Recommended:** deploy to the existing server, in the order below, after
+rehearsing the migration on a database copy.
+
+**Rejected — a parallel clean environment.** Cleaner, and it protects the test
+data the frontend is already built against. But it costs a second broker, a
+second database, a second TLS cert and a second set of environment, and the
+frontend's base URL would change — which is the one thing the task says to
+preserve. The old data is exactly what makes this deployment worth doing.
+
+**Rejected — reusing `emqx_provision.py` to make simulator users.** It only
+works by switching the broker to the dev profile (`built_in_database` +
+`no_match=allow`), which would silently drop authorization enforcement on a
+stack that is meant to rehearse production. Not worth it for convenience.
+
+---
+
+## 5. Deployment plan
+
+Ordered so that each step is verifiable before the next one is taken.
+
+1. **Inspect, change nothing.** Record: git SHA and tag currently deployed,
+   `docker compose ps`, which compose files are in use, `.env` keys (names
+   only), the broker's authn profile, and whether `.sim.env` exists and what
+   shape it has. Confirm the working tree is clean and no server-side edits
+   would be lost.
+2. **Back up.** `pg_dump` of the database plus a copy of `.env` and `.sim.env`,
+   stored outside the repo. *(server)*
+3. **Rehearse the migration on a copy.** Restore the dump into a scratch
+   database, run `migrate`, then re-run `initdb/01_roles.sql` and
+   `initdb/02_rls.sql` as the QA bring-up does. Only proceed if this is clean —
+   it is the step most likely to surprise us.
+4. **Fetch the code.** `git fetch` + checkout `e375892` (current `main`), never
+   a blind `git pull`. Verify the SHA.
+5. **Build the image on the server.** There is no CI workflow in this repo —
+   nothing builds or pushes to `ghcr.io` automatically — and the local Docker
+   engine here cannot start, so building on the server is the path. Tag it
+   explicitly and record the tag.
+6. **Migrate for real**, then re-apply the two grant scripts (step 3's second
+   half).
+7. **Re-seed the subscriber ACLs.** `seed_subscriber_credentials` for
+   `subscriber-01` and `subscriber-02` with the existing usernames and
+   passwords. This fixes F4.
+8. **Recreate the app services** with the project's own convention
+   (`--no-build`, the recorded tag), keeping the existing env. Health-gate
+   before declaring success.
+9. **Re-seed the publisher credential** (`seed_publisher_credentials`) so the
+   desired-state publisher can authenticate — it is the worker that delivers
+   configuration to devices.
+
+---
+
+## 6. Simulator plan
+
+**Preserve:** `simulator/sim.py` stays the publisher. It already satisfies the
+requirements — multiple gateways across multiple farms from one `creds.json`,
+one connection per gateway, schema-2.0 payloads on the real MQTT path, each
+message carrying `gateway_slot_id` + `farm_id` and per-reading `pack_id`, and
+sustained repeats at `SIM_INTERVAL_SEC`.
+
+**Replace the credential source.** A new script drives the real install flow
+per simulated gateway — factory-register a unit, create a gateway request,
+review it, assign the job, bind by claim code, let the device apply its config,
+submit — and writes the resulting credentials into `.sim.env` in exactly the
+shape `sim.py` already reads. No simulator-only shortcuts: the simulated
+gateway goes through the same pipeline a real one does, which is what makes the
+test meaningful.
+
+**Keep the old farms alive.** For gateways already in `.sim.env` whose slots are
+`PROVISIONED`, the existing credentials keep authenticating unchanged — the
+migration is additive and does not touch `mqtt_device_credentials` or
+`mqtt_acl_rules`. Those gateways need no re-provisioning.
+
+**One optional improvement, flagged not assumed:** publishing status/LWT so the
+four-state view and LOS watchdog mean something for simulated farms. Cheap, but
+it is a behaviour change to a file the frontend team may rely on, so it is a
+question for you rather than something I do silently.
+
+**One hard requirement to check on the server:** each pack (`P-A`, `P-B`) must
+still resolve through `(org, hardware_id, pack_id)` to a `saloon_sensor_slots`
+row, or Gate 5 sends every reading to the DLQ and the farm stays empty. The old
+mappings live in the database and should survive, but it is a one-query check.
+
+---
+
+## 7. Frontend compatibility
+
+**Verified by inspection, not by running the frontend:**
+
+- Farms, saloons, telemetry, alerts, dashboards: **unchanged**. `apps/telemetry`
+  has no diff at all.
+- Same base URL, same TLS, same auth behaviour.
+- **One breaking change, and it is small:** the review-approve response no
+  longer carries `gateway_slot_id` / `username` / `password`; it returns
+  `farm_id` and `jobs_created`. Any frontend code that read those fields — most
+  likely an installer-credentials screen — must be updated. Nothing else in the
+  contract moved.
+
+---
+
+## 8. Credentials
+
+**The existing ones can be kept.** `.sim.env`'s usernames and passwords remain
+valid for any gateway whose slot is `PROVISIONED`, because the migration does
+not touch the credential or ACL tables. The subscriber and publisher service
+accounts likewise keep their existing usernames; only their ACL rows need
+re-seeding. No secret needs to be committed, logged, or hardcoded — `.sim.env`
+stays git-ignored and is read from the server's own environment.
+
+---
+
+## 9. What I need from you
+
+1. **SSH details** for the test server: host, port, username, and the auth
+   method you prefer (key file path, or password — I will not store either in
+   the repo).
+2. **Which stack it runs** — `docker-compose.prod.yml` alone, or with the
+   `vps.yml` overlay, and the tag currently deployed (`/opt/morghdari/.deploy_tag`
+   if it follows the VPS convention).
+3. **Whether the database must be preserved** (I have assumed yes) and whether
+   a backup/restore window is acceptable for the migration rehearsal.
+4. **Your call on the status/LWT improvement** in §6.
+
+With 1–3 I can start at step 1 of the plan immediately.
