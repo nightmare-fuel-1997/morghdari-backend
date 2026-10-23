@@ -67,8 +67,25 @@ def _setup_django():
 
 
 def _make_caller():
-    """The in-process HTTP caller the live test uses — same views, same auth."""
+    """The in-process HTTP caller the live test uses — same views, same auth.
+
+    One difference from the test, forced by the fact that this runs against a
+    database with ROW LEVEL SECURITY actually enforced: the test suite's
+    database does not have the initdb policies, so a bare view call works there.
+
+    Here, calling a view directly skips TenantOrgMiddleware, so the
+    `app.current_org_id` GUC that middleware would set from the JWT is never
+    set — and every tenant table returns zero rows (or refuses the INSERT) for
+    the app role. So a caller with an org claim gets the same treatment the
+    middleware would give it: the GUC set inside a transaction, because
+    `set_config(..., true)` is local to the current transaction and dies at
+    COMMIT. Platform-staff callers deliberately get no GUC, matching branch ②
+    of the middleware.
+    """
+    from django.db import transaction
     from rest_framework.test import APIRequestFactory, force_authenticate
+
+    from apps.tenants.context import tenant_context
 
     def _as(user, view, method, path, data=None, claims=None, **kwargs):
         request = getattr(APIRequestFactory(), method.lower())(
@@ -76,7 +93,12 @@ def _make_caller():
         )
         force_authenticate(request, user=user)
         request.jwt_claims = claims or {}
-        return view(request, **kwargs)
+        org_id = (claims or {}).get("org_id")
+        if not org_id or (claims or {}).get("is_platform_staff") is True:
+            return view(request, **kwargs)
+        with transaction.atomic():
+            with tenant_context(org_id):
+                return view(request, **kwargs)
 
     return _as
 
