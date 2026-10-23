@@ -26,6 +26,7 @@ services:
       # Each twin learns its org and farm from the retained config document,
       # exactly as a real device does — so there is no SIM_ORG_UUID to set.
       SIM_INTERVAL_SEC: "60"
+      SIM_CREDS_PATH: "/creds.json"
       # Fault injection, all optional and off by default. A clean run proves
       # nothing about error handling, so these exist to be turned on:
       #   SIM_FAULT_DROP=0.05      skip 5% of telemetry windows
@@ -41,8 +42,11 @@ services:
       - ./certs:/app/certs:ro
       # The whole directory, not just sim.py: sim.py imports twin.py, and a
       # single-file mount would leave the import unresolved in the container.
+      # It is mounted read-only, so the credentials cannot live inside it —
+      # docker cannot create a mountpoint under a read-only bind. Hence the
+      # separate /creds.json below, pointed at by SIM_CREDS_PATH.
       - ./simulator:/sim:ro
-      - ./.sim.env:/sim/creds.json:ro
+      - ./.sim.env:/creds.json:ro
     depends_on:
       - emqx
       - redis
