@@ -1,88 +1,232 @@
 #!/usr/bin/env python3
-"""Simulated gateways — publishes schema-2.0 telemetry for provisioned SIM slots.
+"""sim.py — the multi-gateway simulator: a fleet of digital twins.
 
-Reads gateway credentials from /sim/creds.json (minted by the review-approve
-flow, never hand-made). One MQTT connection per gateway, TLS to emqx:8883.
+WHAT CHANGED FROM THE PREVIOUS SIMULATOR
+----------------------------------------
+The old `sim.py` was a telemetry generator: it read credentials, connected, and
+published schema-2.0 readings forever. It never subscribed, never applied a
+configuration, never answered a command, and never published status — so it
+could not exercise the parts of the system that matter most (registration,
+config apply, the command channel, LOS detection), and it could not fail in the
+ways real hardware fails.
 
-Payload satisfies every pipeline gate (pipeline.py):
-  topic {org}/farms/{farm}/gateways/{slot}/telemetry  (T1 shape)
-  gateway_slot_id == topic slot (identity), schema_version 2.0,
-  unique device_ts (dedup), known (hardware, pack) mappings.
+This one runs a `DigitalTwin` per gateway (`simulator/twin.py`). Each twin
+behaves as `docs/hardware-firmware-requirements-v1.md` specifies: it connects
+with `username = unit_id`, subscribes to its own `desired` and `command`
+topics, applies the retained configuration and reports `APPLIED`, publishes
+schema-2.0 telemetry and status with a Last Will, and answers commands in three
+separate events. Once a twin is bound it moves to the tenant topics, exactly
+as a real device does.
+
+The backend cannot tell a twin from hardware. That is the whole point: whatever
+breaks, breaks here rather than on a real gateway in a real shed.
+
+CREDENTIALS
+-----------
+Read from `/sim/creds.json`, bind-mounted from the host's git-ignored
+`.sim.env`. Shape (unchanged from the previous simulator, so existing
+deployments keep working):
+
+    {"GW-SIM-01": {"username": "...", "password": "...", "farm_id": 2}, ...}
+
+FAULT INJECTION (all optional, default off)
+-------------------------------------------
+    SIM_FAULT_DROP=0.05      skip 5% of telemetry windows (connectivity)
+    SIM_FAULT_DELAY=0.05     delay 5% of sends by SIM_FAULT_DELAY_SEC
+    SIM_FAULT_INVALID=0.02   emit 2% of readings out of physical range
+    SIM_FAULT_RESTART=0.01   power-cycle 1% of devices per interval
+
+Farsi: شبیه‌سازِ ناوگان — هر گیت‌وی یک دوقلؤ دیجیتالی که قرارداد سخت‌افزار را
+زنده می‌کند.
 """
 
+from __future__ import annotations
+
 import json
-import math
+import logging
 import os
-import ssl
+import signal
+import sys
 import time
 from datetime import datetime, timezone
 
-import paho.mqtt.client as mqtt
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-BROKER = os.environ.get("MQTT_HOST", "emqx")
-PORT = int(os.environ.get("MQTT_PORT", "8883"))
-CA = os.environ.get("MQTT_TLS_CA", "/app/certs/ca.crt")
-ORG = os.environ["SIM_ORG_UUID"]
-INTERVAL = float(os.environ.get("SIM_INTERVAL_SEC", "10"))
-PACKS = ("P-A", "P-B")
+from twin import DigitalTwin, FaultProfile  # noqa: E402
 
-BASE_METRICS = {
-    "temp": 24.5, "humidity": 62.0, "nh3": 8.0, "co": 4.0,
-    "lux": 320.0, "water_l": 1.2, "power_mains": 220.0, "power_gen": 0.0,
-}
-AMPLITUDE = {
-    "temp": 1.5, "humidity": 5.0, "nh3": 2.0, "co": 1.0,
-    "lux": 40.0, "water_l": 0.4, "power_mains": 3.0, "power_gen": 0.0,
-}
+LOG = logging.getLogger("sim")
+
+CREDS_PATH = os.environ.get("SIM_CREDS_PATH", "/sim/creds.json")
+SUMMARY_EVERY_SEC = float(os.environ.get("SIM_SUMMARY_SEC", "300"))
 
 
-def metrics(t, seed):
-    out = {}
-    for k, base in BASE_METRICS.items():
-        out[k] = round(base + AMPLITUDE[k] * math.sin(t / 300.0 + seed), 2)
-    return out
+def _utcnow() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def make_client(slot, password):
-    # Owner decision 2026-10-18 (Tracker §4t): fleet protocol = MQTT 3.1.1
-    # (was the only MQTTv5-pinned client in the repo).
-    c = mqtt.Client(client_id=f"sim-{slot}", protocol=mqtt.MQTTv311)
-    c.username_pw_set(slot, password)
-    c.tls_set(ca_certs=CA, tls_version=ssl.PROTOCOL_TLS_CLIENT)
-    c.tls_insecure_set(True)  # staging-only, same posture as subscribers
-    c.connect(BROKER, PORT, keepalive=60)
-    return c
+class Fleet:
+    """Owns every twin, keeps them alive, and reports what each one is doing."""
+
+    def __init__(self, host: str, port: int, interval: float,
+                 faults: FaultProfile):
+        self.host = host
+        self.port = port
+        self.interval = interval
+        self.faults = faults
+        self.twins: list[DigitalTwin] = []
+        self._stopping = False
+        self._last_summary = 0.0
+
+    # ------------------------------------------------------------------ load
+    def load_credentials(self, path: str) -> int:
+        """Build one twin per credential entry. Returns how many were built."""
+        with open(path, encoding="utf-8") as handle:
+            creds = json.load(handle)
+
+        for slot, entry in creds.items():
+            password = entry.get("password") or ""
+            if not password:
+                LOG.error("%s has no password in %s — skipped", slot, path)
+                continue
+            self.twins.append(DigitalTwin(
+                unit_id=slot,
+                password=password,
+                farm_id=entry.get("farm_id"),
+                host=self.host,
+                port=self.port,
+                interval_sec=self.interval,
+                faults=self.faults,
+            ))
+        return len(self.twins)
+
+    # ----------------------------------------------------------------- start
+    def start_all(self) -> None:
+        """Connect every twin. A refused connection is logged CRITICAL and
+        retried forever — that is what a real device does, and a silent retry
+        loop is exactly how a broken deployment looks healthy."""
+        for twin in self.twins:
+            self._connect_with_retry(twin)
+
+    def _connect_with_retry(self, twin: DigitalTwin,
+                            attempts: int = 3, backoff: float = 5.0) -> bool:
+        for attempt in range(1, attempts + 1):
+            if self._stopping:
+                return False
+            try:
+                rc = twin.start()
+            except Exception as exc:  # noqa: BLE001 — keep the fleet alive
+                rc = -1
+                twin.last_error = f"{type(exc).__name__}: {exc}"
+            if rc == 0:
+                LOG.info("connected %s (farm=%s, applied_v=%d)",
+                         twin.unit_id, twin.farm_id, twin.applied_version)
+                return True
+            LOG.warning("%s connect rc=%s (attempt %d/%d) %s",
+                        twin.unit_id, rc, attempt, attempts,
+                        twin.last_error or "")
+            if attempt < attempts:
+                time.sleep(backoff * attempt)
+        LOG.critical("%s could not connect after %d attempts — will retry "
+                     "on the next pass", twin.unit_id, attempts)
+        return False
+
+    # ------------------------------------------------------------------- loop
+    def run_forever(self) -> None:
+        LOG.info("fleet up: %d twin(s), interval=%gs, faults=[%s]",
+                 len(self.twins), self.interval, self.faults.describe())
+        while not self._stopping:
+            now = time.time()
+            for twin in self.twins:
+                if self._stopping:
+                    break
+                self._keep_alive(twin)
+                if twin.connected and twin.org_id:
+                    if now - twin._last_tick >= twin.report_interval_sec:
+                        twin._last_tick = now
+                        twin.tick()
+            if now - self._last_summary >= SUMMARY_EVERY_SEC:
+                self._last_summary = now
+                self._log_summary()
+            time.sleep(1.0)
+        self.stop_all()
+
+    def _keep_alive(self, twin: DigitalTwin) -> None:
+        """Reconnect a twin that lost its session.
+
+        paho's own loop retries the socket, but a device whose credentials were
+        rotated, or that was never able to connect at all, needs the fleet to
+        try again — otherwise one bad unit silently stops reporting forever.
+        """
+        if twin.connected:
+            return
+        if not hasattr(twin, "_last_tick"):
+            twin._last_tick = 0.0
+        now = time.time()
+        if now - getattr(twin, "_last_reconnect", 0.0) < 30.0:
+            return
+        twin._last_reconnect = now
+        LOG.info("%s is offline — reconnecting", twin.unit_id)
+        try:
+            twin.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        self._connect_with_retry(twin, attempts=1)
+
+    # ---------------------------------------------------------------- summary
+    def _log_summary(self) -> None:
+        LOG.info("---- fleet summary %s ----", _utcnow())
+        for twin in self.twins:
+            LOG.info("  %s", twin.summary())
+            for kind, detail in twin.faults_hit[-3:]:
+                LOG.info("      fault %s: %s", kind, detail)
+
+    def stop_all(self) -> None:
+        LOG.info("stopping fleet")
+        for twin in self.twins:
+            try:
+                twin.stop()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def request_stop(self, *_args) -> None:
+        self._stopping = True
 
 
-def main():
-    creds = json.load(open("/sim/creds.json"))
-    clients = {}
-    for slot, c in creds.items():
-        hw = "HW-" + slot[len("GW-"):]
-        clients[slot] = (make_client(slot, c["password"]), c["farm_id"], hw)
-        print(f"connected sim gateway {slot} (farm {c['farm_id']})", flush=True)
-    for c, _, _ in clients.values():
-        c.loop_start()
-    t0 = time.time()
-    seed = {s: i * 1.7 for i, s in enumerate(clients)}
-    while True:
-        t = time.time() - t0
-        for slot, (client, farm_id, hw) in clients.items():
-            payload = {
-                "schema_version": "2.0",
-                "gateway_slot_id": slot,
-                "gateway_hardware_id": hw,
-                "device_ts": datetime.now(timezone.utc).isoformat(),
-                "readings": [
-                    {"pack_id": p, "metrics": metrics(t, seed[slot] + j)}
-                    for j, p in enumerate(PACKS)
-                ],
-            }
-            topic = f"{ORG}/farms/{farm_id}/gateways/{slot}/telemetry"
-            client.publish(topic, json.dumps(payload), qos=1)
-        print(f"published 1 msg x {len(clients)} gateways", flush=True)
-        time.sleep(INTERVAL)
+def main() -> int:
+    logging.basicConfig(
+        level=os.environ.get("SIM_LOG_LEVEL", "INFO"),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
+    host = os.environ.get("MQTT_HOST", "emqx")
+    port = int(os.environ.get("MQTT_PORT", "8883"))
+    interval = float(os.environ.get("SIM_INTERVAL_SEC", "60"))
+    faults = FaultProfile.from_env()
+
+    fleet = Fleet(host, port, interval, faults)
+    try:
+        count = fleet.load_credentials(CREDS_PATH)
+    except FileNotFoundError:
+        LOG.critical("no credentials at %s — nothing to simulate", CREDS_PATH)
+        return 1
+    except (ValueError, KeyError) as exc:
+        LOG.critical("%s is not a usable credentials file: %s", CREDS_PATH, exc)
+        return 1
+    if not count:
+        LOG.critical("no usable credentials in %s", CREDS_PATH)
+        return 1
+
+    for twin in fleet.twins:
+        twin._last_tick = 0.0
+        twin._last_reconnect = 0.0
+
+    signal.signal(signal.SIGTERM, fleet.request_stop)
+    signal.signal(signal.SIGINT, fleet.request_stop)
+
+    fleet.start_all()
+    fleet.run_forever()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
