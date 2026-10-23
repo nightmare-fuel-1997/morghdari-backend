@@ -641,3 +641,91 @@ throwaway database (`morghdari_testrun`), with the runtime image plus
 re-ran against a stale `test_`-prefixed database that pytest had not recreated,
 concluded the fix did not work, and very nearly reverted it. Drop **both**
 `morghdari_testrun` and `test_morghdari_testrun` before judging a cold-DB fix.
+
+---
+
+## 14. The command channel, proven end to end — and three defects on the way
+
+Issuing a real command to a live twin is what turned "looks finished" into
+"works". It took three fixes, each hidden behind the previous one.
+
+### Defect 1 — nothing ever enqueued the publish
+
+See §13.1. `publish_command` had no caller outside tests. Fixed with
+`issue_command()` and `POST /gateways/{slot}/commands/`.
+
+### Defect 2 — the worker consumed neither `provisioning` nor `audit`
+
+`CELERY_TASK_ROUTES` sends `provisioning.*` → `provisioning` and
+`auditing.*` → `audit`. The worker's `-Q` flag listed only
+`celery,telemetry_realtime,telemetry_historical,alerts`.
+
+**So every `.delay()`-dispatched provisioning task went into a queue with no
+consumer and stayed there** — `publish_command`, `sweep_config_convergence`,
+`reconcile_reported_payload`, and every `auditing.*` task. Symptom: the API
+returns `202`, the row is created, and the command sits at `PENDING` with
+`attempts=0` while `LLEN provisioning` shows the backlog.
+
+The bind-time config publish only ever worked because it calls
+`publish_desired_state_for()` **synchronously** rather than through `.delay()` —
+which is precisely why nobody noticed: the happy path never used the queue.
+
+A comment in the compose file records that this list was already fixed once for
+the same class of mistake (M7-06: "telemetry drained nothing, silently"). It was
+still incomplete. `tests/test_celery_queue_coverage.py` now pins every routed
+queue against the worker's `-Q` list, reading the compose file, because that is
+where the deployed list actually lives.
+
+### Defect 3 — the subscriber initialised the ORM by accident
+
+With the queue fixed, `publish_command` ran and returned `True` (PUBACK
+received), the twin received the command and answered it (`cmds=4` on the
+fleet summary) — and the backend still recorded nothing:
+
+```
+AppRegistryNotReady: Apps aren't loaded yet.
+  reconcile_command_response -> from apps.provisioning.models import ...
+```
+
+`_django_ready()` was reachable only from `_slot_db_fetch`, i.e. on a
+pack-resolution **cache miss**. In steady state the resolver cache is warm (24 h
+TTL, held in Redis, so it survives a restart), so a freshly restarted subscriber
+could serve telemetry for hours without ever initialising Django. The first
+command response then hit an uninitialised app registry, the handler swallowed
+the exception into a log line, and the command sat at `SENT` forever.
+
+**The reported lane carried the same latent bug** — it was only ever safe
+because telemetry happened to warm Django first. Both lanes now guard
+explicitly, and `main()` initialises the ORM once at startup.
+
+### The proof
+
+`DIAGNOSTICS_REQUEST` on a live gateway, timed from the API call:
+
+| t | journal state |
+|---|---|
+| +2 s | `APPLIED  attempts=1  sent=18:20:46  applied=18:20:46` |
+
+Full rotation loop, also live:
+
+| step | observed |
+|---|---|
+| `POST /rotate-credential` | returns the new password once **and** `command_uuid` |
+| device receives `ROTATE_CREDENTIAL` | adopts it, proves it by presenting it in `SUCCESS` |
+| reconciler | `commit_pending_rotation` |
+| credential hash | `$2b$12$MWI.y…` → `$2b$12$pzeZX…`, `pending=none` |
+| the device afterwards | still connected, still publishing on both sensor slots |
+
+That is commit-on-ACK working for the first time against a real device — the
+proof rule that makes a lost delivery unable to lock a gateway out.
+
+### Also worth recording
+
+**`MORGHDARI_TAG` and the shell.** `set -a; . ./.env` exports the tag into the
+shell, and compose prefers an **exported** variable over `--env-file`. Editing
+`.env` and re-running compose therefore deploys the OLD tag. Re-source after the
+edit, or the deploy silently does nothing.
+
+**`up -d` starts the one-shot provisioner.** `docker-compose.sim.yml` defines
+`provisioner` as a one-shot service; a bare `up -d` runs it and installs another
+gateway. Name the services explicitly when recreating.
