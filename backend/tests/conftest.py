@@ -337,6 +337,27 @@ def _materialize_compat_schema() -> None:
         spec.loader.exec_module(module)
         _execute_sql(cursor, module.SQL)
 
+    # `metric_daily_aggregates`, for the same reason and with the same shape.
+    #
+    # MetricDailyAggregate is managed=False with a RESTRICT FK to Saloon, so
+    # Django's delete collector queries the table whenever a saloon is deleted
+    # — core topology, not an optional rollup feature. Under --nomigrations the
+    # table exists only as RunSQL in monitoring/0002, so every farm/saloon
+    # delete test failed on a cold DB with `relation "metric_daily_aggregates"
+    # does not exist`. It was already materialized, but only behind the
+    # `use_migrations` marker, which those tests do not carry.
+    with connection.cursor() as cursor:
+        if cursor.execute(
+            "SELECT to_regclass('public.metric_daily_aggregates') IS NOT NULL"
+        ).fetchone()[0]:
+            return
+        _execute_sql(
+            cursor,
+            _reports_ddl(
+                BACKEND_DIR / "apps" / "monitoring" / "migrations" / "0002_daily_aggregates.py"
+            ),
+        )
+
 
 def _materialize_use_migrations_schema(request) -> None:
     """Create the `use_migrations` marker's SQL artifacts on a fresh test DB.
@@ -363,15 +384,7 @@ def _materialize_use_migrations_schema(request) -> None:
             "SELECT to_regclass('public.daily_report_extras') IS NOT NULL"
         ).fetchone()[0]:
             _execute_sql(cursor, _reports_ddl(reports_dir / "0002_daily_report_extras.py"))
-        # v0.9 M9-10: batch-1 aggregate tables (monitoring/0002, same _sql()
-        # function shape as the reports migrations above).
-        if not cursor.execute(
-            "SELECT to_regclass('public.metric_daily_aggregates') IS NOT NULL"
-        ).fetchone()[0]:
-            _execute_sql(
-                cursor,
-                _reports_ddl(BACKEND_DIR / "apps" / "monitoring" / "migrations" / "0002_daily_aggregates.py"),
-            )
+
 
 
 def _reports_ddl(path: Path) -> str:
