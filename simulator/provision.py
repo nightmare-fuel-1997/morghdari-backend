@@ -93,13 +93,20 @@ def provision_one(index: int, _as, models) -> dict:
     # A fresh org per gateway keeps runs independent and repeatable: nothing
     # here has to be unique across time except the usernames, which the tag
     # already guarantees.
-    org = models.Organization.objects.create(name=f"auto-org-{tag}")
+    #
+    # The org is created over the admin alias because `organizations` is FORCE
+    # ROW LEVEL SECURITY and there is no tenant to scope it to yet — this is the
+    # same cross-org posture the sweeps and the device config lookup use.
+    from apps.tenants.context import admin_alias
+
+    org = models.Organization.objects.using(admin_alias()).create(
+        name=f"auto-org-{tag}")
     province = models.Province.objects.create(name=f"P-{tag}")
     city = models.City.objects.create(province=province, name=f"C-{tag}")
 
     manager = User.objects.create_user(username=f"auto-manager-{tag}", password="x")
-    models.OrgMember.objects.create(user=manager, org=org, role="manager",
-                                    is_active=True)
+    models.OrgMember.objects.using(admin_alias()).create(
+        user=manager, org=org, role="manager", is_active=True)
     reviewer = models.staff(f"auto-reviewer-{tag}", "admin")
     support = models.staff(f"auto-support-{tag}", "support")
     installer = models.installer(f"auto-installer-{tag}", org)
@@ -264,8 +271,10 @@ class _Models:
 
         User = get_user_model()
         user = User.objects.create_user(username=username, password="x")
-        OrgMember.objects.create(user=user, org=org, role="installer",
-                                 is_active=True)
+        from apps.tenants.context import admin_alias
+
+        OrgMember.objects.using(admin_alias()).create(
+            user=user, org=org, role="installer", is_active=True)
         return user
 
 
