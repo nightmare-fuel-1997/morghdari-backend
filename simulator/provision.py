@@ -214,8 +214,15 @@ def provision_one(index: int, _as, models) -> dict:
 
 
 def _attach_sensors(_as, models, org, job, installer, tag) -> list:
-    """Create a saloon + sensor slot and map two packs, so telemetry resolves."""
-    from apps.devices.models import SaloonPosition, SaloonSensorSlot
+    """Create a saloon and ONE sensor slot PER PACK, then map them 1:1.
+
+    The 1:1 layout is not cosmetic. Two packs mapped to one slot silently lose
+    half their data: the ingest dedup key is `(slot, device_ts)` with no pack
+    component, so two readings sharing a window timestamp and resolving to the
+    same slot look like a redelivery of one message and the second is dropped.
+    The legacy gateways are 1:1, which is why they never hit it.
+    """
+    from apps.devices.models import SaloonPosition
     from apps.farms.models import Saloon
     from apps.tenants.context import admin_alias
 
@@ -228,25 +235,27 @@ def _attach_sensors(_as, models, org, job, installer, tag) -> list:
     position = SaloonPosition.objects.using(admin_alias()).create(
         saloon_id=saloon.pk, org_id=org.pk, label="north")
 
-    slot_id = f"SS-AUTO-{tag}"
-    created = _as(installer, models.saloon_sensor_slot_create, "POST",
-                  f"/api/v1/saloons/{saloon.pk}/sensor-slots/",
-                  {"slot_id": slot_id, "position_id": position.pk,
-                   "allowed_metric_keys": ["temp", "humidity", "nh3", "co",
-                                           "lux", "water_l", "power_mains",
-                                           "power_gen"]},
-                  claims={"org_id": str(org.org_id)}, saloon_id=saloon.pk)
-    if created.status_code != 201:
-        raise RuntimeError(f"sensor slot failed: {created.status_code} {created.data}")
-
+    metric_keys = ["temp", "humidity", "nh3", "co", "lux", "water_l",
+                   "power_mains", "power_gen"]
     packs = [f"{int(tag) % 100000000:08x}", f"{(int(tag) + 1) % 100000000:08x}"]
-    for pack_id in packs:
+    for index, pack_id in enumerate(packs):
+        slot_id = f"SS-AUTO-{tag}-{index + 1}"
+        created = _as(installer, models.saloon_sensor_slot_create, "POST",
+                      f"/api/v1/saloons/{saloon.pk}/sensor-slots/",
+                      {"slot_id": slot_id, "position_id": position.pk,
+                       "allowed_metric_keys": metric_keys},
+                      claims={"org_id": str(org.org_id)}, saloon_id=saloon.pk)
+        if created.status_code != 201:
+            raise RuntimeError(
+                f"sensor slot failed: {created.status_code} {created.data}")
+
         mapped = _as(installer, models.install_job_sensor_map, "POST",
                      f"/api/v1/provisioning/installations/{job.pk}/sensors/",
                      {"pack_id": pack_id, "slot_id": slot_id},
                      claims={}, job_id=job.pk)
         if mapped.status_code != 201:
-            raise RuntimeError(f"pack map failed: {mapped.status_code} {mapped.data}")
+            raise RuntimeError(
+                f"pack map failed: {mapped.status_code} {mapped.data}")
     return packs
 
 
