@@ -310,8 +310,18 @@ services:
     # settings' task_routes send telemetry/alerts work to telemetry_realtime,
     # telemetry_historical and alerts; a default-queue-only worker leaves all
     # of it stranded (telemetry drained nothing, silently).
+    #
+    # FOUND 2026-10-23: the list was still incomplete. CELERY_TASK_ROUTES also
+    # declares `provisioning.*` -> provisioning and `auditing.*` -> audit, and
+    # this worker consumed NEITHER, so every .delay()-dispatched provisioning
+    # task sat in its queue forever. That includes publish_command (the command
+    # channel's publish step) and sweep_config_convergence (the AD-3 retry
+    # sweep). The bind-time config publish worked only because it calls
+    # publish_desired_state_for() synchronously rather than through .delay().
+    # Symptom: a command issued over the API returns 202 and then stays PENDING
+    # with attempts=0, while `LLEN provisioning` shows the backlog.
     # ponytail: --concurrency=2 for a 2-core box (one worker process per core).
-    command: celery -A config worker -l info --concurrency=2 -Q celery,telemetry_realtime,telemetry_historical,alerts
+    command: celery -A config worker -l info --concurrency=2 -Q celery,telemetry_realtime,telemetry_historical,alerts,provisioning,audit
     environment:
       DJANGO_SETTINGS_MODULE: "config.settings.production"
       DJANGO_ALLOWED_HOSTS: "${DJANGO_ALLOWED_HOSTS}"
