@@ -433,10 +433,9 @@ alias, per-tenant reads and writes still inside `tenant_context`.
 * **The pack ids are `P-A`/`P-B`.** The current sensor-map endpoint requires an
   8-hex LoRa node id, so these legacy mappings could not be re-created through
   the API — they predate that rule and were left as they are.
-* **New gateways are not yet auto-provisioned.** Driving a *new* device through
-  the full install flow (register → request → approve → assign → bind → submit)
-  needs a platform-staff API client; that is the next piece of work, and the
-  unbound authn branch it depends on is already proven live.
+* **New gateways ARE auto-provisioned** — see §12. What is not automated is the
+  *scheduling* of new installations (a human or a cron still decides when the
+  fleet grows); the installation itself is fully driven.
 
 ---
 
@@ -518,3 +517,75 @@ lanes, EMQX provisioning, subscriber boot).
   missed.)
 * The temporary staff account created for the API check was deleted afterwards,
   along with its membership and sessions.
+
+---
+
+## 12. Auto-provisioning — new gateways install themselves
+
+`simulator/provision.py` creates a NEW gateway the way a farm is really
+installed, driving the backend's own API views:
+
+| # | Step | Who | What it proves |
+|---|---|---|---|
+| 1 | register a unit, **org-less** | factory (platform staff) | the factory branch works; returns a password + claim code |
+| 2 | request a farm the org lacks | manager | `gateway_requests` insert, org-scoped |
+| 3 | approve | reviewer | farm + job materialise, **nothing is minted** |
+| 4 | assign the job | support | installer sees it |
+| 5 | **bind by claim code** | installer | the gateway slot is created here |
+| 6 | saloon + sensor slot + pack mapping | installer | telemetry will resolve |
+| 7 | submit | installer | → `PROVISIONED` |
+
+Run it against the live server:
+
+```
+SIM_PROVISION_COUNT=1 docker compose -p morghdari --env-file .env \
+  -f docker-compose.prod.yml -f docker-compose.vps.yml -f docker-compose.sim.yml \
+  run --rm --no-deps provisioner
+```
+
+It writes `/sim-state/provisioned.json`, which the simulator merges and reloads
+every 30 s — **a new gateway joins a running fleet with no restart**. Verified:
+three gateways installed this way, all reaching `applied = desired = 3`, all
+publishing. An existing twin is never restarted by a reload.
+
+### Two findings from making this work
+
+**1. Two packs on one sensor slot silently lose half their data.**
+The ingest dedup key is `(slot, device_ts)` with **no pack component**, so the
+second reading of a window that resolves to the same slot is indistinguishable
+from a redelivery and is dropped. The provisioner originally created one slot
+for both packs; the legacy gateways are 1:1, which is the only reason they never
+hit it. `provision.py` now creates one slot per pack, and the three existing
+auto gateways were migrated to match — all 12 sensor slots now receive every
+window.
+
+**2. A pack-mapping change does not take effect for up to 24 hours.**
+`morghdari/subscriber/resolver.py` caches `(hardware_id, pack_id) → slot` in
+Redis for 24 h. Migrating the mappings above changed the database and changed
+nothing on the wire, until the stale keys were deleted:
+
+```
+docker exec morghdari-redis redis-cli -a "$REDIS_PASSWORD" --no-auth-warning \
+  --scan --pattern 'slot:map:*' | xargs -r docker exec morghdari-redis \
+  redis-cli -a "$REDIS_PASSWORD" --no-auth-warning DEL
+```
+
+Worth knowing before anyone re-maps a pack in production and concludes the
+change did not work.
+
+### Also learned the hard way
+
+* **The platform gate wants `is_platform_staff`, not Django's `is_staff`.**
+  A caller created with `is_staff` alone gets `403 platform staff required`.
+* **Calling a view directly skips `TenantOrgMiddleware`**, so
+  `app.current_org_id` is never set and every tenant table refuses the write.
+  The harness sets the same GUC inside a transaction, exactly as the middleware
+  does — and *only* for org-scoped callers, matching the middleware's
+  platform-staff skip.
+* **The org, job, saloon and position are written over the admin alias**, with
+  explicit ids rather than object references (a reference across connections
+  trips the database router's relation check).
+* **The unit tests cannot catch any of this.** The test database carries no
+  `initdb` RLS policies, so a bare view call works there. Only the live server
+  exercises the real posture — which is the argument for the twin in the first
+  place.
