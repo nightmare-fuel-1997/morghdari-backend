@@ -4521,6 +4521,13 @@ paths:
                   username: { type: string }
                   password: { type: string }
                   rotation_pending: { type: boolean, example: true }
+                  command_uuid:
+                    type: string
+                    format: uuid
+                    description: >
+                      The ROTATE_CREDENTIAL command that delivers the password to
+                      the device. Rotation is not complete until the device
+                      answers it and the new password is presented to rotation-ack.
         '401': { description: Invalid or missing token }
         '403': { description: Caller is not manager/owner }
         '404': { description: Unknown or foreign gateway slot }
@@ -4558,6 +4565,53 @@ paths:
                   rotation_committed: { type: boolean, example: true }
         '401': { description: Invalid or missing token }
         '403': { description: Caller is not manager/owner }
+
+  /gateways/{gateway_slot_id}/commands/:
+    post:
+      tags: [Provisioning & Gateways]
+      summary: Issue a command to a gateway — manager/owner
+      description: >
+        Creates a GatewayCommand row and enqueues its publish. The device answers
+        in three separate events (ACK, then act, then SUCCESS/FAILED) and the
+        reconciler drives the row SENT to ACKNOWLEDGED to APPLIED. A command the
+        device does not answer within 10 minutes is expired by the sweep rather
+        than retried forever. PROVISION is issued by the bind flow and is refused
+        here (400); a gateway that is not PROVISIONED is a 409.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: gateway_slot_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind]
+              properties:
+                kind:
+                  type: string
+                  enum: [REFRESH_CONFIG, REBOOT, DIAGNOSTICS_REQUEST, ROTATE_CREDENTIAL]
+                params:
+                  type: object
+                  description: Kind-specific parameters, forwarded verbatim to the device.
+      responses:
+        '202':
+          description: Command accepted (broker verdict is asynchronous)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  command_uuid: { type: string, format: uuid }
+                  gateway_slot_id: { type: string }
+                  kind: { type: string }
+                  state: { type: string, example: PENDING }
+                  expires_at: { type: string, format: date-time }
+        '400': { description: Unknown kind, or PROVISION requested by a client }
+        '401': { description: Invalid or missing token }
+        '403': { description: Caller is not manager/owner }
+        '404': { description: Unknown or foreign gateway slot }
+        '409': { description: The slot is not PROVISIONED }
         '404': { description: Unknown or foreign gateway slot }
         '409': { description: No staged rotation, or the password does not match it }
 

@@ -5,11 +5,13 @@ from __future__ import annotations
 import logging
 import os
 import uuid
+from datetime import timedelta
 from typing import Any
 
 import redis
 from django.core.cache import cache
 from django.db import transaction
+from django.utils import timezone
 
 from apps.devices.models import GatewaySlot
 from apps.provisioning.models import ProvisioningAuditLog
@@ -19,6 +21,11 @@ logger = logging.getLogger(__name__)
 STATUS_CACHE_KEY = "gateway:status:{slot_id}"
 SYNC_LOCK_KEY = "lock:sync:{slot_id}"
 SYNC_LOCK_TTL_SECONDS = 30
+
+# A command the device has not answered within this window is expired by the
+# sweep rather than retried forever. 10 minutes is the same TTL the bind's
+# PROVISION command has always used, so one sweep policy covers both.
+COMMAND_TTL_MINUTES = 10
 
 _redis_client = None
 
@@ -225,3 +232,49 @@ def cached_status(slot_id: str) -> str | None:
     if status is not None:
         cache.set(key, status)
     return status
+
+
+# ---------------------------------------------------------------------------
+# Command issue (Phase 3 — the half of the channel that had no writer)
+# ---------------------------------------------------------------------------
+
+def issue_command(slot_id: str, kind: str, payload: dict | None = None,
+                  *, org_id=None) -> "GatewayCommand":
+    """Create a command row and enqueue its publish. Returns the row.
+
+    WHY this exists: `publish_command` and `reconcile_command_response` were
+    both written and both tested, but NOTHING in the application ever called
+    the publisher — the only callers were tests. The channel was therefore
+    fully specified, fully reconciled, and completely dead: a device could
+    answer a command it was never sent. `rotate_credential` had the same hole
+    one level up — it staged a new password and returned it, but never told the
+    device, so `rotation_ack` could only succeed if a human delivered the
+    password by hand.
+
+    The row is created inside the caller's transaction and the publish is
+    enqueued `on_commit`, so a rolled-back request never leaves a PENDING
+    command behind for the sweep to expire.
+    """
+    from apps.provisioning.models import GatewayCommand
+
+    # KINDS is a plain list of strings, not choices tuples — `dict()` on it
+    # raises, which is how this was caught.
+    if kind not in GatewayCommand.KINDS:
+        raise ValueError(f"unknown command kind {kind!r}")
+
+    command = GatewayCommand.objects.create(
+        org_id=org_id,
+        gateway_slot_id=slot_id,
+        kind=kind,
+        payload=payload or {},
+        state=GatewayCommand.STATE_PENDING,
+        expires_at=timezone.now() + timedelta(minutes=COMMAND_TTL_MINUTES),
+    )
+
+    def _enqueue():
+        from apps.provisioning.tasks import publish_command
+
+        publish_command.delay(str(command.pk))
+
+    transaction.on_commit(_enqueue)
+    return command

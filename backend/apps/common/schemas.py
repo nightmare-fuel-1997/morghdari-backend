@@ -86,6 +86,11 @@ def error_responses(*codes: int) -> dict:
     return {code: ERROR_RESPONSES[code] for code in codes}
 
 
+BAD_REQUEST_RESPONSE = OpenApiResponse(
+    response=ErrorEnvelopeSerializer,
+    description="Bad request — the body failed validation (unknown kind, missing field).",
+)
+
 CONFLICT_RESPONSE = OpenApiResponse(
     response=ErrorEnvelopeSerializer,
     description="Conflict — state precondition failed (e.g. concurrent sync lock, wrong flock state).",

@@ -315,3 +315,26 @@ class RotationAckRequestSerializer(serializers.Serializer):
 class RotationAckResponseSerializer(serializers.Serializer):
     gateway_slot_id = serializers.CharField()
     rotation_committed = serializers.BooleanField(help_text="True when the staged hash was promoted.")
+
+
+class GatewayCommandRequestSerializer(serializers.Serializer):
+    """One command to issue. `kind` is the discriminator; `params` is opaque to
+    the API and forwarded verbatim in the envelope, because each kind reads a
+    different key (`new_password` for rotation, nothing for a reboot)."""
+
+    kind = serializers.ChoiceField(
+        choices=["REFRESH_CONFIG", "REBOOT", "DIAGNOSTICS_REQUEST", "ROTATE_CREDENTIAL"],
+        help_text="Which command to issue. PROVISION is issued by the bind flow.",
+    )
+    params = serializers.DictField(
+        required=False, default=dict,
+        help_text="Kind-specific parameters, forwarded verbatim to the device.",
+    )
+
+
+class GatewayCommandResponseSerializer(serializers.Serializer):
+    command_uuid = serializers.UUIDField(help_text="Journal id to poll or reconcile against.")
+    gateway_slot_id = serializers.CharField()
+    kind = serializers.CharField()
+    state = serializers.CharField(help_text="Always PENDING on issue; the broker verdict is async.")
+    expires_at = serializers.DateTimeField(help_text="After this the sweep expires the command.")

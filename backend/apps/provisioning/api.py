@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 from apps.accounts.permissions import _claims
 from apps.tenants.context import admin_alias, tenant_context
 from apps.common.schemas import (
+    BAD_REQUEST_RESPONSE,
     CONFLICT_RESPONSE,
     RATE_LIMITED_RESPONSE,
     TAG_PROVISIONING,
@@ -53,6 +54,8 @@ from apps.provisioning.installations import (  # noqa: F401  (re-exported for ur
 from apps.provisioning.serializers import (
     CredentialRotationResponseSerializer,
     GatewayActionRequestSerializer,
+    GatewayCommandRequestSerializer,
+    GatewayCommandResponseSerializer,
     GatewayConfigResponseSerializer,
     GatewayRequestCreateSerializer,
     GatewayRequestSerializer,
@@ -1231,15 +1234,100 @@ def rotate_credential(request, gateway_slot_id: str):
         )
 
     from apps.mqtt_auth.services import stage_rotation
+    from apps.provisioning.services import issue_command
 
     raw = secrets.token_urlsafe(32)
     stage_rotation(slot.slot_id, raw)
+    # The device has to be TOLD. Staging the hash alone leaves the rotation
+    # half-done: the old password keeps working, the new one is never presented,
+    # and `rotation_ack` can only succeed if a human carries the password to the
+    # device by hand. The command carries it because that IS the delivery.
+    command = issue_command(
+        slot.slot_id, "ROTATE_CREDENTIAL",
+        payload={"new_password": raw},
+        org_id=org_id,
+    )
     return Response({
         "gateway_slot_id": slot.slot_id,
         "username": slot.slot_id,
         "password": raw,  # one-time issue; subsequent fetches see only the hash
         "rotation_pending": True,
+        "command_uuid": str(command.pk),
     }, status=200)
+
+
+@extend_schema(
+    tags=[TAG_PROVISIONING],
+    operation_id="issue_gateway_command",
+    summary="Issue a command to a gateway (REFRESH_CONFIG / REBOOT / DIAGNOSTICS_REQUEST)",
+    description="""Farm manager/owner only, and only for a gateway of the caller's org.
+
+Creates a `GatewayCommand` row and enqueues its publish. The device answers in
+three separate events (ACK → SUCCESS/FAILED), and the reconciler drives the row
+SENT → ACKNOWLEDGED → APPLIED. A command the device does not answer within 10
+minutes is expired by the sweep rather than retried forever.
+
+An unknown or unsupported `kind` is a 400; a gateway that is not `PROVISIONED`
+is a 409 — there is no point commanding a device that has never been configured.
+""",
+    parameters=[
+        OpenApiParameter(
+            "gateway_slot_id", str, OpenApiParameter.PATH, description="Gateway slot id (caller's org)."
+        )
+    ],
+    request=GatewayCommandRequestSerializer,
+    responses={
+        202: GatewayCommandResponseSerializer,
+        400: BAD_REQUEST_RESPONSE,
+        409: CONFLICT_RESPONSE,
+        **error_responses(401, 403, 404),
+    },
+)
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def issue_gateway_command(request, gateway_slot_id: str):
+    """Issue one command. 202 Accepted: the broker verdict is not known yet."""
+    org_id = _manager_or_error(request)
+    if org_id is None:
+        return Response({"error": "manager role required"}, status=403)
+    slot = _owned_slot(gateway_slot_id, org_id)
+    if slot is None:
+        return Response({"error": "gateway not found in caller organization"}, status=404)
+    if slot.provisioning_status != "PROVISIONED":
+        return Response(
+            {"error": f"command requires PROVISIONED gateway (status: {slot.provisioning_status})"},
+            status=409,
+        )
+
+    from apps.provisioning.models import GatewayCommand
+    from apps.provisioning.services import issue_command
+
+    kind = str(request.data.get("kind") or "").upper()
+    if kind not in GatewayCommand.KINDS:
+        return Response(
+            {"error": "invalid kind", "allowed": sorted(GatewayCommand.KINDS)},
+            status=400,
+        )
+    # PROVISION is issued by the bind itself; a client asking for one directly
+    # would be re-issuing something the install flow already owns.
+    if kind == GatewayCommand.KIND_PROVISION:
+        return Response(
+            {"error": "PROVISION is issued by the bind flow, not by clients"},
+            status=400,
+        )
+
+    command = issue_command(
+        slot.slot_id, kind,
+        payload=request.data.get("params") or {},
+        org_id=org_id,
+    )
+    return Response({
+        "command_uuid": str(command.pk),
+        "gateway_slot_id": slot.slot_id,
+        "kind": command.kind,
+        "state": command.state,
+        "expires_at": command.expires_at,
+    }, status=202)
 
 
 @extend_schema(

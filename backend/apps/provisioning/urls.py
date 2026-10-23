@@ -23,6 +23,7 @@ from apps.provisioning.api import (
     reject_gateway,
     resume_gateway,
     review_gateway_request,
+    issue_gateway_command,
     rotate_credential,
     rotation_ack,
     saloon_positions,
@@ -121,4 +122,6 @@ urlpatterns = [
     # M5-08 staged credential rotation
     path("gateways/<str:gateway_slot_id>/rotate-credential/", rotate_credential, name="gateway-rotate-credential"),
     path("gateways/<str:gateway_slot_id>/rotation-ack/", rotation_ack, name="gateway-rotation-ack"),
+    # Phase 3 command channel — the issue half, which had no writer until now
+    path("gateways/<str:gateway_slot_id>/commands/", issue_gateway_command, name="gateway-command-issue"),
 ]
