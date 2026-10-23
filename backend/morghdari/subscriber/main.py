@@ -437,6 +437,14 @@ def _handle_command_response(topic: str, payload: bytes, slot_id: str) -> None:
         logger.warning("command response on %s was not JSON; dropped", topic)
         return
     try:
+        # Belt and braces: `main()` initialises the ORM at startup, but this
+        # lane must never depend on another lane having done it first.
+        if not _django_ready():
+            logger.error(
+                "command response on %s dropped: the ORM is unavailable "
+                "(DATABASE_URL / DJANGO_SETTINGS_MODULE missing?)", topic
+            )
+            return
         from apps.provisioning.tasks import reconcile_command_response
 
         reconcile_command_response(body, topic_slot_id=slot_id or None)
@@ -464,6 +472,12 @@ def _handle_reported_device(topic: str, payload: bytes, slot_id: str) -> None:
         logger.warning("reported on %s was not JSON; dropped", topic)
         return
     try:
+        if not _django_ready():
+            logger.error(
+                "reported on %s dropped: the ORM is unavailable "
+                "(DATABASE_URL / DJANGO_SETTINGS_MODULE missing?)", topic
+            )
+            return
         from apps.provisioning.tasks import reconcile_reported
 
         reconcile_reported(body, topic_slot_id=slot_id or None)
@@ -635,6 +649,19 @@ def _on_disconnect(client, userdata, disconnect_flags, reason_code, properties=N
 def main() -> None:
     host = os.environ.get("MQTT_HOST", "127.0.0.1")
     port = int(os.environ.get("MQTT_PORT", "1883"))
+    # Bring the ORM up ONCE, here, rather than leaving it to happen by accident.
+    #
+    # Found 2026-10-23: `_django_ready()` was only ever reached from
+    # `_slot_db_fetch`, i.e. on a pack-resolution CACHE MISS. In steady state
+    # the resolver cache is warm (24 h TTL, and it survives a restart because it
+    # lives in Redis), so a freshly restarted subscriber could serve telemetry
+    # indefinitely without ever initialising Django. The first command response
+    # then died with `AppRegistryNotReady: Apps aren't loaded yet` inside
+    # `reconcile_command_response`, and the command sat at SENT forever.
+    #
+    # The reported lane had the same latent bug — it was only ever safe because
+    # telemetry happened to warm Django first.
+    _django_ready()
     client = build_client()
     threading.Thread(target=_serve_metrics, daemon=True, name="metrics").start()
     logger.info("booting subscriber → %s:%s", host, port)
