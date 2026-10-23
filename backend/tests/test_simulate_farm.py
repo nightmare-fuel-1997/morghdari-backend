@@ -271,6 +271,15 @@ def _fake_paho(monkeypatch, client):
     """
     fake_client = types.ModuleType("paho.mqtt.client")
     fake_client.CallbackAPIVersion = types.SimpleNamespace(VERSION2="v2")
+    # The protocol constants are part of the module surface the code under test
+    # uses: `simulate_farm.publish_loop` passes `protocol=mqtt.MQTTv311` (the
+    # fleet pin, owner decision 2026-10-18). The stub predates that pin and did
+    # not carry them, so both publish-loop tests died with
+    # `AttributeError: module 'paho.mqtt.client' has no attribute 'MQTTv311'`
+    # — a stub that was never updated alongside the code it stubs.
+    fake_client.MQTTv31 = 3
+    fake_client.MQTTv311 = 4
+    fake_client.MQTTv5 = 5
     fake_client.Client = lambda *a, **k: client
     fake_mqtt = types.ModuleType("paho.mqtt")
     fake_mqtt.client = fake_client
