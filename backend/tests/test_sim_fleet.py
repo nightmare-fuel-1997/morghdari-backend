@@ -20,6 +20,16 @@ import sim  # noqa: E402
 import twin  # noqa: E402
 
 
+# ---- the provisioned-credentials path --------------------------------------
+
+PROVISIONED = {
+    "GW-AUTO-000001": {
+        "username": "GW-AUTO-000001", "password": "p1", "farm_id": 12,
+        "hardware_id": "AA:BB:CC:000001", "packs": ["a1b2c3d4", "e5f6a7b8"],
+    },
+}
+
+
 class StubTwin:
     """A twin that never touches the network."""
 
@@ -27,6 +37,8 @@ class StubTwin:
         self.unit_id = unit_id
         self.password = password
         self.farm_id = farm_id
+        self.hardware_id = kwargs.get("hardware_id") or ("HW-" + unit_id[len("GW-"):])
+        self.packs = list(kwargs.get("packs") or ("P-A", "P-B"))
         self.interval_sec = kwargs.get("interval_sec", 60)
         self.report_interval_sec = self.interval_sec
         self.connected = False
@@ -66,7 +78,12 @@ def fleet(monkeypatch):
 
 
 def _write_creds(tmp_path, data):
-    path = tmp_path / "creds.json"
+    """`tmp_path` may be a directory that does not exist yet."""
+    if isinstance(tmp_path, str) and tmp_path.endswith(".json"):
+        path = Path(tmp_path)
+    else:
+        path = Path(tmp_path) / "creds.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data), encoding="utf-8")
     return str(path)
 
@@ -91,9 +108,19 @@ def test_an_entry_without_a_password_is_skipped_not_crashed(fleet, tmp_path):
     assert fleet.twins[0].unit_id == "GW-GOOD"
 
 
-def test_a_missing_credentials_file_is_fatal(fleet, tmp_path):
-    with pytest.raises(FileNotFoundError):
-        fleet.load_credentials(str(tmp_path / "nope.json"))
+def test_a_missing_credentials_file_is_skipped_not_fatal(fleet, tmp_path):
+    """One unreadable source must not take the fleet down — the provisioned
+    file is allowed to be absent, so the base one being absent is the same
+    shape of problem. `main()` is what refuses to start with nothing."""
+    assert fleet.load_credentials(str(tmp_path / "nope.json")) == 0
+
+
+def test_a_missing_provisioned_file_is_not_an_error(fleet, tmp_path, monkeypatch):
+    """A fleet that has never provisioned anything must start normally."""
+    monkeypatch.setattr(sim, "PROVISIONED_PATH", str(tmp_path / "absent.json"))
+    base = _write_creds(tmp_path / "base", {"GW-A": {"password": "p", "farm_id": 1}})
+    assert fleet.load_credentials(base, sim.PROVISIONED_PATH) == 1
+    assert fleet.reload_provisioned() == 0
 
 
 def test_a_refused_connection_is_retried_then_logged_critical(fleet, tmp_path):
@@ -187,3 +214,80 @@ def test_the_fault_profile_defaults_to_off():
     f = twin.FaultProfile()
     assert f.describe() == "none"
     assert (f.drop_connectivity, f.delay_send, f.invalid_reading, f.restart) == (0, 0, 0, 0)
+
+
+# ---- provisioned gateways --------------------------------------------------
+
+def _write_provisioned(tmp_path, data):
+    path = tmp_path / "provisioned.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return str(path)
+
+
+def test_a_provisioned_gateway_is_merged_into_the_fleet(fleet, tmp_path, monkeypatch):
+    """The whole point of provision.py: a new gateway joins the fleet without
+    anyone editing the credentials file by hand."""
+    path = _write_provisioned(tmp_path, PROVISIONED)
+    monkeypatch.setattr(sim, "PROVISIONED_PATH", path)
+    base = _write_creds(tmp_path / "base", {"GW-A": {"password": "p", "farm_id": 1}})
+
+    assert fleet.load_credentials(base, path) == 2
+    auto = [t for t in fleet.twins if t.unit_id == "GW-AUTO-000001"][0]
+    assert auto.farm_id == 12
+    # the pack ids and hardware id come from the provisioning, not a default
+    assert auto.hardware_id == "AA:BB:CC:000001"
+    assert auto.packs == ["a1b2c3d4", "e5f6a7b8"]
+
+
+def test_a_provisioned_gateway_joins_a_running_fleet(fleet, tmp_path, monkeypatch):
+    """The reload path: the simulator is already up when the gateway appears."""
+    path = _write_provisioned(tmp_path, PROVISIONED)
+    monkeypatch.setattr(sim, "PROVISIONED_PATH", path)
+    base = _write_creds(tmp_path / "base", {"GW-A": {"password": "p", "farm_id": 1}})
+    fleet.load_credentials(base)
+
+    assert fleet.reload_provisioned() == 1
+    assert len(fleet.twins) == 2
+    # the new one is connected, not merely listed — `load_credentials` alone
+    # does not connect anything, so only the newcomer is asserted here
+    assert fleet.twins[-1].connected
+    assert fleet.twins[-1].unit_id == "GW-AUTO-000001"
+
+
+def test_a_reload_does_not_restart_a_running_twin(fleet, tmp_path, monkeypatch):
+    """Restarting a healthy device to refresh its credential would be worse
+    than the staleness — an existing twin is left exactly as it is."""
+    path = _write_provisioned(tmp_path, PROVISIONED)
+    monkeypatch.setattr(sim, "PROVISIONED_PATH", path)
+    base = _write_creds(tmp_path / "base", {"GW-A": {"password": "p", "farm_id": 1}})
+    fleet.load_credentials(base, path)
+    before = fleet.twins[0].start_calls
+
+    assert fleet.reload_provisioned() == 0
+    assert fleet.twins[0].start_calls == before
+
+
+def test_a_missing_provisioned_file_is_not_an_error(fleet, tmp_path, monkeypatch):
+    """A fleet that has never provisioned anything must start normally."""
+    monkeypatch.setattr(sim, "PROVISIONED_PATH", str(tmp_path / "absent.json"))
+    base = _write_creds(tmp_path / "base", {"GW-A": {"password": "p", "farm_id": 1}})
+    assert fleet.load_credentials(base, sim.PROVISIONED_PATH) == 1
+    assert fleet.reload_provisioned() == 0
+
+
+def test_an_unreadable_provisioned_file_is_skipped_not_fatal(fleet, tmp_path, monkeypatch):
+    path = tmp_path / "broken.json"
+    path.write_text("{not json", encoding="utf-8")
+    monkeypatch.setattr(sim, "PROVISIONED_PATH", str(path))
+    base = _write_creds(tmp_path / "base", {"GW-A": {"password": "p", "farm_id": 1}})
+    assert fleet.load_credentials(base, str(path)) == 1
+    assert fleet.reload_provisioned() == 0
+
+
+def test_the_default_pack_ids_are_backward_compatible(fleet, tmp_path):
+    """A credentials entry with no packs must still get the fleet's P-A/P-B,
+    which is what the existing mappings were built with."""
+    base = _write_creds(tmp_path / "base", {"GW-LEGACY": {"password": "p", "farm_id": 1}})
+    fleet.load_credentials(base)
+    assert fleet.twins[0].packs == ["P-A", "P-B"]
+    assert fleet.twins[0].hardware_id == "HW-LEGACY"

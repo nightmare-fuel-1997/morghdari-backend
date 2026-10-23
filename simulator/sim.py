@@ -56,7 +56,12 @@ from twin import DigitalTwin, FaultProfile  # noqa: E402
 
 LOG = logging.getLogger("sim")
 
-CREDS_PATH = os.environ.get("SIM_CREDS_PATH", "/sim/creds.json")
+CREDS_PATH = os.environ.get("SIM_CREDS_PATH", "/creds.json")
+# Gateways created by provision.py. The fleet merges this in and reloads it, so
+# a newly installed gateway starts reporting without restarting the simulator.
+PROVISIONED_PATH = os.environ.get(
+    "SIM_PROVISIONED_PATH", "/sim-state/provisioned.json")
+RELOAD_EVERY_SEC = float(os.environ.get("SIM_RELOAD_SEC", "30"))
 SUMMARY_EVERY_SEC = float(os.environ.get("SIM_SUMMARY_SEC", "300"))
 
 
@@ -76,28 +81,70 @@ class Fleet:
         self.twins: list[DigitalTwin] = []
         self._stopping = False
         self._last_summary = 0.0
+        self._last_reload = 0.0
 
     # ------------------------------------------------------------------ load
-    def load_credentials(self, path: str) -> int:
-        """Build one twin per credential entry. Returns how many were built."""
-        with open(path, encoding="utf-8") as handle:
-            creds = json.load(handle)
+    def load_credentials(self, *paths) -> int:
+        """Build one twin per credential entry. Returns how many were built.
 
-        for slot, entry in creds.items():
+        Several files may be given; later ones win on a duplicate slot, so the
+        provisioned file can override the base one.
+        """
+        merged = {}
+        for path in paths:
+            try:
+                with open(path, encoding="utf-8") as handle:
+                    merged.update(json.load(handle))
+            except FileNotFoundError:
+                LOG.info("no credentials at %s — skipped", path)
+            except (ValueError, OSError) as exc:
+                LOG.error("%s is not usable (%s) — skipped", path, exc)
+
+        for slot, entry in merged.items():
             password = entry.get("password") or ""
             if not password:
-                LOG.error("%s has no password in %s — skipped", slot, path)
+                LOG.error("%s has no password — skipped", slot)
                 continue
-            self.twins.append(DigitalTwin(
-                unit_id=slot,
-                password=password,
-                farm_id=entry.get("farm_id"),
-                host=self.host,
-                port=self.port,
-                interval_sec=self.interval,
-                faults=self.faults,
-            ))
+            self.twins.append(self._make_twin(slot, entry))
         return len(self.twins)
+
+    def _make_twin(self, slot: str, entry: dict) -> DigitalTwin:
+        return DigitalTwin(
+            unit_id=slot,
+            password=entry["password"],
+            farm_id=entry.get("farm_id"),
+            hardware_id=entry.get("hardware_id"),
+            packs=tuple(entry.get("packs") or ("P-A", "P-B")),
+            host=self.host,
+            port=self.port,
+            interval_sec=self.interval,
+            faults=self.faults,
+        )
+
+    def reload_provisioned(self) -> int:
+        """Pick up gateways provision.py has installed since we started.
+
+        A new gateway is appended; an existing one is left alone, because its
+        twin is already running with its own state and restarting a healthy
+        device to refresh a credential would be worse than the staleness.
+        """
+        try:
+            with open(PROVISIONED_PATH, encoding="utf-8") as handle:
+                fresh = json.load(handle)
+        except FileNotFoundError:
+            return 0
+        except (ValueError, OSError):
+            return 0
+        known = {t.unit_id for t in self.twins}
+        added = 0
+        for slot, entry in fresh.items():
+            if slot in known or not entry.get("password"):
+                continue
+            self.twins.append(self._make_twin(slot, entry))
+            self._connect_with_retry(self.twins[-1])
+            added += 1
+            LOG.info("joined the fleet: %s (farm %s)", slot, entry.get("farm_id"))
+        return added
 
     # ----------------------------------------------------------------- start
     def start_all(self) -> None:
@@ -147,6 +194,9 @@ class Fleet:
             if now - self._last_summary >= SUMMARY_EVERY_SEC:
                 self._last_summary = now
                 self._log_summary()
+            if now - self._last_reload >= RELOAD_EVERY_SEC:
+                self._last_reload = now
+                self.reload_provisioned()
             time.sleep(1.0)
         self.stop_all()
 
@@ -205,7 +255,7 @@ def main() -> int:
 
     fleet = Fleet(host, port, interval, faults)
     try:
-        count = fleet.load_credentials(CREDS_PATH)
+        count = fleet.load_credentials(CREDS_PATH, PROVISIONED_PATH)
     except FileNotFoundError:
         LOG.critical("no credentials at %s — nothing to simulate", CREDS_PATH)
         return 1

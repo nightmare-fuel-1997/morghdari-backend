@@ -47,7 +47,38 @@ services:
       # separate /creds.json below, pointed at by SIM_CREDS_PATH.
       - ./simulator:/sim:ro
       - ./.sim.env:/creds.json:ro
+      # Where provision.py leaves credentials for newly installed gateways.
+      # The fleet reloads this, so a new gateway joins without a restart.
+      - sim_state:/sim-state
     depends_on:
       - emqx
       - redis
     restart: "no"
+
+  # One-shot: install N NEW gateways through the real flow and write their
+  # credentials into the shared state, where the simulator picks them up.
+  #   docker compose ... run --rm provisioner
+  #   docker compose ... run --rm -e SIM_PROVISION_COUNT=3 provisioner
+  provisioner:
+    image: ghcr.io/morghdari/backend:${MORGHDARI_TAG}
+    container_name: morghdari-provisioner
+    mem_limit: 512m
+    command: python /sim/provision.py --count ${SIM_PROVISION_COUNT:-1}
+    environment:
+      DJANGO_SETTINGS_MODULE: "config.settings.production"
+      DATABASE_URL: "postgres://${DATABASE_USER}:${DATABASE_PASSWORD}@postgres:5432/${DATABASE_NAME}"
+      DATABASE_ADMIN_URL: "postgres://${POSTGRES_ADMIN_USER}:${POSTGRES_ADMIN_PASSWORD}@postgres:5432/${DATABASE_NAME}"
+      REDIS_URL: "redis://:${REDIS_PASSWORD}@redis:6379"
+      DJANGO_SECRET_KEY: "${DJANGO_SECRET_KEY}"
+      DJANGO_ALLOWED_HOSTS: "*"
+      DJANGO_DEBUG: "False"
+      SIM_STATE_DIR: "/sim-state"
+    volumes:
+      - ./simulator:/sim:ro
+      - sim_state:/sim-state
+    depends_on:
+      - postgres
+    restart: "no"
+
+volumes:
+  sim_state:
