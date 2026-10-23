@@ -589,3 +589,55 @@ change did not work.
   `initdb` RLS policies, so a bare view call works there. Only the live server
   exercises the real posture — which is the argument for the twin in the first
   place.
+
+---
+
+## 13. Verification round — what checking (instead of assuming) turned up
+
+The instruction was to keep going until everything was certain. Three things
+were not, and all three were invisible from the outside.
+
+### 1. The command channel could never send a command
+
+Every twin reported `cmds=0`, which I had read as "nothing has been sent to
+them". The truth was stronger: nothing **could** be. `publish_command` and
+`reconcile_command_response` both existed and were both tested, but no
+application code ever called the publisher — the only callers were tests. The
+channel was fully specified, fully reconciled, and completely dead.
+
+`rotate_credential` had the same hole one level up: it staged a new password and
+returned it once, but never told the device, so `rotation_ack` could only succeed
+if a human carried the password to the gateway by hand.
+
+Fixed by `issue_command()` (creates the row, enqueues the publish `on_commit`)
+and `POST /gateways/{slot}/commands/`. Rotation now issues the command that
+carries the password — the command **is** the delivery. §12's table of the three
+command events now actually happens.
+
+### 2. Three test-harness tables were gated behind a marker they do not need
+
+`DailyReport`, `DailyReportExtra` and `MetricDailyAggregate` are all
+`managed = False` with a `RESTRICT` FK to Saloon, so Django's delete collector
+queries them whenever a saloon is deleted — marker or no marker. Under
+`--nomigrations` they exist only as `RunSQL`, so every farm/saloon delete test
+failed on a cold DB with `relation "..." does not exist` for a table it never
+mentions.
+
+`legacy_slug_map` was fixed exactly this way in September. The same bug was then
+repeated twice. All three now sit beside it in `_materialize_compat_schema`.
+
+### 3. How the suite is actually run
+
+The dev box cannot run this suite: it has no local Redis, so 14 tests in
+`test_followthrough_core.py` fail on connection refused before any assertion
+runs. That looked like a code problem and was not.
+
+The suite now runs **on the server**, in a throwaway container against a
+throwaway database (`morghdari_testrun`), with the runtime image plus
+`pytest`/`pytest-django`/`pytest-cov`. `test_followthrough_core.py` went from
+**14 failed / 1 passed** to **17 passed**.
+
+**One caution worth recording:** the first verification of that fix was wrong. I
+re-ran against a stale `test_`-prefixed database that pytest had not recreated,
+concluded the fix did not work, and very nearly reverted it. Drop **both**
+`morghdari_testrun` and `test_morghdari_testrun` before judging a cold-DB fix.
