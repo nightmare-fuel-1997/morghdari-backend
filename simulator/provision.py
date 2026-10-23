@@ -368,7 +368,11 @@ def main() -> int:
 
     with open(args.output, "w", encoding="utf-8") as handle:
         json.dump(existing, handle, indent=2)
-    os.chmod(args.output, 0o600)
+    # 0o644, not 0o600: the provisioner runs as root (the shared volume is
+    # root-owned) while the simulator runs as appuser, and it has to read this
+    # file. The file contains the fleet's MQTT passwords, so it lives in a
+    # docker volume that is never bind-mounted from a host directory.
+    os.chmod(args.output, 0o644)
     LOG.info("wrote %d gateway credential(s) to %s", len(existing), args.output)
     return 0
 

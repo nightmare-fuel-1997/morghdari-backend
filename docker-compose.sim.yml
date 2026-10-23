@@ -67,6 +67,11 @@ services:
     # Django lives at /app in the image; running the script from /sim would put
     # /sim on sys.path instead and `config` would not be importable.
     working_dir: /app
+    # Root, because the named volume is created root-owned and the image's
+    # appuser (uid 1000) cannot write into it. The one thing this container
+    # writes is a credentials file, which it makes world-readable so the
+    # simulator (running as appuser) can read it back.
+    user: "0:0"
     environment:
       PYTHONPATH: "/app"
       DJANGO_SETTINGS_MODULE: "config.settings.production"
@@ -77,8 +82,21 @@ services:
       DJANGO_ALLOWED_HOSTS: "*"
       DJANGO_DEBUG: "False"
       SIM_STATE_DIR: "/sim-state"
+      # Bind publishes the desired-state document through the backend's own
+      # publisher. Without these the publish fails inside this container and the
+      # new gateway has no configuration to apply - it would sit at applied_v=0
+      # exactly like the legacy gateways did. Same env the celery worker uses.
+      MQTT_HOST: "emqx"
+      MQTT_PORT: "8883"
+      MQTT_TLS: "1"
+      MQTT_TLS_CA: "/app/certs/ca.crt"
+      MQTT_TLS_INSECURE: "1"
+      PUBLISHER_USERNAME: "${PUBLISHER_USERNAME}"
+      PUBLISHER_PASSWORD: "${PUBLISHER_PASSWORD}"
+      PUBLISHER_CLIENT_ID: "django-backend"
     volumes:
       - ./simulator:/sim:ro
+      - ./certs:/app/certs:ro
       - sim_state:/sim-state
     depends_on:
       - postgres
