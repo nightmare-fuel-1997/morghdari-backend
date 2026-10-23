@@ -337,53 +337,53 @@ def _materialize_compat_schema() -> None:
         spec.loader.exec_module(module)
         _execute_sql(cursor, module.SQL)
 
-    # `metric_daily_aggregates`, for the same reason and with the same shape.
+    # The migration-only tables that CORE TOPOLOGY depends on, all for the same
+    # reason as legacy_slug_map: their models are managed=False with a RESTRICT
+    # FK to Saloon, so Django's delete collector queries them whenever a saloon
+    # is deleted. Under --nomigrations they exist only as RunSQL inside their
+    # migrations, so every farm/saloon delete test failed on a cold DB with
+    # `relation "..." does not exist`.
     #
-    # MetricDailyAggregate is managed=False with a RESTRICT FK to Saloon, so
-    # Django's delete collector queries the table whenever a saloon is deleted
-    # — core topology, not an optional rollup feature. Under --nomigrations the
-    # table exists only as RunSQL in monitoring/0002, so every farm/saloon
-    # delete test failed on a cold DB with `relation "metric_daily_aggregates"
-    # does not exist`. It was already materialized, but only behind the
-    # `use_migrations` marker, which those tests do not carry.
-    with connection.cursor() as cursor:
-        if cursor.execute(
-            "SELECT to_regclass('public.metric_daily_aggregates') IS NOT NULL"
-        ).fetchone()[0]:
-            return
-        _execute_sql(
-            cursor,
-            _reports_ddl(
-                BACKEND_DIR / "apps" / "monitoring" / "migrations" / "0002_daily_aggregates.py"
-            ),
-        )
+    # They used to live behind the `use_migrations` marker, which those tests do
+    # not carry — the same mistake twice, so they are unconditional now.
+    for path in (
+        BACKEND_DIR / "apps" / "reports" / "migrations" / "0001_initial.py",
+        BACKEND_DIR / "apps" / "reports" / "migrations" / "0002_daily_report_extras.py",
+        BACKEND_DIR / "apps" / "monitoring" / "migrations" / "0002_daily_aggregates.py",
+    ):
+        table = _reports_table_name(path)
+        with connection.cursor() as cursor:
+            if cursor.execute(
+                "SELECT to_regclass(%s) IS NOT NULL", [f"public.{table}"]
+            ).fetchone()[0]:
+                continue
+            _execute_sql(cursor, _reports_ddl(path))
+
+
+def _reports_table_name(path: Path) -> str:
+    """The first table a reports-style migration creates, for the to_regclass guard."""
+    return {
+        "0001_initial": "daily_reports",
+        "0002_daily_report_extras": "daily_report_extras",
+        "0002_daily_aggregates": "metric_daily_aggregates",
+    }[path.stem]
 
 
 def _materialize_use_migrations_schema(request) -> None:
-    """Create the `use_migrations` marker's SQL artifacts on a fresh test DB.
+    """Nothing to do: the marker's SQL artifacts moved to compat (2026-10-23).
 
-    Only the reports app needs this: its models are managed=False and their
-    tables exist solely as RunSQL inside reports/0001-0002, so syncdb skips
-    them and a cold DB has no daily_reports (F2). The migration SQL is
-    written idempotently (to_regclass guards, DROP POLICY IF EXISTS) — safe
-    to execute directly, exactly like the timescale_db fixture does for
-    telemetry/0002. Non-Postgres (sqlite laptop loop) and marker-less
-    sessions skip — same pragmatism as the seeded fixtures.
+    This function used to create the reports app's unmanaged tables, gated on
+    the `use_migrations` marker. That was the bug: those tables — and
+    monitoring/0002's aggregates — have RESTRICT FKs to Saloon, so deleting a
+    saloon queries them whether or not the test carries the marker. Farm/saloon
+    delete tests failed on a cold DB for a table they never mention.
+
+    They are now materialized unconditionally by `_materialize_compat_schema`,
+    beside `legacy_slug_map`, which had the identical problem and the identical
+    fix. The marker itself still does its real job — pytest-django enables
+    migrations for the tests that carry it, via `_disable_migrations()` in
+    `django_db_setup` — so it stays declared.
     """
-    if connection.vendor != "postgresql":
-        return
-    if not any(item.get_closest_marker("use_migrations") for item in request.session.items):
-        return
-    reports_dir = BACKEND_DIR / "apps" / "reports" / "migrations"
-    with connection.cursor() as cursor:
-        if not cursor.execute(
-            "SELECT to_regclass('public.daily_reports') IS NOT NULL"
-        ).fetchone()[0]:
-            _execute_sql(cursor, _reports_ddl(reports_dir / "0001_initial.py"))
-        if not cursor.execute(
-            "SELECT to_regclass('public.daily_report_extras') IS NOT NULL"
-        ).fetchone()[0]:
-            _execute_sql(cursor, _reports_ddl(reports_dir / "0002_daily_report_extras.py"))
 
 
 
