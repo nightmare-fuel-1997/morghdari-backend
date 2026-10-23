@@ -105,8 +105,11 @@ def provision_one(index: int, _as, models) -> dict:
     city = models.City.objects.create(province=province, name=f"C-{tag}")
 
     manager = User.objects.create_user(username=f"auto-manager-{tag}", password="x")
+    # Explicit ids, not object references: assigning a User fetched on the
+    # default connection to a row being written on the admin alias trips the
+    # database router's relation check.
     models.OrgMember.objects.using(admin_alias()).create(
-        user=manager, org=org, role="manager", is_active=True)
+        user_id=manager.pk, org_id=org.pk, role="manager", is_active=True)
     reviewer = models.staff(f"auto-reviewer-{tag}", "admin")
     support = models.staff(f"auto-support-{tag}", "support")
     installer = models.installer(f"auto-installer-{tag}", org)
@@ -274,7 +277,7 @@ class _Models:
         from apps.tenants.context import admin_alias
 
         OrgMember.objects.using(admin_alias()).create(
-            user=user, org=org, role="installer", is_active=True)
+            user_id=user.pk, org_id=org.pk, role="installer", is_active=True)
         return user
 
 
