@@ -256,26 +256,47 @@ class _Models:
 
     @staticmethod
     def staff(username, role):
+        """A platform-staff caller.
+
+        `is_staff` (Django's admin flag) is NOT what the platform gate checks —
+        it requires `is_platform_staff` plus a `staff_role` in the allowed set.
+        Setting only the former is exactly how this failed the first time: a 403
+        "platform staff required" for a user who looks like staff everywhere else.
+        """
         from django.contrib.auth import get_user_model
 
         User = get_user_model()
-        user, created = User.objects.get_or_create(
-            username=username, defaults={"is_staff": True, "is_active": True})
+        user, created = User.objects.get_or_create(username=username)
         if created:
             user.set_unusable_password()
-            user.save()
+        user.is_platform_staff = True
+        user.staff_role = role
+        user.is_active = True
+        user.save(update_fields=["is_platform_staff", "staff_role", "is_active",
+                                 "password"])
         return user
 
     @staticmethod
     def installer(username, org):
+        """An installer: platform staff carrying `staff_role = "installer"`.
+
+        The install endpoints gate on the staff role, not on the org membership,
+        so the installer is a platform-staff user FIRST and a member second —
+        exactly as `_installer()` builds one in the live proof.
+        """
         from django.contrib.auth import get_user_model
 
         from apps.accounts.models import OrgMember
+        from apps.tenants.context import admin_alias
 
         User = get_user_model()
         user = User.objects.create_user(username=username, password="x")
-        from apps.tenants.context import admin_alias
-
+        user.is_platform_staff = True
+        user.staff_role = "installer"
+        user.save(update_fields=["is_platform_staff", "staff_role"])
+        # Explicit ids, not object references: assigning a User fetched on the
+        # default connection to a row written on the admin alias trips the
+        # database router's relation check.
         OrgMember.objects.using(admin_alias()).create(
             user_id=user.pk, org_id=org.pk, role="installer", is_active=True)
         return user
