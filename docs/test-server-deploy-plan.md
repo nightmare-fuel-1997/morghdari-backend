@@ -339,60 +339,101 @@ apply". The end state was verified independently rather than assumed.
 That string comes from a settings constant, not the image, so it does not track
 the tag. The authoritative evidence of the running build is the image ID above.
 
-**Blocked at:** SSH to `82.115.17.252:22` stopped accepting connections during
-step 4. Diagnosed from outside:
-
-| Port | State |
-|---|---|
-| 22 (SSH) | **TCP dropped** |
-| 80 / 443 (nginx) | open — `https://…/api/v1/health/` returns `{"status":"healthy","version":"0.8-DR",…}` with database and Redis `ok` |
-| 8883 (broker) | open — TLS handshake succeeds, `TLS_AES_256_GCM_SHA384` |
-| 18083 / 8000 | not exposed (expected) |
-
-ICMP ping succeeds throughout. So the host, the application and the broker are
-all healthy; **only SSH is unreachable**, which is the signature of an IP-level
-block (fail2ban or a provider firewall) rather than a server fault. I made ~20
-rapid SSH connections in a short window, which is the usual trigger.
-
-**What to do to resume** — any one of these:
-
-1. Wait for the ban to expire (commonly 10 min – 1 h) and retry; the build will
-   have finished by then and step 4 just needs verifying.
-2. From another shell on the server, check and clear it. **This machine's public
-   IP is `104.167.199.165`** (it may have rotated — an allowlist that names an
-   older address produces exactly this symptom):
-   ```
-   fail2ban-client status sshd
-   fail2ban-client set sshd unbanip 104.167.199.165
-   ufw status numbered          # is 22 restricted to a specific source IP?
-   ufw allow from 104.167.199.165 to any port 22
-   ```
-3. If it is the provider's firewall rather than the host, allowlist the IP above
-   or use the server's console/VNC.
-
-**Diagnosis so far** (14:10, ~70 min after the block began): ICMP ping succeeds,
-ports 80/443 open and serving, broker 8883 completes a TLS handshake, app health
-returns `{"status":"healthy","version":"0.8-DR"}`. Port 22 alone is dropped. A
-*refused* port would mean sshd died; a *dropped* port means a filter in front of
-it — fail2ban, `ufw`, or the provider.
-
-**Re-checked 14:00 (from outside, no SSH):** the app still reports
-`{"status":"healthy","version":"0.8-DR"}` — the *running* build is unchanged, as
-intended. Broker TLS still fine, SSH still blocked. One new thing to look at when
-access returns: the health payload reports `queue_depth.realtime = 100002`, which
-is either a ~100k-message telemetry backlog or a cumulative counter. Worth one
-look **before** deploying, because restarting the worker will flush or stall
-whatever is sitting in that queue.
-
-**Then continue at step 4's verification:**
-
-```
-tail -5 /tmp/build-vps03.log
-docker images ghcr.io/morghdari/backend:vps-03 --format "{{.Tag}} {{.Size}}"
-```
-
-and proceed to step 5. Nothing already done needs repeating, and no step that
-has run can have left the system in a worse state than it is now — the running
-containers are still on `vps-02` with the old schema.
-
 ---
+## 10. The simulator — a digital twin, and the bug it found
+
+The old simulator was a telemetry generator: it connected, published schema-2.0
+readings, and never subscribed, never applied a configuration, never answered a
+command and never published status. It could not exercise the parts of the system
+that matter, and it could not fail the way hardware fails.
+
+`simulator/twin.py` is now a **DigitalTwin** — one simulated physical device
+implementing `docs/hardware-firmware-requirements-v1.md` from scratch, with no
+imports from `apps/` or `morghdari/`, so a bug in our shared grammar still gets
+caught. `simulator/sim.py` is the fleet that runs one twin per gateway.
+
+### What it does, and what that proved live
+
+| Step | What the twin does | Verified on the server |
+|---|---|---|
+| Connect | TLS, MQTT 3.1.1, `username = unit_id` | all 3 twins connected |
+| Subscribe | `devices/{id}/desired` + `/command` | granted, after the ACL fix below |
+| Receive config | the retained document, published by the backend's own publisher | 3 retained documents present |
+| Apply | validate → monotonic guard → apply → report `APPLIED` | `applied_v=1`, `state=CONFIGURED` |
+| Record | `reconcile_reported` updates the slot | `applied = desired = 1` on all three |
+| Telemetry | schema 2.0, per-pack readings on the tenant lane | 6 sensor slots receiving rows continuously |
+| Identify | `gateway_slot_id`, `farm_id`, `pack_id` on every message | per-slot row counts distinct and current |
+
+Telemetry sample from a live twin — realistic, complete, in range:
+
+```json
+{"co": 3.23, "lux": 289.13, "nh3": 6.46, "temp": 23.34,
+ "water_l": 0.89, "humidity": 58.14, "power_gen": 0.0, "power_mains": 217.68}
+```
+
+### The bug the twin found
+
+The first deploy of the twin showed all three gateways connecting and then
+sitting at `applied_v=0` forever. The subscriber's log said why:
+
+```
+reconcile_reported: unknown slot GW-SIM-01
+```
+
+`reconcile_reported()` discovers the slot over `admin_alias()`, and
+`admin_alias()` falls back to `"default"` when no `DATABASE_ADMIN_URL` is
+configured. Every tenant table is FORCE ROW LEVEL SECURITY, so a context-free
+read as the app role returns **zero rows by design**. The subscriber only ever
+had `DATABASE_URL`.
+
+**Consequence: the entire config-apply lane was dead in production.** Every
+device reported `APPLIED`, the backend logged "unknown slot", and nothing else
+looked wrong — so `applied_config_version` could never leave 0 and the
+submit → PROVISIONED check could never pass. The same silence that hid the
+status lane (D1) and the command lane (D9), a third time.
+
+Fixed in `404c219`: both subscribers now carry `DATABASE_ADMIN_URL`, the same
+posture daphne and the celery worker already use — discovery over the admin
+alias, per-tenant reads and writes still inside `tenant_context`.
+
+### Two more things the twin exposed
+
+1. **The legacy gateways had no device-lane ACL at all.** The old approval flow
+   granted nine tenant rules and nothing on `devices/...`. With the broker's
+   `deny_action = ignore`, a denied SUBSCRIBE is *silent*: the client connects,
+   authenticates, and simply never receives anything. Granted with the backend's
+   own `bootstrap_acl_rule_items()`.
+2. **The legacy gateways had never been issued a configuration.**
+   `desired_config_version` was 0 and no retained document existed — the old
+   flow minted a slot, credential and ACL and stopped. Issued through the
+   backend's own `publish_desired_state_for()`, exactly as bind does.
+
+### What it models beyond the happy path
+
+* **Fault injection**, all off by default so a clean run stays clean:
+  `SIM_FAULT_DROP` (skip windows), `SIM_FAULT_DELAY` + `SIM_FAULT_DELAY_SEC`
+  (late sends), `SIM_FAULT_INVALID` (readings outside physical range),
+  `SIM_FAULT_RESTART` (power cycles). Documented in `docker-compose.sim.yml`.
+* **Reconnection with backoff**, and `applied_version` surviving a reboot — a
+  real device re-applies nothing on boot, which is what makes the server's
+  monotonic guard meaningful.
+* **Status with a Last Will**, so an unclean death reads as OFFLINE. Only once
+  bound: an unbound device has no status topic, and publishing to one the ACL
+  denies is exactly the kind of noise a twin should not make.
+* **The command channel in three separate events** (ACK → act → SUCCESS), an
+  expired command *answered* rather than ignored, an unknown action FAILED with
+  a reason, and rotation that proves the new password and defers the reconnect.
+
+### Known limitations — documented, not approximated
+
+* **Sensor physics is a diurnal model, not a shed.** Values are plausible and in
+  range; they are not a thermal simulation.
+* **No TLS client certificate.** The fleet authenticates with username/password
+  (Phase 1 posture), so neither does the twin.
+* **The pack ids are `P-A`/`P-B`.** The current sensor-map endpoint requires an
+  8-hex LoRa node id, so these legacy mappings could not be re-created through
+  the API — they predate that rule and were left as they are.
+* **New gateways are not yet auto-provisioned.** Driving a *new* device through
+  the full install flow (register → request → approve → assign → bind → submit)
+  needs a platform-staff API client; that is the next piece of work, and the
+  unbound authn branch it depends on is already proven live.
