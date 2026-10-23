@@ -437,3 +437,84 @@ alias, per-tenant reads and writes still inside `tenant_context`.
   the full install flow (register → request → approve → assign → bind → submit)
   needs a platform-staff API client; that is the next piece of work, and the
   unbound authn branch it depends on is already proven live.
+
+---
+
+## 11. Integration testing — results
+
+Run against the live deployment on 2026-10-23. Every claim below is an observed
+result, not an inference from configuration.
+
+### Service health
+
+| Check | Result |
+|---|---|
+| All ten containers | up; daphne / celery-worker / celery-beat / subscriber-01 / subscriber-02 / postgres healthy |
+| `https://…/api/v1/health/` | `200`, database `ok` (26 ms), Redis `ok` (3 ms) |
+| Six backend services on `vps-03` | confirmed by image ID, not by tag |
+
+### Simulator
+
+| Requirement | Result |
+|---|---|
+| Multiple farms concurrently | 3 gateways across farms 2, 3 and 4, all `CONFIGURED`, 16 windows sent each |
+| Sustained repeated transfers | 6 sensor slots receiving a window every 60 s, continuously |
+| Which device produced which point | `gateway_slot_id` + `farm_id` in the topic, `pack_id` per reading; per-slot row counts are distinct and current |
+| Intermittent connectivity | `SIM_FAULT_DROP` ran a fleet that skipped windows; no crash, no stall |
+| Delayed transmission | `SIM_FAULT_DELAY` + `SIM_FAULT_DELAY_SEC` implemented and exercised |
+| Invalid readings | `SIM_FAULT_INVALID` produced out-of-range values (temp 135 °C, humidity 285 %) |
+| Device restarts | `SIM_FAULT_RESTART` power-cycles a twin; `applied_version` survives |
+| Authentication failure | an unknown username is refused with CONNACK 5, a wrong password with CONNACK 4 |
+
+### Invalid data — what the backend actually does
+
+Probed the pipeline directly with four broken messages. All four were
+dead-lettered into `telemetry:dead_letter` with the correct reason:
+
+| Sent | Reason recorded |
+|---|---|
+| `schema_version: "1.0"` | `UNSUPPORTED_SCHEMA_VERSION` |
+| unmapped `pack_id` | `UNKNOWN_SLOT` |
+| `gateway_slot_id` ≠ topic slot | `TOPIC_PAYLOAD_IDENTITY_MISMATCH` |
+| `{not json` | `bad_json` |
+
+**Worth knowing:** out-of-*range* values are **ingested, not rejected**. The
+pipeline validates structure (schema, identity, timestamp, pack resolution,
+provisioning status); plausibility is an alerting concern, not an ingest one.
+That is a design property, not a defect — but it means `SIM_FAULT_INVALID`
+exercises the alert path, not the DLQ.
+
+### End-to-end data flow
+
+Twin → broker → subscriber → Redis stream → worker → Postgres, verified at each
+hop: the twins report `APPLIED`, `applied_config_version` reaches 1 on all three
+slots, and rows land per sensor slot within the same second they are published.
+
+### Frontend compatibility
+
+Logged in through the real flow (`POST /api/v1/auth/login/` → JWT) and read the
+data the frontend reads:
+
+* `GET /api/v1/farms/` — the farm list with locations, saloons, gateway status
+  and alert counts, in the contract shape.
+* `GET /api/v1/saloons/2/telemetry/?since=…&slot_id=…` — readings from the twins
+  **minutes old**, with `server_received_ts`, `device_ts`, `is_buffered`,
+  `buffered_delay_mins`, `slot_id` and the full `metrics` object.
+
+**No API contract changed.** `apps/telemetry` has no diff since the deployed
+baseline, and the one response-shape change in the whole release — the
+review-approve endpoint losing `username`/`password`/`gateway_slot_id` — is in
+the provisioning surface, not in anything the frontend reads for data.
+
+### Regression
+
+`pytest` on the changed and adjacent modules: **65 passed** (twin, fleet, device
+lanes, EMQX provisioning, subscriber boot).
+
+### Notes and hygiene
+
+* The DLQ stream is `telemetry:dead_letter`. (`telemetry:dlq` does not exist —
+  checking the wrong name reads as an empty queue, which is how this was nearly
+  missed.)
+* The temporary staff account created for the API check was deleted afterwards,
+  along with its membership and sessions.
