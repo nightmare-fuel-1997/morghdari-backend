@@ -202,6 +202,13 @@ class DigitalTwin:
         self._connect_rc = None
         self._stop = False
         self._last_device_ts = None   # keeps the dedup key unique
+        # Scheduling state, owned by the twin rather than by the fleet. It lives
+        # here because a twin that joins an already-running fleet must be
+        # immediately schedulable: the fleet used to set these lazily, and a
+        # freshly joined twin crashed the run loop with an AttributeError
+        # before it ever sent a window.
+        self.last_tick_at = 0.0
+        self.last_reconnect_at = 0.0
 
     # ------------------------------------------------------------------ boot
     def start(self) -> int:

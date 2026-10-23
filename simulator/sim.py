@@ -188,8 +188,8 @@ class Fleet:
                     break
                 self._keep_alive(twin)
                 if twin.connected and twin.org_id:
-                    if now - twin._last_tick >= twin.report_interval_sec:
-                        twin._last_tick = now
+                    if now - twin.last_tick_at >= twin.report_interval_sec:
+                        twin.last_tick_at = now
                         twin.tick()
             if now - self._last_summary >= SUMMARY_EVERY_SEC:
                 self._last_summary = now
@@ -209,12 +209,10 @@ class Fleet:
         """
         if twin.connected:
             return
-        if not hasattr(twin, "_last_tick"):
-            twin._last_tick = 0.0
         now = time.time()
-        if now - getattr(twin, "_last_reconnect", 0.0) < 30.0:
+        if now - twin.last_reconnect_at < 30.0:
             return
-        twin._last_reconnect = now
+        twin.last_reconnect_at = now
         LOG.info("%s is offline — reconnecting", twin.unit_id)
         try:
             twin.stop()
@@ -265,10 +263,6 @@ def main() -> int:
     if not count:
         LOG.critical("no usable credentials in %s", CREDS_PATH)
         return 1
-
-    for twin in fleet.twins:
-        twin._last_tick = 0.0
-        twin._last_reconnect = 0.0
 
     signal.signal(signal.SIGTERM, fleet.request_stop)
     signal.signal(signal.SIGINT, fleet.request_stop)

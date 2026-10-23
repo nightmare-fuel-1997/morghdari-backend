@@ -8,6 +8,7 @@ gateway produced what.
 
 import json
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -52,8 +53,10 @@ class StubTwin:
         self.last_error = None
         self.start_calls = 0
         self.tick_calls = 0
-        self._last_tick = 0.0
-        self._last_reconnect = 0.0
+        # The twin owns these now (see DigitalTwin.__init__); a freshly joined
+        # twin must be schedulable the moment it exists.
+        self.last_tick_at = 0.0
+        self.last_reconnect_at = 0.0
 
     def start(self):
         self.start_calls += 1
@@ -150,7 +153,7 @@ def test_a_dead_twin_is_reconnected_rather_than_abandoned(fleet, tmp_path):
     assert t.connected
 
     t.connected = False           # the broker dropped it
-    t._last_reconnect = 0.0
+    t.last_reconnect_at = 0.0
     fleet._keep_alive(t)
     assert t.start_calls == 2      # reconnected
     assert t.connected
@@ -177,11 +180,11 @@ def test_only_bound_twins_are_ticked(fleet, tmp_path):
     bound, unbound = fleet.twins
     bound.org_id = "org"
     unbound.org_id = None
-    bound._last_tick = unbound._last_tick = 0.0
+    bound.last_tick_at = unbound.last_tick_at = 0.0
 
     for t in fleet.twins:
         if t.connected and t.org_id:
-            t._last_tick = 0.0
+            t.last_tick_at = 0.0
             t.tick()
     assert bound.tick_calls == 1
     assert unbound.tick_calls == 0
@@ -291,3 +294,61 @@ def test_the_default_pack_ids_are_backward_compatible(fleet, tmp_path):
     fleet.load_credentials(base)
     assert fleet.twins[0].packs == ["P-A", "P-B"]
     assert fleet.twins[0].hardware_id == "HW-LEGACY"
+
+
+# ---- the crash the live deploy hit ------------------------------------------
+
+def test_a_newly_joined_twin_is_immediately_schedulable(fleet, tmp_path,
+                                                        monkeypatch):
+    """REGRESSION: a twin that joins a RUNNING fleet must be schedulable at once.
+
+    The live deploy crashed here. `_keep_alive` returns early for a connected
+    twin, before the lazy `hasattr` that set the scheduling attributes — so a
+    freshly joined twin reached the run loop with no `_last_tick` and killed the
+    whole simulator with an AttributeError. Four gateways went silent at once.
+
+    The attributes belong to the twin, so a twin is schedulable from birth.
+    """
+    path = _write_provisioned(tmp_path, PROVISIONED)
+    monkeypatch.setattr(sim, "PROVISIONED_PATH", path)
+    base = _write_creds(tmp_path / "base", {"GW-A": {"password": "p", "farm_id": 1}})
+    fleet.load_credentials(base)
+    fleet.start_all()
+
+    assert fleet.reload_provisioned() == 1
+    joined = fleet.twins[-1]
+
+    # the exact expression the run loop evaluates, with the loop's real clock
+    now = time.time()
+    for t in fleet.twins:
+        assert hasattr(t, "last_tick_at")
+        assert hasattr(t, "last_reconnect_at")
+        _ = (now - t.last_tick_at) >= t.report_interval_sec
+        fleet._keep_alive(t)
+
+    # and the newcomer is not merely schedulable, it is DUE
+    assert (now - joined.last_tick_at) >= joined.report_interval_sec
+
+
+def test_the_run_loop_survives_a_twin_joining_mid_flight(fleet, tmp_path,
+                                                         monkeypatch):
+    """The same failure one level up: drive the loop body over a mixed fleet."""
+    path = _write_provisioned(tmp_path, PROVISIONED)
+    monkeypatch.setattr(sim, "PROVISIONED_PATH", path)
+    base = _write_creds(tmp_path / "base", {"GW-A": {"password": "p", "farm_id": 1}})
+    fleet.load_credentials(base)
+    fleet.start_all()
+    fleet.reload_provisioned()
+    fleet.twins[0].org_id = "org"
+    fleet.twins[-1].org_id = "org"
+
+    now = time.time()
+    for t in fleet.twins:
+        fleet._keep_alive(t)
+        if t.connected and t.org_id:
+            if now - t.last_tick_at >= t.report_interval_sec:
+                t.last_tick_at = now
+                t.tick()
+
+    assert fleet.twins[0].tick_calls == 1
+    assert fleet.twins[-1].tick_calls == 1
