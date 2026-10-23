@@ -2218,6 +2218,84 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
           description: Forbidden — valid token but the role claim lacks this surface.
+  /api/v1/gateways/{gateway_slot_id}/commands/:
+    post:
+      operationId: issue_gateway_command
+      description: |
+        Farm manager/owner only, and only for a gateway of the caller's org.
+
+        Creates a `GatewayCommand` row and enqueues its publish. The device answers in
+        three separate events (ACK → SUCCESS/FAILED), and the reconciler drives the row
+        SENT → ACKNOWLEDGED → APPLIED. A command the device does not answer within 10
+        minutes is expired by the sweep rather than retried forever.
+
+        An unknown or unsupported `kind` is a 400; a gateway that is not `PROVISIONED`
+        is a 409 — there is no point commanding a device that has never been configured.
+      summary: Issue a command to a gateway (REFRESH_CONFIG / REBOOT / DIAGNOSTICS_REQUEST)
+      parameters:
+      - in: path
+        name: gateway_slot_id
+        schema:
+          type: string
+        description: Gateway slot id (caller's org).
+        required: true
+      tags:
+      - Provisioning & Gateways
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GatewayCommandRequestRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/GatewayCommandRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/GatewayCommandRequestRequest'
+        required: true
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      responses:
+        '202':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayCommandResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Bad request — the body failed validation (unknown kind, missing
+            field).
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Conflict — state precondition failed (e.g. concurrent sync
+            lock, wrong flock state).
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Not found — id/slug unknown OR outside the caller's org (never
+            distinguished).
   /api/v1/gateways/{gateway_slot_id}/config/:
     get:
       operationId: get_gateway_config
@@ -9555,6 +9633,58 @@ components:
       properties:
         reason:
           type: string
+    GatewayCommandRequestRequest:
+      type: object
+      description: |-
+        One command to issue. `kind` is the discriminator; `params` is opaque to
+        the API and forwarded verbatim in the envelope, because each kind reads a
+        different key (`new_password` for rotation, nothing for a reboot).
+      properties:
+        kind:
+          enum:
+          - REFRESH_CONFIG
+          - REBOOT
+          - DIAGNOSTICS_REQUEST
+          - ROTATE_CREDENTIAL
+          type: string
+          x-spec-enum-id: be827afc1e4036c9
+          description: |-
+            Which command to issue. PROVISION is issued by the bind flow.
+
+            * `REFRESH_CONFIG` - REFRESH_CONFIG
+            * `REBOOT` - REBOOT
+            * `DIAGNOSTICS_REQUEST` - DIAGNOSTICS_REQUEST
+            * `ROTATE_CREDENTIAL` - ROTATE_CREDENTIAL
+        params:
+          type: object
+          additionalProperties: {}
+          description: Kind-specific parameters, forwarded verbatim to the device.
+      required:
+      - kind
+    GatewayCommandResponse:
+      type: object
+      properties:
+        command_uuid:
+          type: string
+          format: uuid
+          description: Journal id to poll or reconcile against.
+        gateway_slot_id:
+          type: string
+        kind:
+          type: string
+        state:
+          type: string
+          description: Always PENDING on issue; the broker verdict is async.
+        expires_at:
+          type: string
+          format: date-time
+          description: After this the sweep expires the command.
+      required:
+      - command_uuid
+      - expires_at
+      - gateway_slot_id
+      - kind
+      - state
     GatewayConfigAuth:
       type: object
       properties:
