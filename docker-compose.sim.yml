@@ -64,7 +64,11 @@ services:
     container_name: morghdari-provisioner
     mem_limit: 512m
     command: python /sim/provision.py --count ${SIM_PROVISION_COUNT:-1}
+    # Django lives at /app in the image; running the script from /sim would put
+    # /sim on sys.path instead and `config` would not be importable.
+    working_dir: /app
     environment:
+      PYTHONPATH: "/app"
       DJANGO_SETTINGS_MODULE: "config.settings.production"
       DATABASE_URL: "postgres://${DATABASE_USER}:${DATABASE_PASSWORD}@postgres:5432/${DATABASE_NAME}"
       DATABASE_ADMIN_URL: "postgres://${POSTGRES_ADMIN_USER}:${POSTGRES_ADMIN_PASSWORD}@postgres:5432/${DATABASE_NAME}"
