@@ -170,8 +170,13 @@ def provision_one(index: int, _as, models) -> dict:
              approval.data["jobs_created"])
 
     from apps.provisioning.models import InstallationJob
+    from apps.tenants.context import admin_alias
 
-    job = InstallationJob.objects.filter(request_id=request_id).first()
+    # Over the admin alias, for the same reason the slot discovery is:
+    # `installation_jobs` is FORCE RLS and the app role sees zero rows without a
+    # tenant GUC. The approval just created the job over the admin alias too.
+    job = InstallationJob.objects.using(admin_alias()).filter(
+        request_id=request_id).first()
     if job is None:
         raise RuntimeError("no installation job was created")
 
@@ -212,10 +217,16 @@ def _attach_sensors(_as, models, org, job, installer, tag) -> list:
     """Create a saloon + sensor slot and map two packs, so telemetry resolves."""
     from apps.devices.models import SaloonPosition, SaloonSensorSlot
     from apps.farms.models import Saloon
+    from apps.tenants.context import admin_alias
 
-    saloon = Saloon.objects.create(org=org, farm_id=job.farm_id,
-                                   name=f"Auto Saloon {tag}")
-    position = SaloonPosition.objects.create(saloon=saloon, org=org, label="north")
+    # Same posture as the org and the job: these tables are FORCE RLS and the
+    # rows are org-scoped, so they are written over the admin alias with
+    # explicit ids (never object references across connections, which trips the
+    # router's relation check).
+    saloon = Saloon.objects.using(admin_alias()).create(
+        org_id=org.pk, farm_id=job.farm_id, name=f"Auto Saloon {tag}")
+    position = SaloonPosition.objects.using(admin_alias()).create(
+        saloon_id=saloon.pk, org_id=org.pk, label="north")
 
     slot_id = f"SS-AUTO-{tag}"
     created = _as(installer, models.saloon_sensor_slot_create, "POST",
