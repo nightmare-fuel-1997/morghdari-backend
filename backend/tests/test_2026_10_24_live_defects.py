@@ -195,3 +195,162 @@ def test_expiry_sweep_never_expires_an_applied_row(django_user_model):
     sweep_command_expiry(limit=50)
     applied.refresh_from_db()
     assert applied.state == "APPLIED"
+
+
+# ---------------------------------------------------------------------------
+# D6 — flat stream metrics must evaluate (the live shape, not the test shape)
+#
+# Uses the REAL redis the integration tests use (INTEGRATION_REDIS_URL, db 11)
+# rather than a hand-rolled fake: the earlier version of this test failed on
+# the fake's missing methods, not on the behaviour under test.
+# ---------------------------------------------------------------------------
+
+def _integration_redis():
+    """Real redis on the integration DB, or None when the suite has no broker."""
+    import redis as redis_lib
+
+    from tests.conftest import INTEGRATION_REDIS_URL
+
+    try:
+        client = redis_lib.Redis.from_url(INTEGRATION_REDIS_URL, decode_responses=True)
+        client.ping()
+    except Exception:  # noqa: BLE001 — no broker available in this environment
+        return None
+    client.flushdb()
+    return client
+
+
+@pytest.mark.django_db
+def test_evaluate_entry_fires_on_flat_metrics():
+    """The subscriber's live shape is FLAT ({"temp": 40.5}).
+
+    Before D6 the evaluator required {"temp": {"avg": …}} and skipped flat
+    values, so threshold alerting never fired for any real reading. A bare
+    number must be treated as its own window average.
+    """
+    import time as _time
+
+    from apps.alerts.models import AlertInstance
+    from apps.alerts.services import redis_keys
+    from apps.alerts.services.evaluation import evaluate_entry
+    from apps.farms.models import Farm, Saloon
+    from apps.tenants.models import Organization
+
+    r = _integration_redis()
+    if r is None:
+        pytest.skip("no redis available for the evaluation test")
+
+    org = Organization.objects.create(name="d6-org")
+    farm = Farm.objects.create(org=org, name="d6-farm")
+    saloon = Saloon.objects.create(org=org, farm=farm, name="d6-saloon")
+
+    # arm the threshold hash exactly as the recache would
+    r.hset(redis_keys.thresholds_hash(saloon.pk), mapping={
+        "temp_max": "26.00", "temp_min": "15.00",
+        "operational_state": "ACTIVE_FLOCK", "flock_age_days": "0",
+    })
+
+    now = _time.time()
+    args = (r, saloon.pk, str(org.org_id), farm.pk, "SS-D6", {"temp": 40.5})
+
+    # window 1 arms the breach episode; the 900 s duration gate is not met yet
+    assert evaluate_entry(*args, device_ts="2026-10-24T09:00:00Z", clock_now=now) is None
+
+    # window 2 is past the gate — this is what used to silently return None
+    fired = evaluate_entry(
+        *args, device_ts="2026-10-24T09:16:00Z", clock_now=now + 901
+    )
+    assert fired is not None, "flat metrics did not evaluate — D6 regressed"
+    assert fired.get("metric") == "temp"
+
+    assert AlertInstance.objects.filter(saloon_id=saloon.pk, metric_type="temp").exists()
+
+    r.flushdb()
+
+
+# ---------------------------------------------------------------------------
+# D7 — the hourly aggregate writer
+#
+# The hypertables are UNMANAGED and `DisableMigrations` never creates them, so
+# this follows the project's own DDL-guard pattern (test_followthrough_core):
+# create from the migration's SQL when absent, then exercise the builder.
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def telemetry_tables():
+    from django.db import connection
+
+    if connection.vendor != "postgresql":
+        pytest.skip("unmanaged hypertables are Postgres-only")
+
+    from tests.conftest import BACKEND_DIR, _execute_sql, _sql_from_migration
+
+    with connection.cursor() as cursor:
+        if cursor.execute(
+            "SELECT to_regclass('public.saloon_telemetry') IS NULL"
+        ).fetchone()[0]:
+            _execute_sql(
+                cursor,
+                _sql_from_migration(
+                    BACKEND_DIR / "apps" / "telemetry" / "migrations"
+                    / "0002_timescale_hypertables.py"
+                ),
+            )
+    yield
+
+
+@pytest.mark.django_db
+def test_build_metric_hourly_writes_and_reheals(telemetry_tables):
+    from django.db import connection
+
+    from apps.farms.models import Farm, Saloon
+    from apps.monitoring.services_aggregates import build_metric_hourly
+    from apps.tenants.models import Organization
+
+    org = Organization.objects.create(name="d7-org")
+    farm = Farm.objects.create(org=org, name="d7-farm")
+    saloon = Saloon.objects.create(org=org, farm=farm, name="d7-saloon")
+
+    now = dt.datetime.now(dt.timezone.utc)
+    bucket = now.replace(minute=0, second=0, microsecond=0)
+    device_ts = bucket + dt.timedelta(minutes=17)
+
+    # server_received_ts is part of the dedup key: space the rows explicitly
+    with connection.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO saloon_telemetry
+                (server_received_ts, device_ts, org_id, saloon_id, slot_id, metrics)
+            VALUES (%s, %s, %s, %s, 'SS-D7', %s),
+                   (%s, %s, %s, %s, 'SS-D7', %s)
+            """,
+            [
+                now, device_ts, str(org.org_id), saloon.pk, '{"temp": 20.0}',
+                now + dt.timedelta(minutes=3), device_ts + dt.timedelta(minutes=3),
+                str(org.org_id), saloon.pk, '{"temp": 30.0}',
+            ],
+        )
+
+    written = build_metric_hourly(hours=26)
+    assert written >= 1, "the hourly writer produced nothing — D7 regressed"
+
+    with connection.cursor() as cur:
+        cur.execute(
+            "SELECT avg_val, min_val, max_val, sample_count "
+            "FROM metric_hourly_aggregates WHERE slot_id='SS-D7' AND metric_key='temp'"
+        )
+        row = cur.fetchone()
+    assert row is not None
+    assert float(row[0]) == pytest.approx(25.0)
+    assert float(row[1]) == pytest.approx(20.0)
+    assert float(row[2]) == pytest.approx(30.0)
+    assert row[3] == 2
+
+    # idempotent: a re-run corrects instead of duplicating
+    build_metric_hourly(hours=26)
+    with connection.cursor() as cur:
+        cur.execute(
+            "SELECT count(*) FROM metric_hourly_aggregates "
+            "WHERE slot_id='SS-D7' AND metric_key='temp'"
+        )
+        assert cur.fetchone()[0] == 1
