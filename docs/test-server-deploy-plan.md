@@ -661,14 +661,26 @@ See §13.1. `publish_command` had no caller outside tests. Fixed with
 `celery,telemetry_realtime,telemetry_historical,alerts`.
 
 **So every `.delay()`-dispatched provisioning task went into a queue with no
-consumer and stayed there** — `publish_command`, `sweep_config_convergence`,
-`reconcile_reported_payload`, and every `auditing.*` task. Symptom: the API
-returns `202`, the row is created, and the command sits at `PENDING` with
-`attempts=0` while `LLEN provisioning` shows the backlog.
+consumer and stayed there.** Symptom: the API returns `202`, the row is created,
+and the command sits at `PENDING` with `attempts=0` while `LLEN provisioning`
+shows the backlog.
 
-The bind-time config publish only ever worked because it calls
-`publish_desired_state_for()` **synchronously** rather than through `.delay()` —
-which is precisely why nobody noticed: the happy path never used the queue.
+**Corrected on re-check — the blast radius was smaller than I first wrote.** I
+originally claimed the sweeps were stuck too. They were not:
+
+* `sweep_config_convergence` and `sweep_command_expiry` are beat-driven and
+  their schedule entries set `"options": {"queue": "celery"}`, which overrides
+  the route. They always ran, every 60 s, on the consumed queue.
+* `reconcile_reported` and `reconcile_command_response` are called
+  **synchronously** by the subscriber, never through `.delay()`.
+* `apps/auditing/` has **no tasks at all** — the `auditing.*` route is
+  speculative, so the `audit` queue had no producers.
+
+Which leaves exactly one real victim: **`publish_command`**, the only
+`.delay()`-dispatched provisioning task in the codebase — and it is the one this
+work added. The gap was latent, not an outage. It is still worth fixing and
+pinning, because the next `.delay()`-dispatched provisioning task would have hit
+it silently.
 
 A comment in the compose file records that this list was already fixed once for
 the same class of mistake (M7-06: "telemetry drained nothing, silently"). It was
@@ -729,3 +741,43 @@ edit, or the deploy silently does nothing.
 **`up -d` starts the one-shot provisioner.** `docker-compose.sim.yml` defines
 `provisioner` as a one-shot service; a bare `up -d` runs it and installs another
 gateway. Name the services explicitly when recreating.
+
+---
+
+## 15. Re-check of the verification itself — one correction, one leftover
+
+### Correction: the queue gap was narrower than reported
+
+See the amended §14.2. `sweep_config_convergence` and `sweep_command_expiry`
+were never stuck (beat overrides their queue to `celery`), `reconcile_*` are
+called synchronously, and `apps/auditing/` has no tasks. The only real victim was
+`publish_command`. I overstated it; the fix and the pinning test are still
+right, but the claim that the convergence sweep had been dead was wrong.
+
+Verified now: both sweeps run every 60 s and succeed.
+
+### Leftover: an abandoned install has no sanctioned terminal state
+
+`sweep_config_convergence` republishes every slot with
+`applied_config_version < desired_config_version`, excluding only REJECTED and
+SUSPENDED. It does **not** exclude `PENDING_INSTALLATION`.
+
+An install that is started and then abandoned therefore sits at
+`PENDING_INSTALLATION` with `applied=0`, and gets its config republished **every
+60 seconds, forever**. Worse, it makes the sweep permanently return non-zero,
+which **masks a genuine convergence failure on a real gateway** — the exact
+signal the sweep exists to give.
+
+I created one such slot myself (`GW-AUTO-6543600`, from the run that failed
+before writing credentials) and hit this. Neither sanctioned service can retire
+it: `reject_gateway` requires `PENDING_APPROVAL`, `suspend_gateway` requires
+`PROVISIONED`. So there is **no supported transition out of
+`PENDING_INSTALLATION`** — a real gap in the state machine.
+
+Worked around administratively: the slot is now `SUSPENDED` with
+`last_publish_error` recording why. The sweep is quiet (returns 0, 0.05 s).
+
+**Not fixed in code.** The proper fix is either a sanctioned
+`abandon_install()` transition, or excluding `PENDING_INSTALLATION` from the
+sweep once it is older than some threshold. Left open deliberately — it is a
+state-machine decision, not a bug to patch quietly.
