@@ -359,12 +359,22 @@ def reconcile_command_response(payload: dict, topic_slot_id: str | None = None) 
             return "LATE_RESPONSE"
 
         if state == "ACK":
+            # 2026-10-24 (live verification, D8): a REPLAYED ACK after the
+            # SUCCESS downgraded an APPLIED command back to ACKNOWLEDGED —
+            # QoS-1 redelivery (or a session resume replay) arrives more than
+            # once, and the ACK branch had no state guard. A command that is
+            # already APPLIED (or FAILED) must never regress on a late ACK.
+            if row.state in (
+                GatewayCommand.STATE_APPLIED,
+                GatewayCommand.STATE_FAILED,
+            ):
+                return "LATE_RESPONSE"
             if row.state == GatewayCommand.STATE_PENDING:
                 # No PUBACK recorded but the device clearly has it — trust the
                 # device over our own bookkeeping.
                 row.sent_at = row.sent_at or now
             row.state = GatewayCommand.STATE_ACKNOWLEDGED
-            row.acked_at = now
+            row.acked_at = row.acked_at or now
             row.save(update_fields=["state", "acked_at", "sent_at"])
             return "ACKNOWLEDGED"
 
