@@ -24,8 +24,19 @@ fi
 
 cd "$(dirname "$0")/.."
 COMPOSE=(-p morghdari --env-file .env -f docker-compose.prod.yml)
+# 2026-10-24 (first real drill of this script): the VPS has NO registry — the
+# images are built locally from the tree and deployed by tag. Without this
+# override compose has no build context for the app services, so `up -d` on a
+# tag that is not already local tries to PULL ghcr.io/… and fails. The override
+# only adds `build:` stanzas; runtime config is byte-identical prod.
+[[ -f docker-compose.vps.yml ]] && COMPOSE+=(-f docker-compose.vps.yml)
 [[ -f docker-compose.rehearsal.yml ]] && COMPOSE+=(-f docker-compose.rehearsal.yml)
 APP_SERVICES=(daphne celery-worker celery-beat subscriber-01 subscriber-02)
+# Tag-driven deploys never rebuild implicitly: the image for $TAG must already
+# exist (built and tagged by the release step). A missing tag fails fast here
+# and the rollback path below takes over, instead of silently rebuilding from
+# whatever the tree happens to contain.
+UP_FLAGS=(--no-build)
 ALL_CONTAINERS=(morghdari-nginx morghdari-emqx morghdari-redis morghdari-postgres
                 morghdari-daphne morghdari-celery-worker morghdari-celery-beat
                 morghdari-subscriber-01 morghdari-subscriber-02)
@@ -70,11 +81,11 @@ reload_nginx() {
 }
 
 echo "==> deploying tag: $TAG (previous: ${PREV:-<none recorded>})"
-if ! MORGHDARI_TAG="$TAG" docker compose "${COMPOSE[@]}" up -d "${APP_SERVICES[@]}"; then
+if ! MORGHDARI_TAG="$TAG" docker compose "${COMPOSE[@]}" up -d "${UP_FLAGS[@]}" "${APP_SERVICES[@]}"; then
   echo "!! compose up failed for tag $TAG" >&2
   if [[ -n "$PREV" ]]; then
     echo "==> rolling back to $PREV" >&2
-    MORGHDARI_TAG="$PREV" docker compose "${COMPOSE[@]}" up -d "${APP_SERVICES[@]}"
+    MORGHDARI_TAG="$PREV" docker compose "${COMPOSE[@]}" up -d "${UP_FLAGS[@]}" "${APP_SERVICES[@]}"
     reload_nginx
   fi
   exit 1
@@ -94,7 +105,7 @@ if [[ -z "$PREV" ]]; then
   exit 1
 fi
 echo "==> AUTOMATIC ROLLBACK to $PREV" >&2
-if MORGHDARI_TAG="$PREV" docker compose "${COMPOSE[@]}" up -d "${APP_SERVICES[@]}" && reload_nginx && gate; then
+if MORGHDARI_TAG="$PREV" docker compose "${COMPOSE[@]}" up -d "${UP_FLAGS[@]}" "${APP_SERVICES[@]}" && reload_nginx && gate; then
   echo "==> ROLLED BACK: stack healthy again on $PREV"
   exit 1   # deploy failed even though rollback succeeded — loud, always
 fi
