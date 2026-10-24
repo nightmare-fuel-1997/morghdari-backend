@@ -136,9 +136,58 @@ a replay counter. Drilled with a synthetic outage backlog:
 This is the second copy of the D6 defect, in the function whose docstring says it
 mirrors the realtime evaluator "EXACTLY". Both now share the same normalization.
 
+
+### 5. Alert lanes, WebSocket, reports — the rest of the untouched list
+
+**Velocity lane — PASS.** A 25 → 36 °C jump inside one 60 s window fired
+`temp / ACTIVE_TIER_1 / 36.00` on real telemetry.
+
+**THI lane — PASS (the earlier "D16" was my own test's fault).** The rule never
+seemed to fire. It does: any recache that CHANGES the threshold hash writes
+`threshold:transition:{saloon}` with a 300 s TTL, and lanes ②–④ are suppressed
+while that key lives (velocity deliberately bypasses it). Every THI drill
+recached first, so the lane was silenced on purpose. Proved both directions:
+recache → key present, TTL 299 s; clear it → the same 26→29→32→35→38 ramp at
+85 % RH fires `thi / ACTIVE_TIER_1 / 96.90` — exactly THI(38 °C, 85 %).
+
+**Subscription mute — PASS, A/B.** With the twin stopped so nothing else could
+publish: muted → **0** new temp alerts and the digest counter climbing
+(40 → 52); unmuted, the identical ramp → `temp / ACTIVE_TIER_1 / 40.00`.
+(The earlier "LEAKED" reading was a velocity alert from the twin's own
+40 → 25 drop — velocity bypasses mutes by design.)
+
+**WebSocket — PASS, and it found D17.** Through nginx:
+`WS /ws/saloons/3/telemetry?token=…` → `101 Switching Protocols`, a
+`telemetry.hello` carrying the live threshold hash, and a `telemetry.update`
+for each published reading. No token → close **4003** (`AUTH-DENY
+clause=no-token`). The first run showed every update arriving **twice**, which
+became D17 (fixed, vps-10, re-verified: one reading → one frame).
+
+**Reports — PASS, and it found D18.** Create (DRAFT and SUBMITTED), the
+checklist gate (a false flag still 400s), the edit path (`feed_kg` 90 → 99 with
+`notes` persisted), the edit-window guard (a past-date edit → 403), vet review
+(SUBMITTED → **APPROVED**), list and by-date reads, and the C-14 foreign-saloon
+`{"results":[],"count":0}`. There is no PDF export in this codebase — reports
+are JSON CRUD — so that item on the earlier list was moot.
+
+### Final gate
+
+Full suite on the server, image built from HEAD (vps-11): **937 passed,
+13 skipped, 0 failed** in 418 s — every pre-existing test plus the 14 in
+`test_2026_10_24_live_defects.py`.
+
 ### What is still untouched
 
-Offline buffering across long outages, replay/backfill, subscription and
-maintenance mutes, the THI and velocity alert lanes, WebSocket, report/PDF
-export, and the frontend contract. The twin's sensor physics is still a diurnal
-model, not a real shed.
+Nothing on the original list is untested now. What genuinely remains outside
+this exercise:
+
+- **Real hardware / HIL.** The twin speaks the real protocol but its sensor
+  physics is a diurnal model, not a shed.
+- **The frontend contract.** I can prove the API's shapes and status codes; I
+  cannot prove the Flutter client renders them. The one contract change noted
+  earlier (review-approve no longer returns credentials) still needs the
+  frontend team's confirmation.
+- **Alert forensics.** An `AlertInstance` row records metric, value, status and
+  source, but NOT why it fired — a velocity emergency and a sustained breach
+  are indistinguishable once the Redis blob is cleared. Worth adding a `reason`
+  column when the schema is next opened.
