@@ -26,11 +26,17 @@ by reading code.
 
 ## Regression coverage
 
-`backend/tests/test_2026_10_24_live_defects.py` pins D1, D2, D3, D4, D4b and D8.
-D5/D6/D7 were live-verified but their automated tests were removed: they fought
-the test harness (a hand-rolled FakeRedis, and the unmanaged hypertable that
-`DisableMigrations` never creates). **Re-adding those two tests properly is open
-work** — tracked in the follow-up list, not silently dropped.
+`backend/tests/test_2026_10_24_live_defects.py` pins **D1, D2, D3, D4, D4b, D6,
+D7 and D8** (10 tests, all green). D6 and D7 were briefly removed because their
+first drafts fought the harness; both are back, done the project's own way —
+D6 on the real integration redis (`INTEGRATION_REDIS_URL`, db 11) instead of a
+hand-rolled fake, D7 with the DDL guard from `test_followthrough_core` that
+creates the unmanaged hypertables from the `0002` migration SQL.
+
+**D5 has no automated test.** It is proven live (the worker's recache resolves
+the published template and writes `temp_max`), but reproducing "a celery task
+running with no tenant GUC under FORCE RLS" in the suite is not something the
+current fixtures support — stated here rather than implied to be covered.
 
 ## How the run was executed
 
