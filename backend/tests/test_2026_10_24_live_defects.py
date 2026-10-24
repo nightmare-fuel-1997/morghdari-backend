@@ -378,3 +378,42 @@ def test_build_metric_hourly_writes_and_reheals(telemetry_tables):
             "WHERE slot_id='SS-D7' AND metric_key='temp'"
         )
         assert cur.fetchone()[0] == 1
+
+
+# ---------------------------------------------------------------------------
+# D14 — retroactive replay analysis must see the live (flat) metric shape
+# ---------------------------------------------------------------------------
+
+def test_window_breaches_reads_flat_metrics():
+    """A buffered window that breached must produce a REPLAY_ANALYSIS row.
+
+    The subscriber stores flat metrics ({"temp": 40.0}); _window_breaches used
+    to require {"temp": {"avg": …}} and silently found no breach — the same
+    defect D6 fixed in the realtime evaluator.
+    """
+    from types import SimpleNamespace
+
+    from apps.alerts.services.replay import _window_breaches
+
+    thresholds = {"temp_max": "26.00", "nh3_max": "25.00"}
+
+    flat = [SimpleNamespace(metrics={"temp": 40.0, "nh3": 9.0})]
+    assert _window_breaches(flat, thresholds) == {"temp": 40.0}
+
+    # the window shape must keep working too
+    window = [SimpleNamespace(metrics={"temp": {"avg": 30.0, "min": 29.0, "max": 31.0}})]
+    assert _window_breaches(window, thresholds) == {"temp": 30.0}
+
+    # in-band readings produce nothing, and a non-numeric value is skipped
+    assert _window_breaches([SimpleNamespace(metrics={"temp": 24.0})], thresholds) == {}
+    assert _window_breaches(
+        [SimpleNamespace(metrics={"temp": "NOT_A_NUMBER"})], thresholds
+    ) == {}
+
+    # worst value across the window wins
+    rows = [
+        SimpleNamespace(metrics={"temp": 30.0}),
+        SimpleNamespace(metrics={"temp": 41.5}),
+        SimpleNamespace(metrics={"temp": 35.0}),
+    ]
+    assert _window_breaches(rows, thresholds) == {"temp": 41.5}
