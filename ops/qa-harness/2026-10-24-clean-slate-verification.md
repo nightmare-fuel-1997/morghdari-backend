@@ -119,6 +119,23 @@ hypertables from the `0002` migration SQL. `test_2026_10_24_live_defects.py` now
 holds 10 green tests (D1, D2, D3, D4, D4b, D6, D7, D8). D5 remains live-verified
 only, stated plainly rather than implied.
 
+### 4. Offline buffering + replay — found D14
+
+A device that loses connectivity flushes its backlog marked `is_buffered: true`;
+the subscriber routes those to the **historical** lane (never realtime) and bumps
+a replay counter. Drilled with a synthetic outage backlog:
+
+| Check | Result |
+|---|---|
+| routing | 10 buffered frames → `telemetry:historical` (realtime untouched), drained to lag 0 |
+| storage | 10 rows with `is_buffered=true`, `buffered_delay_mins` avg 33 min / max 60 min — matching the spread |
+| in-band backlog | **no** replay alert (correct: retroactive analysis only reports real breaches) |
+| out-of-band backlog (41–42 °C vs `temp_max=26`) | **no alert** — D14: the detector required window-dicts and skipped flat metrics |
+| after the D14 fix (vps-08) | `temp / ACTIVE_TIER_1 / 41.80 / source=REPLAY_ANALYSIS` with a batch id |
+
+This is the second copy of the D6 defect, in the function whose docstring says it
+mirrors the realtime evaluator "EXACTLY". Both now share the same normalization.
+
 ### What is still untouched
 
 Offline buffering across long outages, replay/backfill, subscription and
