@@ -41,7 +41,9 @@ from apps.provisioning.tasks import reconcile_reported
 
 from tests.test_m11_03_installation_jobs import _staff, _world
 
-pytestmark = pytest.mark.django_db
+# NOTE: deliberately NOT a module-level django_db marker — the flat-metrics
+# evaluation test is pure Redis and must not touch the DB fixture chain.
+pytestmark = []
 
 
 # ---------------------------------------------------------------------------
@@ -55,6 +57,7 @@ def _mfa_call(view, data, user=None):
     return view(request)
 
 
+@pytest.mark.django_db
 def test_mfa_setup_password_path_issues_a_secret(django_user_model):
     from apps.accounts.views import mfa_setup
 
@@ -67,6 +70,7 @@ def test_mfa_setup_password_path_issues_a_secret(django_user_model):
     assert response.data["confirmed"] is False
 
 
+@pytest.mark.django_db
 def test_mfa_setup_password_path_rejects_bad_credentials(django_user_model):
     from apps.accounts.views import mfa_setup
 
@@ -77,6 +81,7 @@ def test_mfa_setup_password_path_rejects_bad_credentials(django_user_model):
     assert response.status_code == 401
 
 
+@pytest.mark.django_db
 def test_mfa_setup_password_path_closed_once_confirmed(django_user_model):
     """A CONFIRMED account must never re-issue a secret on password alone."""
     from apps.accounts.views import mfa_setup
@@ -92,6 +97,7 @@ def test_mfa_setup_password_path_closed_once_confirmed(django_user_model):
     assert "confirmed" in response.data["error"]
 
 
+@pytest.mark.django_db
 def test_mfa_setup_password_path_rejects_plain_users(django_user_model):
     from apps.accounts.views import mfa_setup
 
@@ -104,6 +110,7 @@ def test_mfa_setup_password_path_rejects_plain_users(django_user_model):
 # D2 — assignable malformed org_id
 # ---------------------------------------------------------------------------
 
+@pytest.mark.django_db
 def test_assignable_bad_org_id_is_400_not_500(django_user_model):
     support = _staff(django_user_model, "asg-support", "support")
     _world(django_user_model)
@@ -118,6 +125,7 @@ def test_assignable_bad_org_id_is_400_not_500(django_user_model):
 # D3 — the generic command surface must reject ROTATE_CREDENTIAL
 # ---------------------------------------------------------------------------
 
+@pytest.mark.django_db
 def test_issue_command_rejects_rotate_credential(django_user_model):
     from apps.accounts.models import OrgMember
     from apps.devices.models import GatewaySlot
@@ -139,6 +147,7 @@ def test_issue_command_rejects_rotate_credential(django_user_model):
 # D4 — the slot-FAILED broadcast is scoped and honest
 # ---------------------------------------------------------------------------
 
+@pytest.mark.django_db
 def test_reported_failed_only_fails_provision_commands(django_user_model):
     from tests.test_command_issue_path import _org, _slot
 
@@ -166,6 +175,7 @@ def test_reported_failed_only_fails_provision_commands(django_user_model):
     assert reboot.applied_at is None       # no fake applied stamp
 
 
+@pytest.mark.django_db
 def test_expiry_sweep_never_expires_an_applied_row(django_user_model):
     from apps.provisioning.tasks import sweep_command_expiry
     from tests.test_command_issue_path import _org, _slot
@@ -187,7 +197,7 @@ def test_expiry_sweep_never_expires_an_applied_row(django_user_model):
 # D6 — flat stream metrics must evaluate
 # ---------------------------------------------------------------------------
 
-def test_evaluate_entry_fires_on_flat_metrics(rf=None, django_user_model=None, settings=None):
+def test_evaluate_entry_fires_on_flat_metrics():
     """The subscriber's live shape is flat; a sustained breach must still arm."""
     import time as _time
 
@@ -283,6 +293,7 @@ def test_evaluate_entry_fires_on_flat_metrics(rf=None, django_user_model=None, s
 # D7 — the hourly aggregate writer exists and is idempotent
 # ---------------------------------------------------------------------------
 
+@pytest.mark.django_db
 def test_build_metric_hourly_writes_and_reheals(django_user_model):
     from django.db import connection
 
