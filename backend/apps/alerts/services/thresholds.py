@@ -294,6 +294,17 @@ def recache_saloon(saloon_id: int, clock: Clock | None = None) -> str:
     }
     pipe = client.pipeline()
     pipe.hset(key, mapping={k: str(v) for k, v in new_hash.items()})
+    # 2026-10-24 (D15, found while cleaning up a drill): HSET alone never
+    # REMOVES a band. Deleting a rule (or a metric from a template) left the
+    # old `{metric}_max` armed in the hash forever, so the saloon kept
+    # alerting against a threshold an operator had removed. Drop the keys the
+    # new hash does not carry.
+    stale = [k for k in old if k not in new_hash]
+    if stale:
+        pipe.hdel(key, *stale)
+        logger.warning(
+            "thresholds: dropped stale band(s) %s for saloon %s", stale, saloon_id
+        )
     if changed:
         ttl = _grace_ttl_seconds()
         pipe.setex(keys.transition_grace_key(saloon_id), ttl, "1")
