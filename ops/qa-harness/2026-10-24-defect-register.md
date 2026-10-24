@@ -3,7 +3,7 @@
 Every defect found while deploying and exercising the system with the digital
 twins, with the commit that fixes it and the evidence that the fix works.
 
-**13 defects: 8 in the application, 4 in the deploy tooling, 1 in disaster recovery.** All were found by
+**14 defects: 9 in the application, 4 in the deploy tooling, 1 in disaster recovery.** All were found by
 running the real thing (fresh database, real HTTP, real MQTT, real twins) — not
 by reading code.
 
@@ -21,6 +21,7 @@ by reading code.
 | D9 | `bash scripts/deploy.sh <tag>` fails: compose has no build context and tries to pull `ghcr.io` | the script omitted `docker-compose.vps.yml` (this host builds locally; there is no registry) | `6e0b904` | drill: `==> OK: all 9 containers healthy on tag vps-07`, exit 0 |
 | D10 | A release deploy tries to **recreate postgres**, and the automatic rollback hits the same `No such image` wall | `up -d <app services>` still evaluates dependencies, dragging stateful infra into the release set | `a05aaa4` | drill: `--no-deps`; deploy touches only the 5 app services; rollback path proven separately |
 | D11 | Every release needed the DB image re-tagged by hand or any dependency-touching compose run died | `postgres-walg` was pinned to `${MORGHDARI_TAG}` (tags `vps-02`…`vps-05` are literally one image) | `a05aaa4` | `POSTGRES_IMAGE_TAG`, default `vps-05`; running container's image reference unchanged, so no recreate |
+| D14 | After an outage, the drained backlog produces **no retroactive replay alert** even when it breached — a hot window is reviewed as if it were normal | `_window_breaches` required `{"temp": {"avg": …}}` and skipped the flat `{"temp": 40.0}` the subscriber stores — the same defect as D6, in the second copy its docstring claims to "mirror EXACTLY" | `c97cab0` | live on vps-08: a drained backlog at 41–42 °C against `temp_max=26` produced `temp / ACTIVE_TIER_1 / 41.80 / source=REPLAY_ANALYSIS` with a batch id. Regression test covers both shapes |
 | D13 | A backup restores *approximately*: data lands, but chunk constraints are missing and `pg_restore` exits 1 with ~27 `ONLY option not supported on hypertable operations` errors — and nothing says so | no restore procedure existed; a bare `pg_restore` skips the Timescale hooks that a hypertable dump requires | `85fd24c` | drill: naive restore = exit 1 / 27 errors; canonical sequence (`CREATE EXTENSION` + `timescaledb_pre_restore` → restore → `timescaledb_post_restore`) = **exit 0, zero errors**, 934 telemetry rows, `hypertables=2 chunks=2`. Encoded as `scripts/restore.sh` with live-DB and corrupt-dump guards |
 | D12 | `./scripts/deploy.sh` → `Permission denied` | `core.fileMode = false` on the VPS: the executable bit is not recorded | `e841039` (runbook) | `DEPLOYMENT.md` §8 now says `bash scripts/deploy.sh <tag>` and carries a guarantees table |
 
