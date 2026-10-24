@@ -424,51 +424,56 @@ def test_window_breaches_reads_flat_metrics():
 # ---------------------------------------------------------------------------
 
 def test_recache_drops_a_stale_band(django_user_model):
-    """Deleting a rule must remove its {metric}_max, not leave it armed."""
+    """D15: deleting a rule must remove its band, and KEEP the live ones.
+
+    Written against the SERVICE's own redis client (apps.alerts.services.
+    thresholds._redis) rather than INTEGRATION_REDIS_URL: the earlier draft
+    read a different database than the recache wrote to, so it could never
+    see the write — a test bug that made a passing assertion meaningless.
+    """
     from apps.alerts.services import redis_keys
-    from apps.alerts.services.thresholds import recache_saloon
-    from tests.conftest import INTEGRATION_REDIS_URL
+    from apps.alerts.services import thresholds as th
+    from apps.farms.models import Farm, Saloon
+    from apps.geography.models import City, Province
+    from apps.tenants.models import Organization
 
-    import redis as redis_lib
-
+    client = th._redis()
     try:
-        client = redis_lib.Redis.from_url(INTEGRATION_REDIS_URL, decode_responses=True)
         client.ping()
     except Exception:  # noqa: BLE001
         pytest.skip("no redis available for the recache test")
 
-    key = redis_keys.thresholds_hash(999)
-    client.delete(key)
-    client.hset(key, mapping={"temp_max": "26.00", "thi_max": "80.00"})
+    province = Province.objects.create(name="P-d15")
+    city = City.objects.create(province=province, name="C-d15")
+    org = Organization.objects.create(name="d15-org")
+    farm = Farm.objects.create(org=org, name="d15-farm", province=province, city=city)
+    saloon = Saloon.objects.create(org=org, farm=farm, name="d15-saloon")
 
-    # the recache for a saloon with no rules must clear every stale band
-    from apps.alerts.services import thresholds as th
+    key = redis_keys.thresholds_hash(saloon.pk)
+    client.delete(key)
+    # cache as if an operator had rules for temp AND thi, plus a live band
+    client.hset(key, mapping={
+        "temp_max": "26.00", "thi_max": "80.00", "flock_age_days": "9",
+    })
 
     original = th.build_hash_for_saloon
     try:
-        th.build_hash_for_saloon = lambda saloon, clock=None: {"operational_state": "ACTIVE_FLOCK"}
-        from apps.farms.models import Saloon
-        from apps.tenants.models import Organization
-        from apps.geography.models import City, Province
-
-        p = Province.objects.create(name="P-d15")
-        c = City.objects.create(province=p, name="C-d15")
-        org = Organization.objects.create(name="d15-org")
-        from apps.farms.models import Farm
-
-        f = Farm.objects.create(org=org, name="d15-farm", province=p, city=c)
-        s = Saloon.objects.create(org=org, farm=f, name="d15-saloon")
-        client.hset(redis_keys.thresholds_hash(s.pk), mapping={
-            "temp_max": "26.00", "thi_max": "80.00",
-        })
-        recache_saloon(s.pk)
-        left = client.hgetall(redis_keys.thresholds_hash(s.pk))
+        # the rules are now GONE: the fresh hash carries only these keys
+        th.build_hash_for_saloon = lambda saloon_obj, clock=None: {
+            "operational_state": "ACTIVE_FLOCK", "flock_age_days": "0",
+        }
+        th.recache_saloon(saloon.pk)
+        left = client.hgetall(key)
     finally:
         th.build_hash_for_saloon = original
-        client.flushdb()
+        client.delete(key)
+        client.delete(redis_keys.transition_grace_key(saloon.pk))
 
     assert "thi_max" not in left, f"stale band survived the recache: {left}"
     assert "temp_max" not in left, f"stale band survived the recache: {left}"
+    # ...and the recache must not be a blunt DEL: live keys survive
+    assert left.get("operational_state") == "ACTIVE_FLOCK", left
+    assert left.get("flock_age_days") == "0", left
 
 
 # ---------------------------------------------------------------------------
