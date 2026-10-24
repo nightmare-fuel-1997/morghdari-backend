@@ -216,6 +216,9 @@ def test_evaluate_entry_fires_on_flat_metrics(rf=None, django_user_model=None, s
         def get(self, key):
             return self.store.get(key)
 
+        def setdefault(self, key, default):
+            return self.store.setdefault(key, default)
+
         def delete(self, key):
             self.store.pop(key, None)
             return 1
@@ -281,14 +284,15 @@ def test_evaluate_entry_fires_on_flat_metrics(rf=None, django_user_model=None, s
 # ---------------------------------------------------------------------------
 
 def test_build_metric_hourly_writes_and_reheals(django_user_model):
-    import uuid as _uuid
-
     from django.db import connection
 
+    from apps.farms.models import Farm, Saloon
     from apps.monitoring.services_aggregates import build_metric_hourly
     from apps.tenants.models import Organization
 
     org = Organization.objects.create(name="hourly-org")
+    farm = Farm.objects.create(org=org, name="hourly-farm")
+    saloon = Saloon.objects.create(org=org, farm=farm, name="hourly-saloon")
     org_id = str(org.org_id)
     now = dt.datetime.now(dt.timezone.utc)
     bucket = now.replace(minute=0, second=0, microsecond=0)
@@ -299,12 +303,12 @@ def test_build_metric_hourly_writes_and_reheals(django_user_model):
             """
             INSERT INTO saloon_telemetry
                 (server_received_ts, device_ts, org_id, saloon_id, slot_id, metrics)
-            VALUES (%s, %s, %s, 55, 'SS-HOURLY-T', %s), (%s, %s, %s, 55, 'SS-HOURLY-T', %s)
+            VALUES (%s, %s, %s, %s, 'SS-HOURLY-T', %s), (%s, %s, %s, %s, 'SS-HOURLY-T', %s)
             """,
             [
-                now, device_ts, org_id, '{"temp": 20.0, "humidity": 50.0}',
+                now, device_ts, org_id, saloon.pk, '{"temp": 20.0, "humidity": 50.0}',
                 now + dt.timedelta(minutes=3), device_ts + dt.timedelta(minutes=3),
-                org_id, '{"temp": 30.0, "humidity": 60.0}',
+                org_id, saloon.pk, '{"temp": 30.0, "humidity": 60.0}',
             ],
         )
 
