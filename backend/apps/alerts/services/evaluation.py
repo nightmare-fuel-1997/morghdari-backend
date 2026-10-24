@@ -67,6 +67,21 @@ def evaluate_entry(
     if not thresholds:
         return None  # no thresholds cached ⇒ no alerts possible (fail-silent)
 
+    # 2026-10-24 defect (live verification): the subscriber writes FLAT
+    # metrics onto the stream ({"temp": 25.75}) — the window shape
+    # {"temp": {"avg": ...}} only existed inside the test suite. Every lane
+    # below (velocity, capability, threshold) keys on `["avg"]`, so flat
+    # values were silently skipped and threshold alerting was dead for all
+    # live telemetry. Normalize ONCE here: a bare number IS its own window
+    # average; dicts pass through untouched (min/max preserved when present).
+    normalized: dict = {}
+    for _k, _v in (metrics or {}).items():
+        if isinstance(_v, dict):
+            normalized[_k] = _v
+        elif isinstance(_v, (int, float)) and not isinstance(_v, bool):
+            normalized[_k] = {"avg": float(_v)}
+    metrics = normalized
+
     clock_now = time.time() if clock_now is None else clock_now
 
     # ── ① velocity emergency (bypasses ALL suppression) ────────────────────

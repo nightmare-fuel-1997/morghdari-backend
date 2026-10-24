@@ -453,6 +453,15 @@ CELERY_BEAT_SCHEDULE = {
     # v0.9 M9-10 (data-aggregates-v1 §4): batch-1 daily rollups, 00:30–01:00
     # Asia/Tehran, AFTER the midnight threshold cron (00:00) they read bands
     # from. Default queue: once a day each, no latency contract.
+    # 2026-10-24: the HOURLY writer metric_hourly_aggregates never had — the
+    # daily rollup reads hourly rows, so without this it aggregated an empty
+    # table forever. 30-minute trailing-window upsert keeps charts fresh and
+    # self-heals late buffered rows. Default queue: cheap, no latency contract.
+    "aggregates-build-metric-hourly": {
+        "task": "aggregates.build_metric_hourly",
+        "schedule": 1800.0,
+        "options": {"queue": "celery"},
+    },
     "aggregates-build-metric-daily": {
         "task": "aggregates.build_metric_daily",
         "schedule": __import__("celery.schedules", fromlist=["crontab"]).crontab(hour=0, minute=30),

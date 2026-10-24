@@ -183,6 +183,17 @@ def build_org_usage(day=None) -> int:
 # ---------------------------------------------------------------------------
 
 
+@shared_task(name="aggregates.build_metric_hourly")
+def build_metric_hourly(hours: int = 26) -> int:
+    """Hourly metric rollup — the writer `metric_hourly_aggregates` never had
+    (2026-10-24 defect: the table was read by charts/KPIs/daily rollup but
+    written by nobody). Trailing-window upsert, so the 30-minute cadence both
+    keeps charts fresh and self-heals late buffered rows."""
+    from apps.monitoring.services_aggregates import build_metric_hourly as _build
+
+    return _build(hours=hours)
+
+
 @shared_task(name="aggregates.build_metric_daily")
 def build_metric_daily(day=None) -> int:
     """Nightly metric_daily_aggregates rollup (upsert per day)."""

@@ -27,7 +27,7 @@ from drf_spectacular.utils import (
 )
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.exceptions import AuthenticationFailed
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
@@ -638,7 +638,15 @@ returns the secret plus the `otpauth://` URI for the authenticator app.
 Until `/auth/mfa/confirm/` verifies a live code, platform-staff login stays
 blocked (`mfa_required`) — enroll-then-login is the intended first-run flow.
 Calling setup again re-issues the secret; a previously confirmed enrollment is
-not silently trusted.""",
+not silently trusted.
+
+FIRST-RUN PATH (2026-10-24, defect found by live verification): a never-enrolled
+staff account cannot obtain a JWT (login demands MFA, setup demanded a JWT) —
+the two endpoints deadlocked. Setup therefore ALSO accepts `{username,
+password}` in the body, valid ONLY while the account has no confirmed
+enrollment. Once enrolled, the password-only path closes: re-issuing a secret
+requires the JWT, i.e. a live TOTP code — a leaked password alone can never
+hijack a confirmed enrollment.""",
     request=None,
     responses={
         200: MfaSetupResponseSerializer,
@@ -647,22 +655,41 @@ not silently trusted.""",
     examples=[MFA_SETUP_RESPONSE_EXAMPLE],
 )
 @api_view(["POST"])
-@permission_classes([IsAuthenticated])
+@permission_classes([AllowAny])
 def mfa_setup(request):
     """POST /auth/mfa/setup/ — (re)issue an unconfirmed TOTP enrollment.
 
-    Returns the secret (hex) and the otpauth:// URI the authenticator app
-    consumes. Until /auth/mfa/confirm/ verifies a live code, staff login
-    stays blocked (enroll-then-login is the intended first-run flow).
+    Two admission paths:
+      * JWT (IsAuthenticated-equivalent) — the standing re-issue path.
+      * username+password in the body — ONLY for accounts with no confirmed
+        enrollment (the first-run deadlock). Confirmed accounts must present
+        the JWT, so password alone never re-issues a secret.
     """
-    denied = _staff_not_superuser(request)
-    if denied is not None:
-        return denied
-    row = mfa.provision(request.user)
+    from django.contrib.auth import authenticate
+
+    user = request.user if request.user.is_authenticated else None
+    if user is None:
+        username = str(request.data.get("username") or "")
+        password = str(request.data.get("password") or "")
+        cand = authenticate(request, username=username, password=password)
+        if cand is None or not getattr(cand, "is_active", False):
+            return Response({"error": "invalid credentials"}, status=401)
+        if not cand.is_platform_staff or cand.is_superuser:
+            return Response({"error": "caller lacks the support platform claim"}, status=403)
+        if mfa.is_confirmed(cand):
+            # Confirmed: password proof is not enough to rotate the secret.
+            return Response(
+                {"error": "enrollment already confirmed — log in with a TOTP code"},
+                status=403,
+            )
+        user = cand
+    if not user.is_platform_staff or user.is_superuser:
+        return Response({"error": "caller lacks the support platform claim"}, status=403)
+    row = mfa.provision(user)
     return Response(
         {
             "secret": row.secret,
-            "otpauth_uri": mfa.provisioning_uri(request.user, row.secret),
+            "otpauth_uri": mfa.provisioning_uri(user, row.secret),
             "confirmed": False,
         }
     )
@@ -686,17 +713,38 @@ by a single typo, but the login path still requires a live code every time.""",
     ],
 )
 @api_view(["POST"])
-@permission_classes([IsAuthenticated])
+@permission_classes([AllowAny])
 def mfa_confirm(request):
     """POST /auth/mfa/confirm/ — verify the first live code; flips
-    confirmed_at so login opens. A wrong code is a plain 400 (retryable)."""
-    denied = _staff_not_superuser(request)
-    if denied is not None:
-        return denied
+    confirmed_at so login opens. A wrong code is a plain 400 (retryable).
+
+    Admission mirrors mfa_setup (2026-10-24 first-run deadlock fix): a JWT,
+    OR username+password for an account whose enrollment is still
+    UNCONFIRMED. Proving a live TOTP code is the whole point of the call —
+    password + code together are a proper possession proof for first-run."""
+    from django.contrib.auth import authenticate
+
+    user = request.user if request.user.is_authenticated else None
+    if user is None:
+        username = str(request.data.get("username") or "")
+        password = str(request.data.get("password") or "")
+        cand = authenticate(request, username=username, password=password)
+        if cand is None or not getattr(cand, "is_active", False):
+            return Response({"error": "invalid credentials"}, status=401)
+        if not cand.is_platform_staff or cand.is_superuser:
+            return Response({"error": "caller lacks the support platform claim"}, status=403)
+        if mfa.is_confirmed(cand):
+            return Response(
+                {"error": "enrollment already confirmed — log in with a TOTP code"},
+                status=403,
+            )
+        user = cand
+    if not user.is_platform_staff or user.is_superuser:
+        return Response({"error": "caller lacks the support platform claim"}, status=403)
     code = request.data.get("code")
     if not code:
         return Response({"error": "code required"}, status=400)
-    if not mfa.confirm(request.user, code):
+    if not mfa.confirm(user, code):
         return Response({"error": "invalid or already-confirmed code"}, status=400)
     return Response({"confirmed": True})
 

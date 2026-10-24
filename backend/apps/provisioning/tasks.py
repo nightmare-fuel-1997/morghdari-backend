@@ -185,9 +185,17 @@ def reconcile_reported(payload: dict, topic_slot_id: str | None = None) -> str:
         if state == "FAILED":
             slot.last_publish_error = str(payload.get("error") or "device reported FAILED")
             slot.save(update_fields=["last_reported_at", "last_publish_error"])
+            # 2026-10-24 (live verification): this used to fail EVERY in-flight
+            # command on the slot and stamp applied_at on them. applied_at on a
+            # FAILED row is a lie, and one command's failure must not fail its
+            # neighbours — the ROTATE-CREDENTIAL defect chain cost a REBOOT its
+            # state through exactly this path. A failed config application is
+            # about the config, so only PROVISION-kind commands (the bind's own
+            # first-config publish) may be failed by it.
             GatewayCommand.objects.filter(
-                gateway_slot_id=slot_id, state__in=["PENDING", "SENT", "ACKNOWLEDGED"]
-            ).update(state="FAILED", last_error=slot.last_publish_error, applied_at=timezone.now())
+                gateway_slot_id=slot_id, kind="PROVISION",
+                state__in=["PENDING", "SENT", "ACKNOWLEDGED"],
+            ).update(state="FAILED", last_error=slot.last_publish_error)
             return "FAILED"
 
         if state != "APPLIED":
@@ -461,6 +469,7 @@ def sweep_command_expiry(limit: int = 200) -> int:
             expires_at__isnull=False,
             expires_at__lt=now,
             state__in=["PENDING", "SENT", "ACKNOWLEDGED"],
+            applied_at__isnull=True,  # 2026-10-24: a row that already applied must never expire
         )
         .values_list("command_uuid", "org_id")[:limit]
     )
@@ -469,7 +478,8 @@ def sweep_command_expiry(limit: int = 200) -> int:
     for command_uuid, org_id in overdue:
         with transaction.atomic(), tenant_context(org_id):
             updated = GatewayCommand.objects.filter(
-                pk=command_uuid, state__in=["PENDING", "SENT", "ACKNOWLEDGED"]
+                pk=command_uuid, state__in=["PENDING", "SENT", "ACKNOWLEDGED"],
+                applied_at__isnull=True,
             ).update(state="EXPIRED", last_error="expired before the device answered")
             expired += updated
     if expired:

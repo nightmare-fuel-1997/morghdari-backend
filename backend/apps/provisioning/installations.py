@@ -318,6 +318,15 @@ def install_assignable(request):
     org_id = str(request.query_params.get("org_id") or "").strip()
     if not org_id:
         return Response({"error": "org_id required"}, status=400)
+    # 2026-10-24 defect (live verification): a non-UUID org_id reached the
+    # tenant_context UUID parser and surfaced as a raw 500. A malformed
+    # caller input is a 400, never a server error.
+    from uuid import UUID as _UUID
+
+    try:
+        _UUID(org_id)
+    except ValueError:
+        return Response({"error": "org_id must be a UUID"}, status=400)
     province_id = request.query_params.get("province_id")
 
     with transaction.atomic(), tenant_context(org_id):

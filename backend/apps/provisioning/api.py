@@ -1315,6 +1315,22 @@ def issue_gateway_command(request, gateway_slot_id: str):
             {"error": "PROVISION is issued by the bind flow, not by clients"},
             status=400,
         )
+    # 2026-10-24 defect (live verification): ROTATE_CREDENTIAL passed the KINDS
+    # gate here but this endpoint has no staged pending hash, so the device
+    # (correctly) FAILED the command — "rotate without a new password". The
+    # credential ceremony belongs to the dedicated /rotate-credential/ endpoint
+    # and /rotation-ack/. Reject it here with a pointer instead of letting a
+    # doomed command reach the device.
+    if kind == GatewayCommand.KIND_ROTATE:
+        return Response(
+            {
+                "error": (
+                    "ROTATE_CREDENTIAL goes through POST /gateways/{id}/rotate-credential/ "
+                    "— that endpoint stages the pending hash this surface cannot provide"
+                )
+            },
+            status=400,
+        )
 
     command = issue_command(
         slot.slot_id, kind,

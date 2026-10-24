@@ -107,7 +107,8 @@ def _latest_flock(saloon_id: int):
 
 def _operational_state(saloon_id: int) -> str:
     latest = (
-        SaloonOperationalState.objects.filter(saloon_id=saloon_id)
+        SaloonOperationalState.objects.using(_alias())
+        .filter(saloon_id=saloon_id)
         .order_by("-entered_at")
         .values_list("state", flat=True)
         .first()
@@ -190,7 +191,8 @@ def _assigned_template_id(flock, saloon):
     if saloon_id is None:
         return None
     return (
-        Saloon.objects.filter(pk=saloon_id)
+        Saloon.objects.using(_alias())
+        .filter(pk=saloon_id)
         .values_list("threshold_template_id", flat=True)
         .first()
     )
@@ -217,7 +219,16 @@ def effective_template(flock, saloon=None) -> tuple[LifecycleTemplate | None, st
     org_id = getattr(flock, "org_id", None) or getattr(saloon, "org_id", None)
     breed = getattr(flock, "breed_type", None)
     order = ("-is_default", "template_id")
-    published = LifecycleTemplate.objects.filter(status=LifecycleTemplate.PUBLISHED)
+    # 2026-10-24 defect (live verification): lifecycle_templates is FORCE-RLS,
+    # and the celery recache task (flock-created / assigned / nightly sweep)
+    # runs WITHOUT a tenant GUC — the default alias saw zero templates and
+    # every assignment silently fell through to the breed/default chain, so
+    # assigned bands never reached the hash. Read through the same sanctioned
+    # admin alias the saloon/flock reads in this module already use; the
+    # org_id filters below keep the scoping.
+    published = LifecycleTemplate.objects.using(_alias()).filter(
+        status=LifecycleTemplate.PUBLISHED
+    )
 
     assigned_id = _assigned_template_id(flock, saloon)
     if assigned_id is not None:

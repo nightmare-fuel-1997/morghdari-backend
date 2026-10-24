@@ -314,3 +314,94 @@ def build_gateway_uptime(day=None) -> int:
         written += 1
     logger.info("gateway uptime %s: %s slot rows", day, written)
     return written
+
+
+def build_metric_hourly(hours: int = 26) -> int:
+    """HOURLY aggregate writer — the one that never existed.
+
+    2026-10-24 (live verification, defect): `metric_hourly_aggregates` is read
+    by the hourly-analytics charts, the KPI alert lane, and `build_metric_daily`
+    — but NOTHING in the codebase wrote a single row into it. The daily rollup
+    has been aggregating an empty table since it shipped.
+
+    Window = the trailing `hours` hours (default 26: last full hour plus
+    slack), bucketed on device_ts UTC hour, grouped per (bucket, sensor slot,
+    metric). Metrics live in the `metrics` jsonb as flat keys — non-numeric
+    values are skipped, unknown metric keys are skipped (FK), and the upsert
+    makes re-runs and late buffered rows self-healing rather than duplicating.
+
+    Cross-org on the admin alias, same sanctioned pattern as every builder in
+    this module. Returns the number of upserted (bucket, slot, metric) rows.
+    """
+    from django.db import connection as _django_connection  # noqa: F401
+    from django.db import connections
+
+    from apps.telemetry.models import SaloonTelemetry
+
+    alias = _alias()
+    now = dt.datetime.now(dt.timezone.utc)
+    window_start = now - dt.timedelta(hours=max(int(hours), 1))
+
+    # One pass over the window's raw rows; jsonb is parsed in Python so the
+    # builder stays backend-agnostic (same trade as the sibling builders).
+    rows = (
+        SaloonTelemetry.objects.using(alias)
+        .filter(device_ts__gte=window_start)
+        .values_list("device_ts", "org_id", "saloon_id", "slot_id", "metrics")
+        .iterator()
+    )
+    groups: dict[tuple, dict] = {}
+    for device_ts, org_id, saloon_id, slot_id, metrics in rows:
+        bucket = device_ts.astimezone(dt.timezone.utc).replace(
+            minute=0, second=0, microsecond=0
+        )
+        if not isinstance(metrics, dict):
+            continue
+        for metric_key, raw_value in metrics.items():
+            if isinstance(raw_value, bool) or not isinstance(raw_value, (int, float)):
+                try:
+                    value = float(raw_value)
+                except (TypeError, ValueError):
+                    continue  # non-numeric reading: nothing to aggregate
+            else:
+                value = float(raw_value)
+            key = (bucket, str(slot_id), str(metric_key))
+            g = groups.setdefault(
+                key, {"org": str(org_id), "saloon": saloon_id, "v": []}
+            )
+            g["v"].append(value)
+
+    written = 0
+    # MetricHourlyAggregate is UNMANAGED; use raw upsert SQL so re-runs heal
+    # instead of violating UNIQUE (bucket_hr, slot_id, metric_key).
+    with connections[alias].cursor() as cur:
+        for (bucket, slot_id, metric_key), g in groups.items():
+            values = g["v"]
+            n = len(values)
+            mean = sum(values) / n
+            var = sum((v - mean) ** 2 for v in values) / (n - 1) if n > 1 else 0.0
+            cur.execute(
+                """
+                INSERT INTO metric_hourly_aggregates (
+                    bucket_hr, org_id, saloon_id, slot_id, metric_key,
+                    avg_val, min_val, max_val, stddev_val, sample_count
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (bucket_hr, slot_id, metric_key) DO UPDATE SET
+                    avg_val = EXCLUDED.avg_val,
+                    min_val = EXCLUDED.min_val,
+                    max_val = EXCLUDED.max_val,
+                    stddev_val = EXCLUDED.stddev_val,
+                    sample_count = EXCLUDED.sample_count
+                """,
+                [
+                    bucket, g["org"], g["saloon"], slot_id, metric_key,
+                    round(mean, 4), round(min(values), 4), round(max(values), 4),
+                    round(var ** 0.5, 4), n,
+                ],
+            )
+            written += 1
+    logger.info(
+        "metric hourly rollup (last %sh): %s rows", max(int(hours), 1), written
+    )
+    return written
