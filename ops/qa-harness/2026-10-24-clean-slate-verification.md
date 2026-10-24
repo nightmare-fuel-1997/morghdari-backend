@@ -39,7 +39,7 @@ Each fix was deployed (image vps-07) and re-verified **live against the twins**.
 
 - Trees: local = `origin/main` = server @ `470589f`, clean; `deploy_tag=vps-07`;
   all 6 containers verified on the vps-07 image by ID.
-- Full suite on the server: **931 passed, 13 skipped, 0 failed**.
+- Full suite on the server: **933 passed, 13 skipped, 0 failed**.
 - Health 200; fleet green; LOS alerts fired and resolved correctly during the run.
 
 ## Honest caveats
@@ -73,3 +73,55 @@ Drill results after the fixes:
 No container was lost in the pre-fix failures: the failed recreate left the
 existing postgres container running, and all 9 stayed healthy.
 
+
+---
+
+## Follow-up round (same day): the untouched paths
+
+### 1. Restore drill — found D13, the worst kind of DR bug
+
+A real dump was taken and restored. **Data fidelity was perfect** (all 11 audited
+tables matched the live DB exactly: 934 telemetry rows, 160 hourly aggregates,
+13 commands, 7 alerts). But the obvious command is wrong on this database:
+
+| Approach | Result |
+|---|---|
+| `pg_restore -d <db> dump` | **exit 1, 27 errors**, chunk FK constraints never applied |
+| `CREATE EXTENSION` + `timescaledb_pre_restore()` → restore → `timescaledb_post_restore()` | **exit 0, zero errors**, `hypertables=2 chunks=2` |
+
+Data lands either way, so a hook-less restore *looks* successful while silently
+missing integrity constraints — the worst failure mode for disaster recovery.
+There was no restore script in the repo at all. `scripts/restore.sh` now encodes
+the canonical sequence and verifies row counts + hypertable/chunk presence,
+refusing the live database without `--force` (exit 3) and refusing a missing or
+unreadable dump (exit 1). Drilled through the script: `exit=0`,
+"restored cleanly (pg_restore exit 0, hypertables intact)".
+
+### 2. Fault injection — the fleet was never run dirty
+
+The simulator's fault modes were switched on for ~6 minutes:
+`drop=0.10, delay=0.10 (8 s), invalid=0.05, restart=0.02`.
+
+| Observation | Result |
+|---|---|
+| twins stayed connected and kept reporting | sent 4 and 6 windows, faults=2 and faults=3 |
+| telemetry still ingested | 934 → 994 rows during the window |
+| malformed frames | quarantined with precise reasons: `bad_json`, `UNKNOWN_SLOT`, `TOPIC_PAYLOAD_IDENTITY_MISMATCH`, `UNSUPPORTED_SCHEMA_VERSION` |
+| worker tracebacks / subscriber criticals | **0 / 0** |
+| DLQ growth | +10, all classified — nothing unclassified, no crash loop |
+
+### 3. D6/D7 regression tests restored
+
+Both were re-added the project's own way: D6 on the real integration redis
+(`INTEGRATION_REDIS_URL`, db 11) instead of a hand-rolled fake; D7 with the
+DDL-guard pattern from `test_followthrough_core` that creates the unmanaged
+hypertables from the `0002` migration SQL. `test_2026_10_24_live_defects.py` now
+holds 10 green tests (D1, D2, D3, D4, D4b, D6, D7, D8). D5 remains live-verified
+only, stated plainly rather than implied.
+
+### What is still untouched
+
+Offline buffering across long outages, replay/backfill, subscription and
+maintenance mutes, the THI and velocity alert lanes, WebSocket, report/PDF
+export, and the frontend contract. The twin's sensor physics is still a diurnal
+model, not a real shed.
