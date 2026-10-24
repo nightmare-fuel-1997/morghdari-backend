@@ -36,7 +36,14 @@ APP_SERVICES=(daphne celery-worker celery-beat subscriber-01 subscriber-02)
 # exist (built and tagged by the release step). A missing tag fails fast here
 # and the rollback path below takes over, instead of silently rebuilding from
 # whatever the tree happens to contain.
-UP_FLAGS=(--no-build)
+#
+# --no-deps is load-bearing, not a speed tweak (2026-10-24, first real drill):
+# `up -d <app services>` still evaluates DEPENDENCIES, so a release-tag deploy
+# was dragging postgres into the recreate set — a stateful container that is
+# not part of the release at all (and whose image the release tag does not
+# name). An app-tier deploy must never touch infra; a DB upgrade is its own,
+# deliberate operation.
+UP_FLAGS=(--no-build --no-deps)
 ALL_CONTAINERS=(morghdari-nginx morghdari-emqx morghdari-redis morghdari-postgres
                 morghdari-daphne morghdari-celery-worker morghdari-celery-beat
                 morghdari-subscriber-01 morghdari-subscriber-02)

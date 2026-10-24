@@ -115,7 +115,15 @@ services:
   postgres:
     # M8-01: timescale + wal-g base image (archive_mode on, hourly WAL push —
     # DR §2.1/§3.3). Rehearsal builds it locally via the override below.
-    image: ghcr.io/morghdari/postgres-walg:${MORGHDARI_TAG}
+    #
+    # 2026-10-24 (first real drill of deploy.sh): this used to be
+    # ${MORGHDARI_TAG}, which coupled the DATABASE image to the RELEASE tag —
+    # every release then needed the postgres image re-tagged by hand or any
+    # compose run that touches dependencies died with "No such image:
+    # postgres-walg:<new tag>" (and a rollback hit the same wall). The DB image
+    # is versioned on its own axis: override with POSTGRES_IMAGE_TAG when it
+    # genuinely changes, otherwise it stays put across app releases.
+    image: ghcr.io/morghdari/postgres-walg:${POSTGRES_IMAGE_TAG:-vps-05}
     container_name: morghdari-postgres
     # ponytail: 1200m cap for a 2-core/4 GB VPS - a 4g ceiling let Postgres
     # grow until the kernel OOM-killed daphne/redis instead; ~6x measured use.
