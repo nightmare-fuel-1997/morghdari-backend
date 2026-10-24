@@ -240,8 +240,14 @@ def test_evaluate_entry_fires_on_flat_metrics():
     if r is None:
         pytest.skip("no redis available for the evaluation test")
 
+    from apps.geography.models import City, Province
+
+    province = Province.objects.create(name="P-d6")
+    city = City.objects.create(province=province, name="C-d6")
     org = Organization.objects.create(name="d6-org")
-    farm = Farm.objects.create(org=org, name="d6-farm")
+    farm = Farm.objects.create(
+        org=org, name="d6-farm", province=province, city=city,
+    )
     saloon = Saloon.objects.create(org=org, farm=farm, name="d6-saloon")
 
     # arm the threshold hash exactly as the recache would
@@ -307,8 +313,14 @@ def test_build_metric_hourly_writes_and_reheals(telemetry_tables):
     from apps.monitoring.services_aggregates import build_metric_hourly
     from apps.tenants.models import Organization
 
+    from apps.geography.models import City, Province
+
+    province = Province.objects.create(name="P-d7")
+    city = City.objects.create(province=province, name="C-d7")
     org = Organization.objects.create(name="d7-org")
-    farm = Farm.objects.create(org=org, name="d7-farm")
+    farm = Farm.objects.create(
+        org=org, name="d7-farm", province=province, city=city,
+    )
     saloon = Saloon.objects.create(org=org, farm=farm, name="d7-saloon")
 
     now = dt.datetime.now(dt.timezone.utc)
