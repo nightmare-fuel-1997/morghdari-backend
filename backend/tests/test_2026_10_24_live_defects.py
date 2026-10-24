@@ -140,20 +140,23 @@ def test_issue_command_rejects_rotate_credential(django_user_model):
 # ---------------------------------------------------------------------------
 
 def test_reported_failed_only_fails_provision_commands(django_user_model):
-    org = _world(django_user_model)["org"]
+    from tests.test_command_issue_path import _org, _slot
+
+    org = _org()
+    slot = _slot(org)  # real gateway_slots row — gateway_commands FK requires it
     provision = GatewayCommand.objects.create(
-        gateway_slot_id="GW-FAIL-SCOPE", org_id=org.org_id,
+        gateway_slot_id=slot.slot_id, org_id=org.org_id,
         kind=GatewayCommand.KIND_PROVISION, state="SENT",
     )
     reboot = GatewayCommand.objects.create(
-        gateway_slot_id="GW-FAIL-SCOPE", org_id=org.org_id,
+        gateway_slot_id=slot.slot_id, org_id=org.org_id,
         kind=GatewayCommand.KIND_REBOOT, state="ACKNOWLEDGED",
     )
 
     outcome = reconcile_reported(
-        {"slot_id": "GW-FAIL-SCOPE", "config_version": 0, "state": "FAILED",
+        {"slot_id": slot.slot_id, "config_version": 0, "state": "FAILED",
          "error": "config rejected"},
-        topic_slot_id="GW-FAIL-SCOPE",
+        topic_slot_id=slot.slot_id,
     )
     assert outcome == "FAILED"
     provision.refresh_from_db()
@@ -165,10 +168,12 @@ def test_reported_failed_only_fails_provision_commands(django_user_model):
 
 def test_expiry_sweep_never_expires_an_applied_row(django_user_model):
     from apps.provisioning.tasks import sweep_command_expiry
+    from tests.test_command_issue_path import _org, _slot
 
-    org = _world(django_user_model)["org"]
+    org = _org()
+    slot = _slot(org)
     applied = GatewayCommand.objects.create(
-        gateway_slot_id="GW-EXP-1", org_id=org.org_id,
+        gateway_slot_id=slot.slot_id, org_id=org.org_id,
         kind=GatewayCommand.KIND_REBOOT, state="APPLIED",
         applied_at=dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=2),
         expires_at=dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=1),
@@ -190,25 +195,40 @@ def test_evaluate_entry_fires_on_flat_metrics(rf=None, django_user_model=None, s
 
     from apps.alerts.services import redis_keys
 
-    class FakeRedis(dict):
+    class FakeRedis:
+        """Just enough surface for evaluate_entry / track_breach / firing."""
+
+        def __init__(self):
+            self.store = {}
+
         def hgetall(self, key):
-            return dict(self.get(key, {}))
+            return dict(self.store.get(key, {}))
 
         def hset(self, key, mapping=None, **kw):
-            self.setdefault(key, {}).update(mapping or {})
+            self.store.setdefault(key, {}).update(mapping or {})
+            return 1
 
-        def expire(self, key, ttl):
-            pass
-
-        def pipeline(self):
-            pipe = _FakePipeline(self)
-            return pipe
-
-        def set(self, key, value, ex=None):
-            self[key] = value
+        def set(self, key, value, ex=None, **kw):
+            self.store[key] = value
+            self.store.setdefault("__ttl__", {})[key] = ex
+            return True
 
         def get(self, key):
-            return self.get(key)
+            return self.store.get(key)
+
+        def delete(self, key):
+            self.store.pop(key, None)
+            return 1
+
+        def ttl(self, key):
+            return self.store.get("__ttl__", {}).get(key) or 10**6
+
+        def expire(self, key, ttl):
+            self.store.get("__ttl__", {})[key] = ttl
+            return True
+
+        def pipeline(self):
+            return _FakePipeline(self)
 
     class _FakePipeline:
         def __init__(self, store):
@@ -230,10 +250,15 @@ def test_evaluate_entry_fires_on_flat_metrics(rf=None, django_user_model=None, s
                     self.store.setdefault(op[1], {}).update(op[2])
                 elif op[0] == "setex":
                     self.store[op[1]] = op[3]
+                    self.store.setdefault("__ttl__", {})[op[1]] = op[2]
+                elif op[0] == "expire":
+                    self.store.setdefault("__ttl__", {})[op[1]] = op[2]
             return []
 
     r = FakeRedis()
-    r[redis_keys.thresholds_hash(77)] = {"temp_max": "26.00", "temp_min": "15.00"}
+    r.store[redis_keys.thresholds_hash(77)] = {
+        b"temp_max": b"26.00", b"temp_min": b"15.00",
+    }
 
     now = _time.time()
     # window 1 — arms the breach accumulator
@@ -274,11 +299,12 @@ def test_build_metric_hourly_writes_and_reheals(django_user_model):
             """
             INSERT INTO saloon_telemetry
                 (server_received_ts, device_ts, org_id, saloon_id, slot_id, metrics)
-            VALUES (now(), %s, %s, 55, 'SS-HOURLY-T', %s), (now(), %s, %s, 55, 'SS-HOURLY-T', %s)
+            VALUES (%s, %s, %s, 55, 'SS-HOURLY-T', %s), (%s, %s, %s, 55, 'SS-HOURLY-T', %s)
             """,
             [
-                device_ts, org_id, '{"temp": 20.0, "humidity": 50.0}',
-                device_ts + dt.timedelta(minutes=3), org_id, '{"temp": 30.0, "humidity": 60.0}',
+                now, device_ts, org_id, '{"temp": 20.0, "humidity": 50.0}',
+                now + dt.timedelta(minutes=3), device_ts + dt.timedelta(minutes=3),
+                org_id, '{"temp": 30.0, "humidity": 60.0}',
             ],
         )
 
