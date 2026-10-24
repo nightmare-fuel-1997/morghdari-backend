@@ -553,3 +553,37 @@ def test_drain_processes_each_entry_once_per_cycle(django_user_model):
 
     assert processed == 1, f"one entry processed {processed} times (D17 regressed)"
     assert len(pushes) == 1, f"one entry pushed {len(pushes)} times to the dashboard (D17 regressed)"
+
+
+# ---------------------------------------------------------------------------
+# D18 — the flat checklist shape must reach the submit gate
+#
+# EXTRA_FIELDS lists checklist_feed/water/device and the read API returns them,
+# but only the NESTED {"checklist": {...}} form reached `fields`. A client
+# sending the flat flags on a SUBMITTED write was told "checklist incomplete"
+# with no hint that the shape was the problem.
+# ---------------------------------------------------------------------------
+
+def test_flat_checklist_flags_are_folded_into_the_gate():
+    from apps.reports.api import _checklist_incomplete, _normalize_write
+
+    flat, errors = _normalize_write({
+        "status": "SUBMITTED",
+        "checklist_feed": True,
+        "checklist_water": True,
+        "checklist_device": True,
+    })
+    assert errors == []
+    assert not _checklist_incomplete(flat), flat
+
+    # a missing flag still blocks, exactly as before
+    partial, _ = _normalize_write({"checklist_feed": True, "checklist_water": True})
+    assert _checklist_incomplete(partial)
+
+    # the nested object wins when both shapes are present
+    nested, _ = _normalize_write({
+        "checklist": {"feed": False, "water": True, "device": True},
+        "checklist_feed": True,
+    })
+    assert nested["checklist_feed"] is False
+    assert _checklist_incomplete(nested)

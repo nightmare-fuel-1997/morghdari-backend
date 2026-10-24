@@ -204,6 +204,18 @@ def _normalize_write(data) -> tuple[dict, list[str]]:
                 if part in checklist:
                     fields[f"checklist_{part}"] = bool(checklist[part])
 
+    # 2026-10-24 (found by the live reports drill): the flat flags were listed
+    # in EXTRA_FIELDS and are what the model/read API call them, but only the
+    # NESTED form reached `fields` — so a client sending checklist_feed=true
+    # flat was told "checklist incomplete" on a SUBMITTED write, with no hint
+    # that the shape was the problem. Fold them too; the nested object wins
+    # when both are present.
+    # فارسی: پرچم‌های تختِ چک‌لیست هم پذیرفته می‌شوند؛ شکلِ تودرتو اولویت دارد.
+    for part in ("feed", "water", "device"):
+        flat_key = f"checklist_{part}"
+        if flat_key in data and flat_key not in fields:
+            fields[flat_key] = bool(data[flat_key])
+
     return fields, errors
 
 
