@@ -219,13 +219,49 @@ trees have drifted again — stop and reconcile before deploying.
 ### Two kinds of change, and they deploy differently
 
 1. **Deploy layer** — compose files, `nginx/`, `emqx/`, `redis/`, `monitoring/`,
-   `scripts/`. A `git pull` puts the files in place; `scripts/deploy.sh <tag>` or
-   a compose `up -d` then applies them.
+   `scripts/`. A `git pull` puts the files in place; `bash scripts/deploy.sh <tag>`
+   or a compose `up -d` then applies them.
 2. **Application code** — `backend/`. This does **not** run from the tree. Every
    backend service uses a pre-built image,
    `ghcr.io/morghdari/backend:${MORGHDARI_TAG}`. A source change needs a new image
    built and pushed, then deployed by tag. Editing `backend/` on the VPS and
    restarting containers changes nothing.
+
+### `scripts/deploy.sh` — drilled 2026-10-24, and what it guarantees
+
+**Invoke it as `bash scripts/deploy.sh <tag>`, not `./scripts/deploy.sh`.** The
+repo has `core.fileMode = false`, so the executable bit is not recorded and the
+bare path fails with `Permission denied`.
+
+```bash
+cd /opt/morghdari
+docker build -q -t ghcr.io/morghdari/backend:vps-NN backend/   # release step
+bash scripts/deploy.sh vps-NN                                    # deploy
+bash scripts/deploy.sh vps-NN                                    # same command = rollback target
+```
+
+What it does, proven by drill:
+
+| Property | Evidence (2026-10-24) |
+|---|---|
+| Happy path | `==> OK: all 9 containers healthy on tag vps-07`, `exit=0`, `.deploy_tag` written |
+| Missing tag fails fast | `No such image: …:vps-does-not-exist` → automatic rollback → `exit=1`, `.deploy_tag` unchanged |
+| Health gate covers all 9 | every container (nginx, emqx, redis, postgres + 5 app) has a HEALTHCHECK and must report `healthy` |
+| nginx is reloaded after every `up -d` | BUG-14: a recreate hands the app containers new IPs and nginx proxies to dead ones while every health check stays green |
+| App deploys never touch infra | `--no-deps`: without it, `up -d <app services>` drags **postgres** into the recreate set (a stateful container that is not part of a release) |
+| Tag deploys never rebuild | `--no-build`: the image for the tag must already exist, so a deploy cannot silently build from whatever the tree contains |
+
+The DB image has its **own** axis: `docker-compose.prod.yml` pins
+`postgres-walg:${POSTGRES_IMAGE_TAG:-vps-05}`, deliberately **not**
+`${MORGHDARI_TAG}`. Before 2026-10-24 it was release-tagged, which meant every
+release needed the postgres image re-tagged by hand — the old tags `vps-02`
+through `vps-05` are all one image because someone did exactly that until they
+stopped. A DB upgrade is its own operation, not a side effect of an app deploy.
+
+The `Found orphan containers ([morghdari-simulator morghdari-provisioner])`
+warning during a deploy is **expected**: the simulator is opt-in
+(`docker-compose.sim.yml`) and deliberately not part of the deploy path.
+
 
 ### Branch map — what is and is not on `main`
 

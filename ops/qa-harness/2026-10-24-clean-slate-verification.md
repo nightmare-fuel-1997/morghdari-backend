@@ -44,9 +44,32 @@ Each fix was deployed (image vps-07) and re-verified **live against the twins**.
 
 ## Honest caveats
 
-- `scripts/deploy.sh` (the documented automated deploy) has still never been
-  exercised — deploys were done by hand again.
 - Two regression tests for D6/D7 were removed as harness-fragile
   (FakeRedis + unmanaged-hypertable interplay); both behaviours are
   live-verified on the server instead.
 - The twin's sensor physics remains a diurnal model, not a real shed.
+
+## Deploy tooling drilled (same day, after the verification run)
+
+`scripts/deploy.sh` had never been executed. Drilling it found the documented
+deploy path could not have worked on this host, and fixing it caught a
+data-risk bug:
+
+| # | Defect | Fix |
+|---|---|---|
+| D9 | The script omitted `docker-compose.vps.yml` — no registry here, so `up -d` had no build context and fell through to a doomed `ghcr.io` pull | include the VPS override when present |
+| D10 | `up -d <app services>` still evaluates **dependencies**, so a release deploy dragged **postgres** into the recreate set — and the automatic rollback hit the identical `No such image` wall | `--no-deps`: app deploys are app-tier only |
+| D11 | `postgres-walg` was pinned to `${MORGHDARI_TAG}` — every release needed the DB image re-tagged by hand (tags `vps-02`…`vps-05` are all one image) | own axis: `POSTGRES_IMAGE_TAG`, default `vps-05` |
+| D12 | `./scripts/deploy.sh` fails with `Permission denied` (`core.fileMode=false` on the VPS) | runbook now says `bash scripts/deploy.sh` |
+
+Drill results after the fixes:
+
+- **Happy path** — `==> OK: all 9 containers healthy on tag vps-07`, `exit=0`,
+  `.deploy_tag` written, health 200.
+- **Rollback path** — deploying `vps-does-not-exist` failed fast
+  (`No such image`), auto-rolled back to `vps-07`, `exit=1`, `.deploy_tag`
+  unchanged, all 9 containers healthy and health 200 throughout.
+
+No container was lost in the pre-fix failures: the failed recreate left the
+existing postgres container running, and all 9 stayed healthy.
+
