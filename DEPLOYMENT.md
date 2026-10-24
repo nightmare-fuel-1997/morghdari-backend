@@ -78,6 +78,39 @@ docker ps   # subscriber + backend up, EMQX reachable
 - Feature-level containment: new endpoints are additive; a bad v1.6/v1.7
   path can be disabled at nginx without a rollback.
 
+### Restore a backup — drilled 2026-10-24, and the trap in the obvious command
+
+**Never restore with a bare `pg_restore -d <db> <dump>`.** `saloon_telemetry`
+and `metric_hourly_aggregates` are Timescale hypertables. Without the Timescale
+hooks the restore *looks* fine — data lands, the hypertables come back — but the
+chunk constraints are never applied and `pg_restore` exits 1 with ~27
+`ONLY option not supported on hypertable operations` errors. Silent loss of
+integrity is the worst possible DR failure mode.
+
+`scripts/restore.sh` encodes the correct sequence and verifies the result:
+
+```bash
+# Drill a backup into a scratch database (the way to prove a backup is good):
+bash scripts/restore.sh /backups/postgres/morghdari_YYYYMMDD.dump morghdari_restore_drill
+#   -> pg_restore exit 0, "hypertables=2 chunks=2", row counts printed
+
+# Real disaster recovery (stack up, target DB empty):
+bash scripts/restore.sh /backups/postgres/morghdari_YYYYMMDD.dump morghdari --force
+```
+
+What the drill established (2026-10-24, on this host):
+
+| Step | Result |
+|---|---|
+| naive `pg_restore -d` | exit 1, 27 errors, chunk FKs missing |
+| `CREATE EXTENSION` + `timescaledb_pre_restore()` → restore → `timescaledb_post_restore()` | **exit 0, zero errors** |
+| data fidelity | 934 telemetry rows, 160 hourly aggregates, all 11 audited tables match the live DB exactly |
+| structure | `hypertables=2 chunks=2` after restore |
+| guards | live DB without `--force` → exit 3 with instructions; missing/corrupt dump → exit 1 |
+
+The script refuses the live database unless `--force` is passed, so a drill can
+never be pointed at production by accident.
+
 ## 5. Incident first-response (02:00 card)
 
 1. `curl http://<host>/api/v1/health/` — `status: ok` vs `degraded` names the
