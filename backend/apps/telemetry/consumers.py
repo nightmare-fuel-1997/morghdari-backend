@@ -256,7 +256,22 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None,
         for entry_id, fields in entries:
             if gateway_slot is not None and fields.get("gateway_slot_id") != gateway_slot:
                 continue  # M5-05: another gateway's held telemetry stays put
-            first_sight = entry_id not in seen_ids
+            if entry_id in seen_ids:
+                # 2026-10-24 defect (found by the live WebSocket drill): the
+                # '>' read and the PEL ("0") crash-recovery read in the SAME
+                # cycle return the same entry — the '>' read already placed it
+                # in our own PEL, and the ack only happens further down. Both
+                # copies used to be appended to raw_entries, so every reading
+                # was pushed to dashboards TWICE, alert-evaluated twice and
+                # counted twice (bump_ingested / bump_meter_hour / processed).
+                # `ignore_conflicts=True` hid it at the DB layer, which is why
+                # the row counts always looked right.
+                # The ack rides the FIRST sight, so dropping the second is
+                # safe; a genuinely redelivered (crash) entry is still
+                # processed — on the NEXT cycle, where seen_ids starts empty.
+                # فارسی: خواندنِ دوبارهٔ همان ورودی در یک چرخه (صفِ '>' و PEL)
+                # نباید دو بار پردازش شود؛ ack با اولین برخورد انجام می‌شود.
+                continue
             seen_ids.add(entry_id)
             ids.append(entry_id)
             fields_by_id[entry_id] = fields  # BUG-13: DLQ payload source
@@ -299,9 +314,11 @@ def drain_stream(stream: str, count: int = BATCH_SIZE_DEFAULT, pacer=None,
                 by_org.setdefault(kwargs["org_id"], []).append(kwargs)
                 ids_by_org.setdefault(kwargs["org_id"], []).append(entry_id)
                 raw_entries.append((kwargs["org_id"], {"saloon_id": saloon_id, "fields": fields, "entry_id": entry_id}))
-            if fields.get("is_buffered") == "True" and first_sight:
+            if fields.get("is_buffered") == "True":
                 # Count EVERY buffered entry (even DLQ'd ones — the slot was
                 # still processed), else the backlog never reaches zero.
+                # (The per-cycle duplicate is already dropped above, so this
+                # counts each entry exactly once.)
                 gw = fields.get("gateway_slot_id", "")
                 buffered_by_gw[gw] = buffered_by_gw.get(gw, 0) + 1
                 # M7-04 observability: replay counter (Redis bridge, runbook §3.1).

@@ -469,3 +469,82 @@ def test_recache_drops_a_stale_band(django_user_model):
 
     assert "thi_max" not in left, f"stale band survived the recache: {left}"
     assert "temp_max" not in left, f"stale band survived the recache: {left}"
+
+
+# ---------------------------------------------------------------------------
+# D17 — one stream entry must be processed ONCE per drain cycle
+#
+# The live WebSocket drill caught every telemetry.update arriving twice. Cause:
+# drain_stream does a '>' read and then a PEL ("0") read in the SAME cycle, and
+# the '>' read has already put those entries in our own PEL — so both reads
+# return the same entry, and both copies were appended to raw_entries. Rows
+# looked right only because bulk_create(ignore_conflicts=True) hid it.
+#
+# Uses REAL redis (the PEL behaviour is the whole point — no fake models it)
+# and asserts the two things the bug corrupted: the push count and `processed`.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+def test_drain_processes_each_entry_once_per_cycle(django_user_model):
+    from apps.devices.models import SaloonPosition, SaloonSensorSlot
+    from apps.farms.models import Farm, Saloon
+    from apps.geography.models import City, Province
+    from apps.telemetry import consumers
+    from apps.tenants.models import Organization
+    from tests.conftest import INTEGRATION_REDIS_URL
+
+    import redis as redis_lib
+
+    try:
+        client = redis_lib.Redis.from_url(INTEGRATION_REDIS_URL, decode_responses=True)
+        client.ping()
+    except Exception:  # noqa: BLE001
+        pytest.skip("no redis available for the drain test")
+
+    province = Province.objects.create(name="P-d17")
+    city = City.objects.create(province=province, name="C-d17")
+    org = Organization.objects.create(name="d17-org")
+    farm = Farm.objects.create(org=org, name="d17-farm", province=province, city=city)
+    saloon = Saloon.objects.create(org=org, farm=farm, name="d17-saloon")
+    position = SaloonPosition.objects.create(saloon=saloon, org=org, label="north")
+    SaloonSensorSlot.objects.create(
+        slot_id="SS-D17", saloon=saloon, org=org, position=position,
+        allowed_metric_keys=["temp"],
+    )
+
+    stream = "test:d17:realtime"
+    client.delete(stream)
+    consumers._redis_client = client  # drain uses this client
+
+    pushes = []
+
+    def _record_push(org_id, entries, channel_layer=None):
+        pushes.extend(entries)
+        return len(entries)
+
+    import apps.telemetry.ws as ws_mod
+
+    original_push = ws_mod.push_telemetry_updates
+    ws_mod.push_telemetry_updates = _record_push
+    try:
+        now = dt.datetime.now(dt.timezone.utc)
+        client.xadd(stream, {
+            "org_id": str(org.org_id),
+            "farm_id": str(farm.pk),
+            "gateway_slot_id": "GW-D17",
+            "slot_id": "SS-D17",
+            "device_ts": now.isoformat(),
+            "recv_ts": str(now.timestamp()),
+            "is_buffered": "False",
+            "clock_drift": "False",
+            "metrics": '{"temp": 25.0}',
+        })
+        processed = consumers.drain_stream(stream, count=10)
+    finally:
+        ws_mod.push_telemetry_updates = original_push
+        client.delete(stream)
+        client.flushdb()
+        consumers._redis_client = None
+
+    assert processed == 1, f"one entry processed {processed} times (D17 regressed)"
+    assert len(pushes) == 1, f"one entry pushed {len(pushes)} times to the dashboard (D17 regressed)"
