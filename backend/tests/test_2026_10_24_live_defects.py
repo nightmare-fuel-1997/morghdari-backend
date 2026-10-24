@@ -323,6 +323,18 @@ def test_build_metric_hourly_writes_and_reheals(telemetry_tables):
     )
     saloon = Saloon.objects.create(org=org, farm=farm, name="d7-saloon")
 
+    # saloon_telemetry.slot_id is an FK to saloon_sensor_slots: telemetry can
+    # only exist for a real sensor slot (that is the point of the mapping).
+    from apps.devices.models import SaloonPosition, SaloonSensorSlot
+
+    position = SaloonPosition.objects.create(
+        saloon=saloon, org=org, label="north",
+    )
+    SaloonSensorSlot.objects.create(
+        slot_id="SS-D7", saloon=saloon, org=org, position=position,
+        allowed_metric_keys=["temp"],
+    )
+
     now = dt.datetime.now(dt.timezone.utc)
     bucket = now.replace(minute=0, second=0, microsecond=0)
     device_ts = bucket + dt.timedelta(minutes=17)
