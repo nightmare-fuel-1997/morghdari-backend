@@ -96,13 +96,23 @@ def _window_breaches(rows, thresholds: dict) -> dict:
     for row in rows:
         metrics = row.metrics or {}
         for metric_key, values in metrics.items():
-            if not isinstance(values, dict):
+            # 2026-10-24 (offline-buffering drill, D14): this is the SAME bug
+            # D6 fixed in the realtime evaluator, in a second copy. The
+            # subscriber stores FLAT metrics ({"temp": 40.0}); requiring
+            # {"temp": {"avg": …}} skipped every live reading, so a buffered
+            # window that breached could never produce a REPLAY_ANALYSIS row.
+            # A bare number is its own average; dicts keep their "avg".
+            if isinstance(values, dict):
+                raw_value = values.get("avg")
+            elif isinstance(values, (int, float)) and not isinstance(values, bool):
+                raw_value = values
+            else:
                 continue
             max_str = thresholds.get(f"{metric_key}_max")
             if max_str is None:
                 continue
             try:
-                value = float(values.get("avg"))
+                value = float(raw_value)
             except (TypeError, ValueError):
                 continue
             if value > float(max_str) and value > worst.get(metric_key, float("-inf")):
