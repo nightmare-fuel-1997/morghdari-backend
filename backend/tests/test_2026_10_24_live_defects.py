@@ -717,3 +717,76 @@ def test_replay_alert_closes_once_the_saloon_is_back_in_band(
     still_hot.refresh_from_db()
     assert recovered.current_status == "RESOLVED"
     assert still_hot.current_status == "ACTIVE_TIER_1"  # cannot prove recovery
+
+
+# ---------------------------------------------------------------------------
+# D20 — an LOS alert must close when the saloon is retired
+#
+# los_watchdog only visits saloons that still have ACTIVE slots, so an LOS row
+# whose saloon lost all its slots while the alert was open had no code path
+# left that could close it. Observed live: a saloon-2 row ACTIVE for 25 hours.
+# ---------------------------------------------------------------------------
+
+def _d20_world(slot_active: bool):
+    from apps.alerts.models import AlertInstance
+    from apps.devices.models import SaloonPosition, SaloonSensorSlot
+    from apps.farms.models import Farm, Saloon
+    from apps.geography.models import City, Province
+    from apps.system_config.models import SystemConfiguration
+    from apps.tenants.models import Organization
+
+    province = Province.objects.create(name="P-d20")
+    city = City.objects.create(province=province, name="C-d20")
+    org = Organization.objects.create(name="d20-org")
+    farm = Farm.objects.create(org=org, name="d20-farm", province=province, city=city)
+    saloon = Saloon.objects.create(org=org, farm=farm, name="d20-saloon")
+    position = SaloonPosition.objects.create(saloon=saloon, org=org, label="north")
+    SaloonSensorSlot.objects.create(
+        slot_id="SS-D20", saloon=saloon, org=org, position=position,
+        allowed_metric_keys=["temp"], is_active=slot_active,
+    )
+    alert = AlertInstance.objects.create(
+        org_id=org.org_id, farm_id=farm.pk, saloon_id=saloon.pk,
+        metric_type="los", current_status="ACTIVE_TIER_1",
+        current_value=None, source="REALTIME",
+    )
+    # make the redis-uptime guard inert for the test
+    SystemConfiguration.objects.update_or_create(
+        key="los_suppress_after_redis_restart_min", defaults={"value": "0"}
+    )
+    return saloon, alert
+
+
+@pytest.mark.django_db
+def test_los_alert_closes_when_the_saloon_is_retired(django_user_model):
+    from apps.alerts.services.sweeps import los_watchdog, system_redis
+
+    try:
+        system_redis().ping()
+    except Exception:  # noqa: BLE001
+        pytest.skip("no redis available")
+
+    saloon, alert = _d20_world(slot_active=False)  # retired: no ACTIVE slots
+    los_watchdog()
+
+    alert.refresh_from_db()
+    assert alert.current_status == "RESOLVED", "retired saloon's LOS row never closes"
+    assert alert.resolved_at is not None
+
+
+@pytest.mark.django_db
+def test_los_alert_stays_open_while_the_slot_is_active_and_silent(django_user_model):
+    """The orphan path must not close a genuine outage."""
+    from apps.alerts.services.sweeps import los_watchdog, system_redis
+
+    try:
+        system_redis().ping()
+    except Exception:  # noqa: BLE001
+        pytest.skip("no redis available")
+
+    saloon, alert = _d20_world(slot_active=True)  # active, and no status key
+    los_watchdog()
+
+    alert.refresh_from_db()
+    assert alert.current_status == "ACTIVE_TIER_1"
+    assert alert.resolved_at is None

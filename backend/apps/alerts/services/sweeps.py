@@ -407,6 +407,34 @@ def los_watchdog(now_dt=None) -> int:
                         saloon_id,
                     )
 
+    # 2026-10-25 (found by the overnight soak): the loop above only visits
+    # saloons that still have ACTIVE slots, so an LOS row whose saloon was
+    # retired while the alert was open had no code path left that could close
+    # it — nothing was ever going to "report again". Observed live: a saloon
+    # 2 row ACTIVE for 25 hours. Retiring a sensor or a saloon with an open
+    # LOS alert is an ordinary operator action, so those rows are closed here.
+    # فارسی: اگر سالن در حالی که هشدارِ LOS باز است بازنشسته شود، هیچ اسلاتِ فعالی
+    # نمی‌ماند که «دوباره گزارش» دهد؛ چنین ردیف‌هایی همان‌جا بسته می‌شوند.
+    orphans = (
+        AlertInstance.objects.using(admin_alias())
+        .filter(metric_type="los", resolved_at__isnull=True)
+        .exclude(saloon_id__in=list(by_saloon.keys()))
+    )
+    for alert in orphans:
+        for s in (
+            SaloonSensorSlot.objects.using(admin_alias())
+            .filter(saloon_id=alert.saloon_id)
+            .values_list("pk", flat=True)
+        ):
+            client.delete(los_fired_key(alert.saloon_id, s))
+        alert.current_status = "RESOLVED"
+        alert.resolved_at = dj_tz.now()
+        _save_alert(alert, ["current_status", "resolved_at"])
+        logger.info(
+            "LOS resolved: saloon=%s has no ACTIVE slots left (retired)",
+            alert.saloon_id,
+        )
+
     # ── GS-CORRELATION (M4-10): farm-wide simultaneous LOS = power outage ──
     # ≥ farm_power_outage_los_ratio of the farm's ACTIVE slots LOS within
     # farm_power_outage_window_min ⇒ ONE consolidated page, then
