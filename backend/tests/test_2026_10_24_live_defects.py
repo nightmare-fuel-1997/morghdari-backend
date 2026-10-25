@@ -683,8 +683,16 @@ def test_replay_alert_closes_once_the_saloon_is_back_in_band(
     except Exception:  # noqa: BLE001
         pytest.skip("no redis available")
 
+    from apps.devices.models import SaloonPosition, SaloonSensorSlot
+
     saloon, make_alert = _d19_world()
     org = Organization.objects.get(name="d19-org")
+    # slot_id is an FK to a real sensor slot — telemetry cannot exist otherwise
+    position = SaloonPosition.objects.create(saloon=saloon, org=org, label="north")
+    SaloonSensorSlot.objects.create(
+        slot_id="SS-D19", saloon=saloon, org=org, position=position,
+        allowed_metric_keys=["temp"],
+    )
     client.hset(redis_keys.thresholds_hash(saloon.pk), mapping={"temp_max": "26.00"})
 
     now = dt.datetime.now(dt.timezone.utc)
