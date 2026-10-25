@@ -587,3 +587,125 @@ def test_flat_checklist_flags_are_folded_into_the_gate():
     })
     assert nested["checklist_feed"] is False
     assert _checklist_incomplete(nested)
+
+
+# ---------------------------------------------------------------------------
+# D19 — retroactive (REPLAY_ANALYSIS) alerts must close on their own
+#
+# escalate_all excludes them from the main loop because their recovery branch
+# keys on a breach key that replay alerts never arm. The cost was that they
+# never closed AT ALL: found live 2026-10-25, one open since the previous day,
+# its value silently re-coalescing with every later backlog.
+# ---------------------------------------------------------------------------
+
+def _d19_world():
+    from apps.alerts.models import AlertInstance
+    from apps.farms.models import Farm, Saloon
+    from apps.geography.models import City, Province
+    from apps.tenants.models import Organization
+
+    province = Province.objects.create(name="P-d19")
+    city = City.objects.create(province=province, name="C-d19")
+    org = Organization.objects.create(name="d19-org")
+    farm = Farm.objects.create(org=org, name="d19-farm", province=province, city=city)
+    saloon = Saloon.objects.create(org=org, farm=farm, name="d19-saloon")
+
+    def make_alert(age_minutes: int) -> AlertInstance:
+        return AlertInstance.objects.create(
+            org_id=org.org_id, farm_id=farm.pk, saloon_id=saloon.pk,
+            metric_type="temp", current_status="ACTIVE_TIER_1",
+            current_value="41.80", source="REPLAY_ANALYSIS",
+            batch_id="SS-D19",
+            triggered_at=dt.datetime.now(dt.timezone.utc)
+            - dt.timedelta(minutes=age_minutes),
+        )
+
+    return saloon, make_alert
+
+
+@pytest.mark.django_db
+def test_replay_alert_closes_at_the_age_backstop(django_user_model):
+    """No readings at all — the backstop must still close it."""
+    from apps.alerts.services.sweeps import _resolve_replay_alerts, system_redis
+
+    client = system_redis()
+    try:
+        client.ping()
+    except Exception:  # noqa: BLE001
+        pytest.skip("no redis available")
+
+    saloon, make_alert = _d19_world()
+    stale = make_alert(25 * 60)  # 25 h old
+
+    changed = _resolve_replay_alerts(client, dt.datetime.now(dt.timezone.utc))
+
+    stale.refresh_from_db()
+    assert changed >= 1
+    assert stale.current_status == "RESOLVED"
+    assert stale.resolved_at is not None
+
+
+@pytest.mark.django_db
+def test_replay_alert_stays_visible_inside_the_dwell(django_user_model):
+    """A fresh retroactive alert must NOT be closed before anyone sees it."""
+    from apps.alerts.services.sweeps import _resolve_replay_alerts, system_redis
+
+    client = system_redis()
+    try:
+        client.ping()
+    except Exception:  # noqa: BLE001
+        pytest.skip("no redis available")
+
+    saloon, make_alert = _d19_world()
+    fresh = make_alert(5)  # 5 min old, dwell is 30
+
+    _resolve_replay_alerts(client, dt.datetime.now(dt.timezone.utc))
+
+    fresh.refresh_from_db()
+    assert fresh.current_status == "ACTIVE_TIER_1"
+    assert fresh.resolved_at is None
+
+
+@pytest.mark.django_db
+def test_replay_alert_closes_once_the_saloon_is_back_in_band(
+    django_user_model, telemetry_tables
+):
+    """Past the dwell AND the newest reading is inside the band → close."""
+    from django.db import connection
+
+    from apps.alerts.services import redis_keys
+    from apps.alerts.services.sweeps import _resolve_replay_alerts, system_redis
+    from apps.tenants.models import Organization
+
+    client = system_redis()
+    try:
+        client.ping()
+    except Exception:  # noqa: BLE001
+        pytest.skip("no redis available")
+
+    saloon, make_alert = _d19_world()
+    org = Organization.objects.get(name="d19-org")
+    client.hset(redis_keys.thresholds_hash(saloon.pk), mapping={"temp_max": "26.00"})
+
+    now = dt.datetime.now(dt.timezone.utc)
+    with connection.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO saloon_telemetry
+                (server_received_ts, device_ts, org_id, saloon_id, slot_id, metrics)
+            VALUES (%s, %s, %s, %s, 'SS-D19', %s)
+            """,
+            [now, now, str(org.org_id), saloon.pk, '{"temp": 23.5}'],
+        )
+
+    recovered = make_alert(90)  # past the dwell, saloon is back in band
+    still_hot = make_alert(90)
+    still_hot.metric_type = "nh3"  # no threshold + no reading for nh3
+    still_hot.save(update_fields=["metric_type"])
+
+    _resolve_replay_alerts(client, now)
+
+    recovered.refresh_from_db()
+    still_hot.refresh_from_db()
+    assert recovered.current_status == "RESOLVED"
+    assert still_hot.current_status == "ACTIVE_TIER_1"  # cannot prove recovery

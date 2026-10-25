@@ -118,6 +118,66 @@ def _save_alert(alert, fields: list[str]) -> None:
             alert.save(update_fields=fields, using="default")
 
 
+def _resolve_replay_alerts(client, now) -> int:
+    """Close retroactive (REPLAY_ANALYSIS) alerts — they have no breach key.
+
+    The main loop below EXCLUDES them on purpose: its recovery branch keys on
+    the breach key, which a retroactive alert never arms, so it would close
+    them within two minutes of firing and nobody would ever see them. The cost
+    of that exclusion was that they never closed at all — found live on
+    2026-10-25: an alert open since the previous day, its value silently
+    re-coalescing with every later backlog, because the one-active-row rule
+    means each new backlog updates the same immortal row.
+
+    They now close on their own terms:
+      * a visible dwell (replay_alert_min_age_min, default 30 min) AND the
+        saloon's newest reading back inside the band, or
+      * the age backstop (replay_alert_ttl_hours, default 24) regardless —
+        the retroactive review has been available for a day and must not hang.
+    فارسی: هشدارهای بازپخشِ گذشته‌نگر کلید نقض ندارند؛ چرخهٔ عمر جداگانه دارند.
+    """
+    from apps.alerts.services.redis_keys import thresholds_hash
+    from apps.telemetry.models import SaloonTelemetry
+
+    min_age_sec = max(_config_int("replay_alert_min_age_min", 30), 1) * 60
+    max_age_sec = max(_config_int("replay_alert_ttl_hours", 24), 1) * 3600
+
+    changed = 0
+    rows = AlertInstance.objects.using(admin_alias()).filter(
+        source="REPLAY_ANALYSIS", resolved_at__isnull=True
+    )
+    for alert in rows:
+        age = (now - alert.triggered_at).total_seconds()
+        if age < min_age_sec:
+            continue  # still inside the visible dwell
+
+        recovered = age >= max_age_sec  # backstop: always close eventually
+        if not recovered:
+            max_str = client.hgetall(thresholds_hash(alert.saloon_id)).get(
+                f"{alert.metric_type}_max"
+            )
+            if max_str is not None:
+                latest = (
+                    SaloonTelemetry.objects.using(admin_alias())
+                    .filter(saloon_id=alert.saloon_id)
+                    .order_by("-device_ts")
+                    .values_list("metrics", flat=True)
+                    .first()
+                )
+                value = (latest or {}).get(alert.metric_type)
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    recovered = float(value) <= float(max_str)
+        if not recovered:
+            continue
+
+        alert.current_status = "RESOLVED"
+        alert.resolved_at = now
+        _save_alert(alert, ["current_status", "resolved_at"])
+        logger.info("replay alert %s resolved (retroactive review closed)", alert.id)
+        changed += 1
+    return changed
+
+
 def escalate_all(now_dt=None) -> int:
     """Main 2-minute sweep: promote tiers, resolve recovered, honor pauses.
 
@@ -146,6 +206,9 @@ def escalate_all(now_dt=None) -> int:
         .exclude(metric_type="los")
     )
     changed = 0
+
+    # ── REPLAY_ANALYSIS rows get their own lifecycle (see the helper) ──────
+    changed += _resolve_replay_alerts(client, now)
 
     for alert in active:
         if client.exists(paused_key(str(alert.id))):
