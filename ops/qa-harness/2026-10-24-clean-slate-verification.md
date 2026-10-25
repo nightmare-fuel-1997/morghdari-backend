@@ -172,8 +172,8 @@ are JSON CRUD — so that item on the earlier list was moot.
 
 ### Final gate
 
-Full suite on the server, image built from HEAD (vps-11): **937 passed,
-13 skipped, 0 failed** in 418 s — every pre-existing test plus the 14 in
+Full suite on the server, image built from HEAD (vps-11): **942 passed,
+13 skipped, 0 failed** in 394 s — every pre-existing test plus the 19 in
 `test_2026_10_24_live_defects.py`.
 
 ### What is still untouched
