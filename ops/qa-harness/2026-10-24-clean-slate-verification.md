@@ -191,3 +191,45 @@ this exercise:
   source, but NOT why it fired — a velocity emergency and a sustained breach
   are indistinguishable once the Redis blob is cleared. Worth adding a `reason`
   column when the schema is next opened.
+
+---
+
+## Overnight soak (16 h unattended, 2026-10-24 19:27 → 2026-10-25 11:40)
+
+The stack was left running with both twins and nobody watching. This is the
+first evidence that it stays correct on its own, not just when driven.
+
+| Check | Result |
+|---|---|
+| container restarts (9 containers) | **0** — daphne/celery/beat/subscribers up 16 h, nginx/redis 11 days, emqx 3 days |
+| telemetry ingestion | **exactly 240 rows/hour, every hour** (4 slots × 60) — no gaps, no drift |
+| stream lag / pending | realtime **lag 0, pending 0** (308 258 entries read); historical lag 0 |
+| DLQ | stable at 12 — nothing new dead-lettered |
+| hourly aggregates (D7 builder) | **32 rows per hour = 4 slots × 8 metrics, every hour** |
+| daily rollup | present (32 rows) |
+| midnight rollover | `flock_age_days` advanced 0 → 1 by the recache |
+| worker / subscribers / daphne errors | **0 / 0 / 0** over the whole window |
+| health | 200 throughout |
+
+Two defects came out of it, both the same family — **a row that no code path
+can close**:
+
+**D19** — a retroactive replay alert sat ACTIVE for 20 hours, its value drifting
+from 41.80 to 43.00 as each new backlog re-coalesced into it. `escalate_all`
+excludes `REPLAY_ANALYSIS` on purpose (its recovery branch keys on a breach key
+a replay alert never arms, so it would close them two minutes after firing) —
+but nothing else closed them either, and the one-active-row rule made that row
+immortal. They now close after a 30-min visible dwell once the saloon is back in
+band, or at a 24 h backstop. Live: the 20 h row resolved at 08:28:24; the 08:18
+row resolved at 08:50:23 — 31.9 min after firing, the moment its dwell expired.
+
+**D20** — an LOS alert for a saloon whose slots were retired could never close:
+`los_watchdog` only visits saloons that still have ACTIVE slots, so nothing was
+ever going to "report again". Retiring a sensor while its LOS alert is open is an
+ordinary operator action, so the watchdog now closes those orphans. Live: after
+retiring the dead drill slot, `LOS resolved: saloon=2 has no ACTIVE slots left`
+and open alerts went to **0**.
+
+Bonus evidence from the same window: saloon 3's LOS episodes at 08:38→09:06 and
+10:13→10:15 fired **and** auto-resolved on their own — the LOS lifecycle works
+unattended, which was previously only observed once.
