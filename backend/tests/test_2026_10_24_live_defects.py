@@ -25,11 +25,17 @@ D6  the subscriber writes FLAT metrics ({"temp": 25.75}) but evaluate_entry
     live telemetry. Fixed: normalization at the entry point.
 D7  metric_hourly_aggregates had NO writer anywhere — charts, KPI lane and
     the daily rollup all read an always-empty table. Fixed: build_metric_hourly.
+D21 (2026-10-25, live) the gateway RESUME path rebuilt only the 9 tenant ACL
+    rows, so the 4 bootstrap device-lane rules were gone after any
+    suspend/resume. The command channel rides the device lane, so every
+    command after a resume expired unacknowledged. Fixed: resume restores the
+    union (bootstrap + tenant), the same additive set the bind creates.
 """
 
 import datetime as dt
 
 import pytest
+from django.test import override_settings
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from apps.alerts.services.evaluation import evaluate_entry
@@ -790,3 +796,102 @@ def test_los_alert_stays_open_while_the_slot_is_active_and_silent(django_user_mo
     alert.refresh_from_db()
     assert alert.current_status == "ACTIVE_TIER_1"
     assert alert.resolved_at is None
+
+
+# ---------------------------------------------------------------------------
+# D21 — a resume must restore the DEVICE lane, not just the tenant set
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+@override_settings(CACHES={"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}})
+def test_resume_restores_the_device_lane_rules(django_user_model):
+    """D21 (found live 2026-10-25 on 82.115.17.252): `_restore_db_acl_rules`
+    rebuilt only the 9 tenant rows, so the 4 bootstrap device-lane rules were
+    gone after any suspend/resume. The command channel rides the device lane —
+    the backend publishes to `devices/{slot}/command` and the device answers on
+    `devices/{slot}/command/response` — so with the device lane revoked every
+    command expired unacknowledged (16 rows in one afternoon): the downlink
+    still reached a connected twin through its pre-existing subscription, but
+    its ACK/SUCCESS publishes were silently dropped by no_match=deny.
+
+    The bind path is deliberately ADDITIVE (installations.py), so the set a
+    bound gateway holds is bootstrap(4) + tenant(9); resume must restore both.
+    """
+    from apps.devices.models import GatewaySlot
+    from apps.mqtt_auth.models import MqttAclRule
+    from apps.mqtt_auth.services import bootstrap_acl_rule_items
+    from apps.provisioning.api import gateway_acl_rule_items
+    from apps.provisioning.services import resume_gateway, suspend_gateway
+
+    w = _world(django_user_model)
+    slot = GatewaySlot.objects.create(
+        slot_id="GW-D21-RESUME", org=w["org"], farm=w["farm"],
+        provisioning_status="PROVISIONED",
+        desired_config_version=1, applied_config_version=1,
+    )
+
+    # What the twin actually holds after factory registration + bind: the
+    # bootstrap device lane, then the tenant rows added on top (never
+    # replacing — installations.py uses get_or_create for exactly this).
+    for item in bootstrap_acl_rule_items(slot.slot_id):
+        MqttAclRule.objects.get_or_create(
+            username=slot.slot_id, topic=item["topic"],
+            defaults={"permission": item["permission"], "action": item["action"]},
+        )
+    for item in gateway_acl_rule_items(str(w["org"].org_id), w["farm"].pk, slot.slot_id):
+        MqttAclRule.objects.get_or_create(
+            username=slot.slot_id, topic=item["topic"],
+            defaults={"permission": item["permission"], "action": item["action"]},
+        )
+    assert MqttAclRule.objects.filter(username=slot.slot_id).count() == 13
+
+    suspend_gateway(slot.slot_id, w["support"], reason="d21 drill")
+    assert MqttAclRule.objects.filter(username=slot.slot_id).count() == 0
+
+    resume_gateway(slot.slot_id, w["support"])
+    rules = {
+        (r["action"], r["topic"])
+        for r in MqttAclRule.objects.filter(username=slot.slot_id).values("action", "topic")
+    }
+    device_lane = {
+        (i["action"], i["topic"]) for i in bootstrap_acl_rule_items(slot.slot_id)
+    }
+    assert device_lane <= rules, (
+        "resume dropped the device lane — the command channel and the "
+        "config-apply uplink are dead for this gateway"
+    )
+    # and the tenant set came back too
+    assert len(rules) == 13
+
+
+@pytest.mark.django_db
+@override_settings(CACHES={"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}})
+def test_resume_keeps_the_command_round_trip_lanes(django_user_model):
+    """D21, the two rules that matter most, named explicitly: the twin must be
+    allowed to SUBSCRIBE devices/{slot}/command and PUBLISH
+    devices/{slot}/command/response after a resume, or no command can ever be
+    acknowledged (publish_command targets the device lane for every gateway —
+    an unbound one has no tenant topic to aim at)."""
+    from apps.devices.models import GatewaySlot
+    from apps.mqtt_auth.models import MqttAclRule
+    from apps.provisioning import topics
+    from apps.provisioning.services import resume_gateway, suspend_gateway
+
+    w = _world(django_user_model)
+    slot = GatewaySlot.objects.create(
+        slot_id="GW-D21-LANE", org=w["org"], farm=w["farm"],
+        provisioning_status="PROVISIONED",
+        desired_config_version=1, applied_config_version=1,
+    )
+    suspend_gateway(slot.slot_id, w["support"], reason="d21 drill")
+    resume_gateway(slot.slot_id, w["support"])
+
+    allowed = {
+        (r["action"], r["topic"])
+        for r in MqttAclRule.objects.filter(username=slot.slot_id).values("action", "topic")
+    }
+    assert ("subscribe", topics.command_topic(slot.slot_id)) in allowed
+    assert ("publish", topics.command_response_topic(slot.slot_id)) in allowed
+    # the config-apply uplink, same family
+    assert ("subscribe", topics.desired_topic(slot.slot_id)) in allowed
+    assert ("publish", topics.reported_topic(slot.slot_id)) in allowed

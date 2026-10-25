@@ -155,11 +155,25 @@ def _restore_db_acl_rules(slot) -> int:
     """Regenerate the gateway's DB allow-rows (resume path). Idempotent:
     delete-then-recreate from the canonical rule set."""
     from apps.mqtt_auth.models import MqttAclRule
+    from apps.mqtt_auth.services import bootstrap_acl_rule_items
     from apps.provisioning.api import gateway_acl_rule_items
 
     username = slot.slot_id
     MqttAclRule.objects.filter(username=username).delete()
-    items = gateway_acl_rule_items(str(slot.org_id), slot.farm_id, slot.slot_id)
+    # D21 (2026-10-25, live on 82.115.17.252): the set a BOUND gateway holds is
+    # the bootstrap device lane PLUS the tenant set — the bind path
+    # (installations.py) is deliberately additive for exactly this reason
+    # ("expand the ACL from the device lane to the full tenant set").
+    # Restoring only the tenant rows left the device lanes revoked after a
+    # resume, and the command channel rides the device lane: the backend
+    # publishes to devices/{slot}/command and the device answers on
+    # devices/{slot}/command/response. The downlink still reached a connected
+    # twin through its pre-existing subscription, but its ACK/SUCCESS
+    # publishes were silently dropped by no_match=deny — so every command
+    # after a resume expired unacknowledged (16 rows in one afternoon), and a
+    # twin that reconnected could no longer even re-apply its config.
+    items = list(bootstrap_acl_rule_items(username))
+    items += gateway_acl_rule_items(str(slot.org_id), slot.farm_id, username)
     MqttAclRule.objects.bulk_create(
         [MqttAclRule(username=username, **item) for item in items]
     )
