@@ -986,6 +986,9 @@ TEMPLATE_MANAGE_ROLES = {"owner", "manager"}
 ACTION_TEMPLATE_CREATED = "THRESHOLD_TEMPLATE_CREATED"
 ACTION_TEMPLATE_UPDATED = "THRESHOLD_TEMPLATE_UPDATED"
 ACTION_TEMPLATE_PUBLISHED = "THRESHOLD_TEMPLATE_PUBLISHED"
+# 2026-10-26: O17 — a template the org owns can be removed once nothing in use
+# depends on it. Before this, every published template was permanent.
+ACTION_TEMPLATE_DELETED = "THRESHOLD_TEMPLATE_DELETED"
 ACTION_SALOON_ASSIGNED = "SALOON_TEMPLATE_ASSIGNED"
 ACTION_SALOON_CLEARED = "SALOON_TEMPLATE_CLEARED"
 
@@ -1182,7 +1185,97 @@ def _threshold_template_create(request):
     )
 
 
+def _delete_template(request, template_id: int):
+    """O17 — delete an own-org template that nothing depends on.
+
+    Refusals are 409 and name the reason, because "the template I deleted
+    silently changed a live band" is the failure this endpoint must not have.
+    """
+    from django.db.models import ProtectedError
+
+    from apps.farms.models import Saloon
+
+    if not _roles(request) & TEMPLATE_MANAGE_ROLES:
+        return _forbidden()
+    template = _own_org_template(request, template_id)
+    if template is None:
+        return _not_found("template not found")
+    if template.is_default:
+        return _conflict("template is the org default — publish another default first")
+    assigned = Saloon.objects.filter(threshold_template=template).count()
+    if assigned:
+        return _conflict(
+            f"template is assigned to {assigned} saloon(s) — clear the assignment first"
+        )
+
+    was_published = template.status == LifecycleTemplate.PUBLISHED
+    rule_count = len(_rules_of(template))
+    out = {
+        "template_id": template.template_id,
+        "name": template.name,
+        "deleted": True,
+    }
+    try:
+        with db_transaction.atomic():
+            # The audit row goes in first, in the same transaction: it is the
+            # only place "who removed the band that was paging me" survives.
+            _template_audit(request, ACTION_TEMPLATE_DELETED, template, rules=rule_count)
+            # LifecycleThresholdRule.template is RESTRICT — bands go first.
+            LifecycleThresholdRule.objects.filter(template=template).delete()
+            template.delete()
+            if was_published:
+                # A published non-default template is still resolvable through
+                # the org+breed step, so its removal has to re-resolve the
+                # saloons that were using it. on_commit, per D22.
+                from apps.alerts.tasks import cache_daily_thresholds
+
+                db_transaction.on_commit(lambda: cache_daily_thresholds.delay())
+    except ProtectedError:  # pragma: no cover - only a concurrent assignment race
+        return _conflict("template is assigned to saloons — clear the assignment first")
+    return Response(out)
+
+
 @extend_schema(
+    methods=["DELETE"],
+    tags=[TAG_OPS],
+    operation_id="delete_threshold_template",
+    summary="O17 — delete a template (owner, manager)",
+    description="""Removes a template the org owns — the surface that made every QA
+template permanent, because a published one had no way back.
+
+Refused with a 409 when the template is still in use, because deleting it
+would silently change live alarm bands:
+
+* **the org default** — publish another default first (`is_default: true` on
+  the publish call promotes it in one transaction);
+* **assigned to any saloon** — clear the assignment first
+  (`PUT /saloons/{id}/threshold-template/ {"template_id": null}`).
+
+Everything else goes, DRAFT or PUBLISHED. A published non-default template can
+still be resolved through the `org + breed` step, so its removal fires the same
+cache sweep a publish does (on COMMIT) and the affected saloons fall through to
+the next template in the chain instead of keeping dead bands armed.
+
+The audit row is written in the same transaction as the delete and carries the
+snapshot (name, status, breed, farm, rule count) — the template is gone but
+"who removed the band that was paging me" stays answerable. 404 for a foreign
+or org-NULL (built-in) template: the shared catalog is deletable by NO ONE.""",
+    parameters=[
+        OpenApiParameter(
+            "template_id", int, OpenApiParameter.PATH, description="Own-org template id."
+        )
+    ],
+    request=None,
+    responses={
+        200: ser.ThresholdTemplateDeleteResponseSerializer,
+        **error_responses(401, 403, 404),
+        409: OpenApiResponse(
+            description="The template is the org default or is assigned to saloons."
+        ),
+    },
+)
+@extend_schema(
+    methods=["PUT"],
     tags=[TAG_OPS],
     operation_id="update_threshold_template",
     summary="O14 — edit a template draft (engineer+, farm-scoped)",
@@ -1210,9 +1303,11 @@ Writes a `THRESHOLD_TEMPLATE_UPDATED` audit row in the same transaction.""",
         ),
     },
 )
-@api_view(["PUT"])
+@api_view(["PUT", "DELETE"])
 @permission_classes([IsAuthenticated])
 def threshold_template_update(request, template_id: int):
+    if request.method == "DELETE":
+        return _delete_template(request, template_id)
     if not _roles(request) & TEMPLATE_AUTHOR_ROLES:
         return _forbidden()
     template = _own_org_template(request, template_id)

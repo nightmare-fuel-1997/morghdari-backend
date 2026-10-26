@@ -43,12 +43,13 @@ from apps.alerts.models import AlertInstance, MortalityRecord
 from apps.auditing.models import AccountActivityLog
 from apps.common.schemas import CONFLICT_RESPONSE, TAG_FARMS, error_responses
 from apps.compat.legacy_slugs import mint_farm_slug, mint_saloon_slug
-from apps.devices.models import SaloonPosition
+from apps.devices.models import SaloonPosition, SaloonSensorSlot
 from apps.farms.api import (
     WRITE_ROLES,
     _farm_overview_payload,
     _flock_date,
     _saloon_detail_payload,
+    _sensor_slot_out,
 )
 from apps.farms.models import Farm, Saloon
 from apps.farms.serializers import FarmOverviewSerializer, SaloonDetailSerializer
@@ -67,6 +68,8 @@ from apps.farms.serializers_follow import (
     SaloonCreateRequestSerializer,
     SaloonDeleteResponseSerializer,
     SaloonUpdateRequestSerializer,
+    SensorSlotResponseSerializer,
+    SensorSlotUpdateRequestSerializer,
 )
 from apps.farms.services_follow import (
     delete_row,
@@ -93,6 +96,10 @@ ACTION_SALOON_UPDATED = "SALOON_UPDATED"
 ACTION_SALOON_DELETED = "SALOON_DELETED"
 ACTION_POSITION_CREATED = "POSITION_CREATED"
 ACTION_POSITION_UPDATED = "POSITION_UPDATED"
+# 2026-10-26: the sensor slot write surface (retire / re-arm / re-scope). The
+# create half lives in api.py and was the only slot write before this.
+ACTION_SENSOR_SLOT_UPDATED = "SENSOR_SLOT_UPDATED"
+ACTION_SENSOR_SLOT_RETIRED = "SENSOR_SLOT_RETIRED"
 ACTION_FLOCK_CLOSED = "FLOCK_CLOSED"
 ACTION_MORTALITY_RECORDED = "MORTALITY_RECORDED"
 
@@ -740,6 +747,153 @@ def position_update(request, saloon_id: int, position_id: int):
     except IntegrityError:
         return _conflict("a position with this label already exists")
     return Response(_position_out(row))
+
+
+# ---------------------------------------------------------------------------
+# F7b — PATCH|DELETE /saloons/{saloon_id}/sensor-slots/{slot_id}/
+# ---------------------------------------------------------------------------
+
+
+@extend_schema(
+    methods=["PATCH"],
+    tags=[TAG_FARMS],
+    operation_id="update_saloon_sensor_slot",
+    summary="Retire, re-arm or re-scope a sensor slot (manager+)",
+    description="""The write surface `saloon_sensor_slots.is_active` never had.
+
+Before this endpoint the column existed, the LOS watchdog read it, the OpenAPI
+documented it — and nothing in the product could write it. An operator who
+pulled a sensor had no supported way to say so, so the saloon stayed flagged
+"lost" forever (the D20 orphan-alert family, reached from the other side).
+
+`is_active=false` retires the slot. The LOS watchdog closes the slot's open
+LOS row on its next sweep — the same path a retired saloon takes, no special
+case here. Re-arming (`true`) makes the slot eligible for LOS again from the
+next sweep.
+
+`allowed_metric_keys` re-scopes what the slot may report; the list is replaced
+wholesale, never merged. An empty body is a 400 rather than a silent no-op.
+Writes `SENSOR_SLOT_UPDATED` with the changed fields.""",
+    parameters=[
+        OpenApiParameter(
+            "saloon_id", int, OpenApiParameter.PATH, description="Saloon id (caller's org)."
+        ),
+        OpenApiParameter(
+            "slot_id", str, OpenApiParameter.PATH, description="Sensor slot id (that saloon)."
+        ),
+    ],
+    request=SensorSlotUpdateRequestSerializer,
+    responses={
+        200: SensorSlotResponseSerializer,
+        **error_responses(400, 401, 403, 404),
+    },
+    examples=[
+        OpenApiExample("Retire the slot", request_only=True, value={"is_active": False}),
+        OpenApiExample(
+            "Re-scope the metrics",
+            request_only=True,
+            value={"allowed_metric_keys": ["temp", "humidity"]},
+        ),
+    ],
+)
+@extend_schema(
+    methods=["DELETE"],
+    tags=[TAG_FARMS],
+    operation_id="retire_saloon_sensor_slot",
+    summary="Retire a sensor slot (manager+)",
+    description="""The DELETE verb is the soft-off: `is_active=false`, nothing removed.
+
+The row is never hard-deleted — `hardware_registry` install history and every
+telemetry row point at the slot, and a gap in that history is worse than a
+retired row. Idempotent: retiring an already-retired slot answers 200 with
+`idempotent: true` instead of a 404, so a retried operator action converges.
+
+Writes `SENSOR_SLOT_RETIRED`.""",
+    parameters=[
+        OpenApiParameter(
+            "saloon_id", int, OpenApiParameter.PATH, description="Saloon id (caller's org)."
+        ),
+        OpenApiParameter(
+            "slot_id", str, OpenApiParameter.PATH, description="Sensor slot id (that saloon)."
+        ),
+    ],
+    request=None,
+    responses={
+        200: SensorSlotResponseSerializer,
+        **error_responses(401, 403, 404),
+    },
+)
+@api_view(["PATCH", "DELETE"])
+@permission_classes([IsAuthenticated])
+def saloon_sensor_slot_detail(request, saloon_id: int, slot_id: str):
+    """PATCH edits a slot; DELETE retires it (soft — history stays intact)."""
+    org_id = _org_id(request)
+    if org_id is None or not (_roles(request) & MANAGER_ROLES):
+        return _forbidden("manager role required")
+
+    saloon = Saloon.objects.filter(org_id=org_id, pk=saloon_id).first()
+    if saloon is None:
+        return _not_found("saloon not found")
+    if _scoped_out_saloon(request, saloon):
+        return _forbidden()
+
+    # Scoped to THIS saloon on purpose: slot ids are a global primary key, so a
+    # foreign saloon's slot must be the same 404 as an unknown one (no oracle).
+    row = SaloonSensorSlot.objects.filter(pk=slot_id, saloon=saloon).first()
+    if row is None:
+        return _not_found("sensor slot not found")
+
+    if request.method == "DELETE":
+        if not row.is_active:
+            out = {**_sensor_slot_out(row), "retired": True, "idempotent": True}
+            return Response(out)
+        with transaction.atomic():
+            row.is_active = False
+            row.save(update_fields=["is_active"])
+            _audit(
+                request,
+                ACTION_SENSOR_SLOT_RETIRED,
+                org_id=org_id,
+                farm=saloon.farm,
+                saloon=saloon,
+                details={"slot_id": row.slot_id, "via": "DELETE"},
+            )
+        return Response({**_sensor_slot_out(row), "retired": True})
+
+    payload = request.data if isinstance(request.data, dict) else {}
+    changed = []
+    if "is_active" in payload:
+        value = payload.get("is_active")
+        if not isinstance(value, bool):
+            return _bad_request("is_active must be a boolean")
+        changed.append("is_active")
+    if "allowed_metric_keys" in payload:
+        metrics = payload.get("allowed_metric_keys")
+        if not isinstance(metrics, list) or any(not isinstance(m, str) for m in metrics):
+            return _bad_request("allowed_metric_keys must be a list of strings")
+        changed.append("allowed_metric_keys")
+    if not changed:
+        return _bad_request("nothing to update (is_active or allowed_metric_keys required)")
+
+    with transaction.atomic():
+        if "is_active" in payload:
+            row.is_active = payload["is_active"]
+        if "allowed_metric_keys" in payload:
+            row.allowed_metric_keys = payload["allowed_metric_keys"]
+        row.save(update_fields=changed)
+        _audit(
+            request,
+            ACTION_SENSOR_SLOT_UPDATED,
+            org_id=org_id,
+            farm=saloon.farm,
+            saloon=saloon,
+            details={
+                "slot_id": row.slot_id,
+                "changed": changed,
+                "is_active": row.is_active,
+            },
+        )
+    return Response(_sensor_slot_out(row))
 
 
 # ---------------------------------------------------------------------------

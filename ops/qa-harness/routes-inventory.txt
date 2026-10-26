@@ -118,11 +118,12 @@ api/v1/saloons/<int:saloon_id>/positions/<int:position_id>/|view|patch,options|s
 api/v1/saloons/<int:saloon_id>/reports/|view|options,post,get|saloon-reports
 api/v1/saloons/<int:saloon_id>/reports/<str:report_date>/|view|options,get|saloon-report-by-date
 api/v1/saloons/<int:saloon_id>/sensor-slots/|view|post,options|saloon-sensor-slots
+api/v1/saloons/<int:saloon_id>/sensor-slots/<str:slot_id>/|view|delete,options,patch|saloon-sensor-slot-detail
 api/v1/saloons/<int:saloon_id>/telemetry/|view|options,get|saloon-telemetry
 api/v1/saloons/<int:saloon_id>/threshold-template/|view|options,get,put|saloon-threshold-template
 api/v1/status/|view|options,get|status-page
 api/v1/threshold-templates/|view|options,post,get|threshold-templates
-api/v1/threshold-templates/<int:template_id>/|view|options,put|threshold-template-update
+api/v1/threshold-templates/<int:template_id>/|view|delete,options,put|threshold-template-update
 api/v1/threshold-templates/<int:template_id>/publish/|view|post,options|threshold-template-publish
 api/v1/thresholds/|view|options,get|thresholds
 api/v1/thresholds/<int:rule_id>/|view|options,put|threshold-update

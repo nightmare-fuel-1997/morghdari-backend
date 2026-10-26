@@ -95,6 +95,9 @@ ACTION_ENDPOINTS = (
     "/sync/", "/drain/", "/submit/", "/claim-code/", "/credential/", "/retire/",
     "/replace/", "/acl-backfill/", "/deactivate/", "/close/", "/publish/",
     "/session/", "/review/",
+    # 2026-10-26: the slot's own PATCH/DELETE retires real hardware state, and
+    # the collection POST creates rows — pass 1 must not fire any of them.
+    "/sensor-slots/",
 )
 
 NAMED = {"farmSlug": "auto-farm-2961900", "salonSlug": "saloon-3",

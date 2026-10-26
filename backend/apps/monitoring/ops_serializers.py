@@ -244,6 +244,18 @@ class ThresholdTemplatePublishRequestSerializer(serializers.Serializer):
     is_default = serializers.BooleanField(required=False)
 
 
+class ThresholdTemplateDeleteResponseSerializer(serializers.Serializer):
+    """O17 row — the template that was removed, echoed back for the operator.
+
+    `name` is included because an id alone is not proof to a human that the
+    right template went; the audit row carries the full snapshot either way.
+    """
+
+    template_id = serializers.IntegerField()
+    name = serializers.CharField(allow_null=True, required=False)
+    deleted = serializers.BooleanField(help_text="Always true — a 409 carries the refusal.")
+
+
 class SaloonTemplateAssignRequestSerializer(serializers.Serializer):
     """O16 PUT body — `template_id: null` clears the assignment and returns
     the saloon to the breed/default chain."""

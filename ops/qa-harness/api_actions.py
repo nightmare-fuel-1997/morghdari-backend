@@ -174,6 +174,14 @@ def main():
                     {"position_id": pid, "allowed_metric_keys": ["temp", "humidity"]})
     qa_slot = pickd(jb(body), "slot_id", "id")
     step("POST sensor-slot create", (200, 201), st, body)
+    # F7b (added 2026-10-26): the slot's own write surface. Retire then re-arm
+    # so the rest of the run keeps a live slot.
+    step("PATCH sensor-slot retire", (200,),
+         *call("PATCH", f"/api/v1/saloons/{sid}/sensor-slots/{qa_slot}/", mgr,
+               {"is_active": False}))
+    step("PATCH sensor-slot re-arm", (200,),
+         *call("PATCH", f"/api/v1/saloons/{sid}/sensor-slots/{qa_slot}/", mgr,
+               {"is_active": True}))
     step("GET saloon capabilities", (200,), *call("GET", f"/api/v1/saloons/{sid}/capabilities/", mgr))
 
     print("\n== B. flock lifecycle ==")
@@ -388,6 +396,10 @@ def main():
                            "min_value": 14, "max_value": 27}]}))
     step("POST template publish", (200, 400), *call("POST", f"/api/v1/threshold-templates/{tpl}/publish/",
                                                     mgr, {}))
+    # O17 (added 2026-10-26): a template the org owns can be removed once
+    # nothing depends on it — this is also the cleanup the QA org never had.
+    step("DELETE template (published, unused)", (200, 409),
+         *call("DELETE", f"/api/v1/threshold-templates/{tpl}/", mgr))
 
     print("\n== L. cleanup ==")
     # There is no DELETE for an org member (PATCH role + /deactivate/ only),

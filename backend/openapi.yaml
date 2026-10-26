@@ -429,6 +429,24 @@ components:
         is_active:
           type: boolean
 
+    SensorSlotWrite:
+      type: object
+      description: >
+        The slot row as the write surface returns it — the same shape POST
+        /saloons/{id}/sensor-slots/ answers with. `retired`/`idempotent` appear
+        on the DELETE half only.
+      properties:
+        slot_id: { type: string }
+        saloon_id: { type: integer }
+        org_id: { type: string, format: uuid }
+        position_id: { type: integer }
+        is_active: { type: boolean }
+        allowed_metric_keys:
+          type: array
+          items: { type: string }
+        retired: { type: boolean }
+        idempotent: { type: boolean }
+
     FarmLocationRef:
       type: object
       properties:
@@ -1189,6 +1207,72 @@ paths:
         '400': { description: Missing position_id, a foreign position, or non-string metric keys }
         '404': { description: Saloon not found in the caller's org }
         '409': { description: slot_id already exists in a different saloon/position }
+
+  /saloons/{saloon_id}/sensor-slots/{slot_id}/:
+    patch:
+      tags: [Farms]
+      summary: Retire, re-arm or re-scope a sensor slot (manager+)
+      description: >
+        Added 2026-10-26. `saloon_sensor_slots.is_active` had NO writer anywhere
+        in the product: the LOS watchdog read it, this contract documented it,
+        and an operator who pulled a sensor had no supported way to say so — so
+        the saloon stayed flagged "lost" forever (the D20 orphan-alert family,
+        reached from the other side).
+
+        `is_active=false` retires the slot; the LOS watchdog closes the slot's
+        open LOS row on its next sweep, the same path a retired saloon takes.
+        `true` re-arms it from the next sweep. `allowed_metric_keys` re-scopes
+        what the slot may report and is replaced wholesale, never merged.
+
+        An empty body is a 400, not a silent no-op. Writes SENSOR_SLOT_UPDATED.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: saloon_id, in: path, required: true, schema: { type: integer } }
+        - { name: slot_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                is_active:
+                  type: boolean
+                  description: false retires the slot; true re-arms it.
+                allowed_metric_keys:
+                  type: array
+                  items: { type: string }
+      responses:
+        '200':
+          description: The updated slot row
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SensorSlotWrite' }
+        '400': { description: Empty body, non-boolean is_active, or non-string metric keys }
+        '401': { description: Missing or invalid token }
+        '403': { description: Forbidden — manager/owner only }
+        '404': { description: Saloon or slot not found in the caller's org (identical) }
+    delete:
+      tags: [Farms]
+      summary: Retire a sensor slot (manager+) — soft-off, nothing removed
+      description: >
+        The DELETE verb is the soft-off (`is_active=false`). The row is never
+        hard-deleted: `hardware_registry` install history and every telemetry
+        row point at the slot, and a gap in that history is worse than a
+        retired row. Idempotent — retiring an already-retired slot answers 200
+        with `idempotent: true` instead of a 404. Writes SENSOR_SLOT_RETIRED.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: saloon_id, in: path, required: true, schema: { type: integer } }
+        - { name: slot_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: "The retired slot row (`retired: true`, `idempotent` when nothing changed)"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SensorSlotWrite' }
+        '401': { description: Missing or invalid token }
+        '403': { description: Forbidden — manager/owner only }
+        '404': { description: Saloon or slot not found in the caller's org (identical) }
 
   /saloons/{saloon_id}/telemetry/:
     get:
@@ -4237,6 +4321,47 @@ paths:
         '404': { description: Unknown, foreign, or built-in template (identical) }
         '409': { description: Template is already published (tune its bands through O3)
           }
+    delete:
+      tags: [Ops]
+      summary: Delete a threshold template (owner, manager) — O17
+      description: >
+        Added 2026-10-26. There was no DELETE at all, so every template an org
+        ever created was permanent — including the ones a QA sweep leaves
+        behind, and any draft an engineer abandoned.
+
+        Refused with 409 while anything still depends on the template, because
+        deleting it would silently change live alarm bands: the org DEFAULT
+        (publish another default first) and any template ASSIGNED to a saloon
+        (clear the assignment first).
+
+        Everything else goes, DRAFT or PUBLISHED. A published non-default
+        template is still resolvable through the org+breed step, so removing it
+        fires the same cache sweep a publish does (on COMMIT) and the affected
+        saloons fall through to the next template in the chain instead of
+        keeping dead bands armed.
+
+        The THRESHOLD_TEMPLATE_DELETED audit row is written in the same
+        transaction and carries the snapshot (name, status, breed, farm, rule
+        count). 404 for a foreign or org-NULL (built-in) template — the shared
+        catalog is deletable by NO ONE.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: template_id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: The template that was removed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  template_id: { type: integer }
+                  name: { type: string, nullable: true }
+                  deleted: { type: boolean }
+        '401': { description: Missing or invalid token }
+        '403': { description: Forbidden — owner/manager only }
+        '404': { description: Unknown, foreign, or built-in template (identical) }
+        '409': { description: The template is the org default, or is assigned to saloons }
 
   /threshold-templates/{template_id}/publish/:
     post:

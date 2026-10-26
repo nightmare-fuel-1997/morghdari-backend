@@ -88,6 +88,46 @@ class FarmDeleteResponseSerializer(serializers.Serializer):
     deleted = serializers.BooleanField(help_text="Always true — a 409 carries the refusal.")
 
 
+class SensorSlotUpdateRequestSerializer(serializers.Serializer):
+    """PATCH /saloons/{id}/sensor-slots/{slot_id}/ body.
+
+    Both fields are optional, but an empty body is a 400: a write that changes
+    nothing is worse than a refusal, because the operator believes it landed.
+
+    `is_active=false` is the operator's "I pulled this sensor" lever — before
+    this surface existed the column had no writer anywhere in the product, so
+    the LOS watchdog kept the saloon flagged lost forever.
+    """
+
+    is_active = serializers.BooleanField(
+        required=False,
+        help_text="false retires the slot (LOS closes its alert on the next sweep); true re-arms it.",
+    )
+    allowed_metric_keys = serializers.ListField(
+        child=serializers.CharField(),
+        required=False,
+        help_text="Metric keys this slot may report — same list shape as create.",
+    )
+
+
+class SensorSlotResponseSerializer(serializers.Serializer):
+    """The slot row, exactly as `POST /saloons/{id}/sensor-slots/` returns it.
+
+    `retired`/`idempotent` appear on the DELETE half only: `retired` is the
+    soft-off confirmation (the row is never deleted — hardware history and
+    telemetry point at it), `idempotent` means the call changed nothing.
+    """
+
+    slot_id = serializers.CharField()
+    saloon_id = serializers.IntegerField(help_text="Saloon PK.")
+    org_id = serializers.CharField(help_text="Stringified org UUID.")
+    position_id = serializers.IntegerField()
+    is_active = serializers.BooleanField()
+    allowed_metric_keys = serializers.ListField(child=serializers.CharField())
+    retired = serializers.BooleanField(required=False)
+    idempotent = serializers.BooleanField(required=False)
+
+
 class SaloonDeleteResponseSerializer(serializers.Serializer):
     saloon_id = serializers.CharField(help_text="Stringified saloon PK.")
     deleted = serializers.BooleanField(help_text="Always true — a 409 carries the refusal.")

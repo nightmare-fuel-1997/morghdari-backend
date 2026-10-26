@@ -7875,6 +7875,99 @@ paths:
           description: No response body
         '409':
           description: No response body
+  /api/v1/saloons/{saloon_id}/sensor-slots/{slot_id}/:
+    patch:
+      operationId: update_saloon_sensor_slot
+      description: |-
+        The write surface `saloon_sensor_slots.is_active` never had.
+
+        Before this endpoint the column existed, the LOS watchdog read it, the
+        OpenAPI documented it - and nothing in the product could write it. An
+        operator who pulled a sensor had no supported way to say so, so the
+        saloon stayed flagged "lost" forever.
+
+        `is_active=false` retires the slot. The LOS watchdog closes the slot's
+        open LOS row on its next sweep - the same path a retired saloon takes,
+        no special case here. `allowed_metric_keys` re-scopes what the slot may
+        report; the list is replaced wholesale, never merged. An empty body is
+        a 400 rather than a silent no-op.
+      summary: Retire, re-arm or re-scope a sensor slot (manager+)
+      parameters:
+      - in: path
+        name: saloon_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: slot_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - Farms
+      security:
+      - BearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SensorSlotUpdateRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SensorSlotResponse'
+          description: The updated slot row
+        '400':
+          description: No response body
+        '401':
+          description: No response body
+        '403':
+          description: No response body
+        '404':
+          description: No response body
+    delete:
+      operationId: retire_saloon_sensor_slot
+      description: |-
+        The DELETE verb is the soft-off: `is_active=false`, nothing removed.
+
+        The row is never hard-deleted - `hardware_registry` install history and
+        every telemetry row point at the slot, and a gap in that history is
+        worse than a retired row. Idempotent: retiring an already-retired slot
+        answers 200 with `idempotent: true` instead of a 404, so a retried
+        operator action converges.
+      summary: Retire a sensor slot (manager+) - soft-off, nothing removed
+      parameters:
+      - in: path
+        name: saloon_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: slot_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - Farms
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SensorSlotResponse'
+          description: "The retired slot row (`retired: true`, `idempotent` when nothing
+            changed)"
+        '401':
+          description: No response body
+        '403':
+          description: No response body
+        '404':
+          description: No response body
   /api/v1/saloons/{saloon_id}/telemetry/:
     get:
       operationId: list_saloon_telemetry
@@ -8322,6 +8415,53 @@ paths:
             distinguished).
         '409':
           description: Template is already published (bands are tuned through O3).
+    delete:
+      operationId: delete_threshold_template
+      description: |-
+        Removes a template the org owns - the surface that made every template
+        permanent, because there was no DELETE at all.
+
+        Refused with a 409 when the template is still in use, because deleting it
+        would silently change live alarm bands: the org DEFAULT (publish another
+        default first) and any template ASSIGNED to a saloon (clear the
+        assignment first).
+
+        Everything else goes, DRAFT or PUBLISHED. A published non-default template
+        can still be resolved through the org+breed step, so its removal fires the
+        same cache sweep a publish does (on COMMIT) and the affected saloons fall
+        through to the next template in the chain instead of keeping dead bands
+        armed.
+
+        The audit row is written in the same transaction as the delete and carries
+        the snapshot. 404 for a foreign or org-NULL (built-in) template: the
+        shared catalog is deletable by NO ONE.
+      summary: O17 - delete a template (owner, manager)
+      parameters:
+      - in: path
+        name: template_id
+        schema:
+          type: integer
+        description: Own-org template id.
+        required: true
+      tags:
+      - Ops
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThresholdTemplateDeleteResponse'
+          description: The template that was removed
+        '401':
+          description: No response body
+        '403':
+          description: No response body
+        '404':
+          description: No response body
+        '409':
+          description: The template is the org default, or is assigned to saloons.
   /api/v1/threshold-templates/{template_id}/publish/:
     post:
       operationId: publish_threshold_template
@@ -12790,6 +12930,47 @@ components:
       required:
       - count
       - results
+    SensorSlotUpdateRequest:
+      type: object
+      description: |-
+        PATCH body for a sensor slot. Both fields are optional, but an empty body
+        is a 400: a write that changes nothing is worse than a refusal, because
+        the operator believes it landed.
+      properties:
+        is_active:
+          type: boolean
+          description: false retires the slot (LOS closes its alert on the next sweep);
+            true re-arms it.
+        allowed_metric_keys:
+          type: array
+          items:
+            type: string
+    SensorSlotResponse:
+      type: object
+      description: |-
+        The slot row as the write surface returns it - the same shape POST
+        /saloons/{id}/sensor-slots/ answers with. `retired`/`idempotent` appear on
+        the DELETE half only.
+      properties:
+        slot_id:
+          type: string
+        saloon_id:
+          type: integer
+        org_id:
+          type: string
+          format: uuid
+        position_id:
+          type: integer
+        is_active:
+          type: boolean
+        allowed_metric_keys:
+          type: array
+          items:
+            type: string
+        retired:
+          type: boolean
+        idempotent:
+          type: boolean
     ThresholdTemplatePublishRequestRequest:
       type: object
       description: |-
