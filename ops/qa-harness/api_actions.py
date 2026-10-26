@@ -37,7 +37,7 @@ HW_MFA_SECRET = "QAHWQAHWQAHWQAHWQAHWQAHWQAHW"
 # SETTABLE values on each run.
 BOOTSTRAP_PW = "qa-owner-pw"
 SETTABLE_PWS = ("Morghdari-QA-2026x", "Shed-9-Keys!2026")
-PASS, FAIL = [], []
+PASS, FAIL, SKIPPED = [], [], []
 
 
 def _totp(secret_b32):
@@ -81,6 +81,17 @@ def step(label, expect, st, body):
     (PASS if ok else FAIL).append((label, st, body[:200]))
     print(("  PASS " if ok else "  FAIL ") + label + f"  [{st}] {body[:120]}")
     return ok
+
+
+def skip(label, why):
+    """A check whose precondition does not exist right now — NOT a failure.
+
+    Recorded separately so the summary stays honest: a run with no open alert
+    has nothing to force-resolve, and counting that as a defect would train
+    everyone to ignore the FAIL column.
+    """
+    SKIPPED.append((label, why))
+    print("  SKIP " + label + f"  ({why})")
 
 
 def jb(text):
@@ -340,13 +351,13 @@ def main():
                    session_token, {"reason": "qa drill"}))
     else:
         aid = None
-        step("POST support force-resolve (no open alert)", (999,), 0, "no open alert")
+        skip("POST support force-resolve", "no open alert right now")
     if len(open_alerts) > 1:
         ack_id = pickd(open_alerts[1], "alert_id", "id")
         step("POST acknowledge an alert", (200,),
              *call("POST", f"/api/v1/alerts/{ack_id}/acknowledge/", mgr, {"notes": "qa"}))
     else:
-        step("POST acknowledge (no second open alert)", (999,), 0, "only one open alert")
+        skip("POST acknowledge an alert", "fewer than two open alerts")
 
     print("\n== J. auth lifecycle ==")
     st, body = call("POST", "/api/v1/auth/login/",
@@ -420,9 +431,12 @@ def main():
     st, body = call("DELETE", f"/api/v1/farms/{fid}/", owner)
     step("DELETE farm refused: not empty (by design)", (200, 204, 409), st, body)
 
-    print("\n===== SUMMARY: %d passed, %d failed =====" % (len(PASS), len(FAIL)))
+    print("\n===== SUMMARY: %d passed, %d failed, %d skipped ====="
+          % (len(PASS), len(FAIL), len(SKIPPED)))
     for label, st, body in FAIL:
         print("  FAIL", label, st, body[:200])
+    for label, why in SKIPPED:
+        print("  SKIP", label, "-", why)
 
 
 if __name__ == "__main__":

@@ -324,15 +324,29 @@ coverage **88.88 %** (floor 80 %), module coverage gate GREEN.
   org therefore accumulates one inert farm + saloon per run.
 - **Org members have no DELETE** — `PATCH` (role) and `POST /deactivate/` only,
   so cleanup deactivates.
-- **There is no API surface to deactivate a sensor slot.** `sensor-slots/` is
-  POST-only; the slot has an `is_active` flag that nothing in the product can
-  flip. Retiring a QA slot during cleanup therefore had to be done out-of-band
-  (`UPDATE saloon_sensor_slots SET is_active = false`), which is exactly the
-  operator action the LOS watchdog (D20) is designed to react to. This is a
-  missing capability rather than a broken one, but an operator who removes a
-  sensor has no supported way to say so — worth a slot-level PATCH/DELETE when
-  the surface is next opened.
-- **Published QA templates cannot be removed** — `threshold-templates/` has no
-  DELETE, so each pass-2 run leaves one PUBLISHED, non-default template in the
-  QA org. Inert (it is neither the org default nor breed-matched), but it
-  accumulates.
+
+### The two gaps this pass recorded are now closed (2026-10-26)
+
+Both were missing *surfaces*, not broken ones: the model and the readers were
+there, nothing could write them. Both are deployed on **vps-16** and exercised
+by the pass-2 sweep.
+
+| Gap | Endpoint | Behaviour |
+|---|---|---|
+| No way to deactivate a sensor slot — `is_active` had no writer, so an operator who pulled a sensor had no supported way to say so and the LOS watchdog kept the saloon flagged lost forever | `PATCH\|DELETE /saloons/{id}/sensor-slots/{slot_id}/` | PATCH retires / re-arms / re-scopes; DELETE is the soft-off and is idempotent (`idempotent: true`). The row is never hard-deleted — `hardware_registry` and every telemetry row point at it. Manager+ only, scoped to the saloon so a foreign slot id is the same 404 as an unknown one. `SENSOR_SLOT_UPDATED` / `SENSOR_SLOT_RETIRED` audit rows |
+| No DELETE for a threshold template — every template an org ever created was permanent, including the ones each sweep left behind | `DELETE /threshold-templates/{id}/` | Refused (409) while anything depends on it: the org default, or any saloon assignment. A published non-default template can still resolve through the org+breed step, so deleting it fires the publish cache sweep (on COMMIT, per D22) and the affected saloons fall through the chain. The `THRESHOLD_TEMPLATE_DELETED` audit row carries the snapshot |
+
+Live proof on vps-16: the sweep's own `PATCH retire` → `PATCH re-arm` and its
+`DELETE` of a just-published template both answered 200, and the 11 QA
+templates the earlier sweeps had accumulated were deleted through the API
+(`remaining: []`). The gate is green with both: **928 passed, 16 skipped,
+0 failed** (13 tests in `test_2026_10_26_missing_surfaces.py`), and the
+hand-written contract + generated mirror carry both operations, so the
+`implemented == documented` gate stays green.
+
+One thing this exercise caught: deleting every template in an org leaves its
+saloons **inert** — the recache correctly writes no bands, and no threshold
+alert can fire. That is the designed behaviour of an empty chain, not a
+defect, but it is worth knowing before bulk-deleting: the QA org now carries a
+published org default (`temp 15–26`, `thi ≤ 80`) and saloon 3 re-armed with
+exactly those bands.
