@@ -3,11 +3,11 @@
 Every defect found while deploying and exercising the system with the digital
 twins, with the commit that fixes it and the evidence that the fix works.
 
-**21 numbered findings — 20 real defects** (16 in the application, 4 in the deploy
+**22 numbered findings — 21 real defects** (17 in the application, 4 in the deploy
 tooling, 1 in disaster recovery) plus one false alarm: D16 was the documented
 grace window, not a fault.
 
-**All 20 real defects are fixed and live-verified.**
+**All 21 real defects are fixed and live-verified.**
 
 **D15 is FIXED and live-verified (vps-09); D17 (vps-10).** All were found by
 running the real thing (fresh database, real HTTP, real MQTT, real twins) — not
@@ -37,13 +37,14 @@ by reading code.
 | D13 | A backup restores *approximately*: data lands, but chunk constraints are missing and `pg_restore` exits 1 with ~27 `ONLY option not supported on hypertable operations` errors — and nothing says so | no restore procedure existed; a bare `pg_restore` skips the Timescale hooks that a hypertable dump requires | `85fd24c` | drill: naive restore = exit 1 / 27 errors; canonical sequence (`CREATE EXTENSION` + `timescaledb_pre_restore` → restore → `timescaledb_post_restore`) = **exit 0, zero errors**, 934 telemetry rows, `hypertables=2 chunks=2`. Encoded as `scripts/restore.sh` with live-DB and corrupt-dump guards |
 | D12 | `./scripts/deploy.sh` → `Permission denied` | `core.fileMode = false` on the VPS: the executable bit is not recorded | `e841039` (runbook) | `DEPLOYMENT.md` §8 now says `bash scripts/deploy.sh <tag>` and carries a guarantees table |
 | D21 | **After a suspend/resume a gateway silently stops answering commands** — every command issued afterwards expires unacknowledged, while telemetry keeps flowing so the fleet looks healthy | `_restore_db_acl_rules` (resume) rebuilt the ACL set from `gateway_acl_rule_items()` only — the 9 tenant rows. The 4 bootstrap device-lane rules written at factory registration were deleted at suspend and never restored, and the bind path is deliberately ADDITIVE on top of them. The command channel rides the device lane (`publish_command` → `devices/{slot}/command`, answer on `devices/{slot}/command/response`): the downlink still reached a connected twin through its pre-existing subscription, but its ACK/SUCCESS publishes hit `no_match=deny` (`deny_action=ignore`) and vanished | `50b22eb` | live on vps-14: 16 commands had expired with no ack since the first suspend (2026-10-25 12:43:13). After the fix, suspend → resume rewrote all 13 rules (4 device + 9 tenant) and a REBOOT issued right after reached **APPLIED** (acked + applied) in 15 s; the same is true for the pass-2 run's REBOOT and DIAGNOSTICS_REQUEST. 2 regression tests pin the restored set |
+| D22 | The worker logs `DoesNotExist('Saloon matching query does not exist')` on every write that creates a saloon or a flock — and the threshold hash that write was supposed to rebuild **stays stale until the next trigger** (the D5 failure mode: bands that never arm) | every alerts signal handler fires inside the caller's `transaction.atomic()`, and it called `.delay()` right there. The task reached the queue before COMMIT, where the worker (a different connection) cannot see the row yet. A rolled-back write was worse: it enqueued a task for a row that would never exist | `252f608` | live on vps-15: a full pass-2 run (saloon + flock + close, all transactional) → **0 worker errors, 3 recaches succeeded**; the same run shape produced 8 `DoesNotExist` crashes on vps-14. Regression test pins both halves: rolled back = nothing queued, committed = exactly one recache |
 
 ## Regression coverage
 
 `backend/tests/test_2026_10_24_live_defects.py` pins **D1, D2, D3, D4, D4b, D6,
-D7, D8, D14, D17, D18, D19, D20 and D21** (21 tests, all green). D6 and D7 were
-briefly removed because their first drafts fought the harness; both are back,
-done the project's own way — D6 on the real integration redis
+D7, D8, D14, D17, D18, D19, D20, D21 and D22** (22 tests, all green). D6 and D7
+were briefly removed because their first drafts fought the harness; both are
+back, done the project's own way — D6 on the real integration redis
 (`INTEGRATION_REDIS_URL`, db 11) instead of a hand-rolled fake, D7 with the DDL
 guard from `test_followthrough_core` that creates the unmanaged hypertables
 from the `0002` migration SQL.

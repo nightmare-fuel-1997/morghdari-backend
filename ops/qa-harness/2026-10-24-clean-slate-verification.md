@@ -243,8 +243,8 @@ Pass 1 swept all 129 routes for "does every handler run" (128 probes, 0 defects,
 every one of those actions with a real payload and the role that is allowed to
 call it: `ops/qa-harness/api_actions.py`.
 
-**Result: 75 checks, 75 passed, 0 failed** against the live deployment on
-`vps-14`, with every resource created by the run disposed of or deactivated
+**Result: 76 checks, 76 passed, 0 failed** against the live deployment on
+`vps-15`, with every resource created by the run disposed of or deactivated
 afterwards.
 
 | Area | Actions exercised |
@@ -267,7 +267,34 @@ afterwards.
 
 Two real defects came out of the pass, both fixed and live-verified: **D21**
 (above — the worst of the two: a resumed gateway silently stops answering
-commands) and the CI gate's missing mounts (below).
+commands) and **D22** (below).
+
+### D22 — the recache was enqueued inside the writer's transaction
+
+After the vps-14 deploy the worker started logging, on every write that creates
+a saloon or a flock:
+
+```
+Task alerts.cache_saloon_thresholds raised unexpected:
+DoesNotExist('Saloon matching query does not exist.')
+```
+
+8 times in one afternoon of QA. The cause is a race that is easy to miss: all
+four alerts signal handlers fire **inside** the caller's `transaction.atomic()`
+(`saloon_create`, the flock placement/close writers, the template writers), and
+they called `.delay()` right there. The task therefore reached the queue before
+COMMIT, and the worker — a different connection — could not see the row yet.
+
+The visible noise is the lesser half. The hash the task was supposed to rebuild
+stayed **stale until the next trigger**, which is the D5 failure mode exactly:
+bands that never arm. A rolled-back write was worse — it enqueued a task for a
+row that would never exist.
+
+The fix follows the house rule already stated in `issue_command` ("a
+rolled-back request never leaves a PENDING command behind"): dispatch through
+`transaction.on_commit`. Live proof on vps-15 — a full pass-2 run (saloon +
+flock + close, all transactional) produced **0 worker errors and 3 successful
+recaches**, where the same run shape had produced 8 crashes on vps-14.
 
 ### The CI gate could not pass on this host, and it said nothing about the code
 
@@ -279,7 +306,7 @@ green tree look broken:
 | `range of CPUs is from 0.01 to 2.00` | `docker-compose.ci.yml` caps the test service at **2.5** CPUs; the VPS has 2 | run with a 1.5-CPU override on this host |
 | 3 failures + 2 collection errors in `test_celery_queue_coverage` / `test_sim_fleet` / `test_sim_twin` | the CI image packages only `./backend`, so the repo-root `docker-compose.prod.yml` (where the worker's `-Q` list lives) and `simulator/` were never mounted — and those tests deliberately FAIL rather than skip when the file is missing | `docker-compose.ci.yml` now mounts both (`337b7ec`) |
 
-After the fix the gate is green: **914 passed, 16 skipped, 0 failed** in 462 s,
+After the fix the gate is green: **915 passed, 16 skipped, 0 failed** in 444 s,
 coverage **88.88 %** (floor 80 %), module coverage gate GREEN.
 
 ### What pass 2 deliberately does not do
