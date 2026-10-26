@@ -233,3 +233,67 @@ and open alerts went to **0**.
 Bonus evidence from the same window: saloon 3's LOS episodes at 08:38→09:06 and
 10:13→10:15 fired **and** auto-resolved on their own — the LOS lifecycle works
 unattended, which was previously only observed once.
+
+---
+
+## Pass 2 — every write action, end to end (2026-10-26)
+
+Pass 1 swept all 129 routes for "does every handler run" (128 probes, 0 defects,
+32 action endpoints deferred because they ACT on an empty body). Pass 2 drives
+every one of those actions with a real payload and the role that is allowed to
+call it: `ops/qa-harness/api_actions.py`.
+
+**Result: 75 checks, 75 passed, 0 failed** against the live deployment on
+`vps-14`, with every resource created by the run disposed of or deactivated
+afterwards.
+
+| Area | Actions exercised |
+|---|---|
+| geography | provinces / cities / villages |
+| farm → saloon → position → sensor slot | create, rename, update, capabilities |
+| flock lifecycle | create, mortality, feed, water, weight samples, close |
+| reports | create DRAFT, edit, read by date |
+| panels + dashboard | `/panels/me/`, role-permission set/delete, user-override set/delete, personal + role dashboard config |
+| mutes | subscription mute/unmute, maintenance mute create/revoke |
+| org members | invite, role change, deactivate |
+| gateway | suspend → resume, REBOOT, DIAGNOSTICS_REQUEST, config, list |
+| gateway requests | reject stale (cap-aware), create, approve → installation jobs |
+| factory units | register, claim-code re-issue, credential rotation, list, retire |
+| hardware registry | register + retire a sensor (inside the support session) |
+| support ops | open session, force-resolve an alert |
+| alerts | acknowledge a live alert |
+| auth | token refresh, session list, session revoke, password change (+ the similarity-validator refusal), login with the new password |
+| threshold templates | create, update, publish |
+
+Two real defects came out of the pass, both fixed and live-verified: **D21**
+(above — the worst of the two: a resumed gateway silently stops answering
+commands) and the CI gate's missing mounts (below).
+
+### The CI gate could not pass on this host, and it said nothing about the code
+
+Running the deploy gate on the VPS surfaced two environment faults that made a
+green tree look broken:
+
+| Fault | Why it happened | Fix |
+|---|---|---|
+| `range of CPUs is from 0.01 to 2.00` | `docker-compose.ci.yml` caps the test service at **2.5** CPUs; the VPS has 2 | run with a 1.5-CPU override on this host |
+| 3 failures + 2 collection errors in `test_celery_queue_coverage` / `test_sim_fleet` / `test_sim_twin` | the CI image packages only `./backend`, so the repo-root `docker-compose.prod.yml` (where the worker's `-Q` list lives) and `simulator/` were never mounted — and those tests deliberately FAIL rather than skip when the file is missing | `docker-compose.ci.yml` now mounts both (`337b7ec`) |
+
+After the fix the gate is green: **914 passed, 16 skipped, 0 failed** in 462 s,
+coverage **88.88 %** (floor 80 %), module coverage gate GREEN.
+
+### What pass 2 deliberately does not do
+
+- **`POST /api/v1/logout/` is not a product endpoint.** It is DRF's
+  browsable-API session logout (CSRF form view from `rest_framework.urls`), so
+  it is excluded; session revocation is `DELETE /auth/sessions/{id}/`, which is
+  exercised.
+- **An invited member can never log in.** `POST /org/members/` creates the user
+  with an UNUSABLE password by design (credential handover only), so the
+  password drill runs on the owner fixture.
+- **A saloon that has held a flock cannot be deleted** (`409 saloon has flock
+  history`), and a farm with saloons is `409 farm not empty`. The pass asserts
+  the refusal rather than a deletion — that is the designed audit rule. The QA
+  org therefore accumulates one inert farm + saloon per run.
+- **Org members have no DELETE** — `PATCH` (role) and `POST /deactivate/` only,
+  so cleanup deactivates.
