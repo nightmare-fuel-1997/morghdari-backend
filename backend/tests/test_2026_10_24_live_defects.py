@@ -895,3 +895,52 @@ def test_resume_keeps_the_command_round_trip_lanes(django_user_model):
     # the config-apply uplink, same family
     assert ("subscribe", topics.desired_topic(slot.slot_id)) in allowed
     assert ("publish", topics.reported_topic(slot.slot_id)) in allowed
+
+
+# ---------------------------------------------------------------------------
+# D22 — the recache must be enqueued on COMMIT, not inside the transaction
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+def test_recache_is_dispatched_on_commit_not_inside_the_transaction(
+        django_user_model, monkeypatch, django_capture_on_commit_callbacks):
+    """D22 (found live 2026-10-26 on 82.115.17.252): every alerts signal fires
+    inside the writer's `transaction.atomic()` (saloon_create, flock
+    placement/close, the template writers). Dispatching `.delay()` right there
+    put the task on the queue BEFORE the row was committed, and the worker — a
+    different connection — could not see it:
+
+        Task alerts.cache_saloon_thresholds raised unexpected:
+        DoesNotExist('Saloon matching query does not exist.')
+
+    8 times in one afternoon of QA, and the hash the task was supposed to
+    rebuild stayed stale until the next trigger (the D5 failure mode).
+
+    The property pinned here is the honest one: a ROLLED-BACK write enqueues
+    nothing at all, and a committed one enqueues exactly one recache.
+    """
+    from django.db import transaction
+
+    from apps.alerts import signals
+    from apps.farms.models import Saloon
+
+    calls = []
+    monkeypatch.setattr(
+        signals.cache_saloon_thresholds, "delay", lambda *a, **k: calls.append(a)
+    )
+    w = _world(django_user_model)
+
+    class RolledBack(Exception):
+        pass
+
+    try:
+        with transaction.atomic():
+            Saloon.objects.create(org_id=w["org"].org_id, farm=w["farm"], name="rolled-back")
+            raise RolledBack
+    except RolledBack:
+        pass
+    assert calls == [], "a rolled-back write must not leave a recache on the queue"
+
+    with django_capture_on_commit_callbacks(execute=True):
+        saloon = Saloon.objects.create(org_id=w["org"].org_id, farm=w["farm"], name="kept")
+    assert calls == [(str(saloon.pk),)], "a committed write must enqueue exactly one recache"

@@ -610,20 +610,22 @@ class TestO15Publish:
         assert after_template.pk == draft.pk
         assert after_source == SOURCE_ORG_BREED
 
-    def test_publishing_fires_the_cache_sweep(self, monkeypatch):
+    def test_publishing_fires_the_cache_sweep(self, monkeypatch, django_capture_on_commit_callbacks):
         from apps.alerts import tasks
 
         calls = []
         monkeypatch.setattr(tasks.cache_daily_thresholds, "delay", lambda *a, **k: calls.append(a))
         w = _make_world()
         draft = _draft(w)
-        res = _as(w, "manager").post(
-            reverse("ops:threshold-template-publish", args=[draft.pk]), {}, format="json"
-        )
+        # D22: the sweep is dispatched on COMMIT, so execute the callback here.
+        with django_capture_on_commit_callbacks(execute=True):
+            res = _as(w, "manager").post(
+                reverse("ops:threshold-template-publish", args=[draft.pk]), {}, format="json"
+            )
         assert res.status_code == 200
         assert calls, "publishing must re-cache the affected saloons"
 
-    def test_editing_a_draft_does_not_sweep(self, monkeypatch):
+    def test_editing_a_draft_does_not_sweep(self, monkeypatch, django_capture_on_commit_callbacks):
         from apps.alerts import tasks
 
         calls = []
@@ -631,11 +633,12 @@ class TestO15Publish:
         w = _make_world()
         draft = _draft(w)
         calls.clear()  # ignore whatever the world's own writes triggered
-        _as(w, "owner").put(
-            reverse("ops:threshold-template-update", args=[draft.pk]),
-            {"name": "quiet edit"},
-            format="json",
-        )
+        with django_capture_on_commit_callbacks(execute=True):
+            _as(w, "owner").put(
+                reverse("ops:threshold-template-update", args=[draft.pk]),
+                {"name": "quiet edit"},
+                format="json",
+            )
         assert calls == []
 
     def test_duplicate_breed_is_conflict(self):
@@ -701,7 +704,7 @@ class TestO15Publish:
 
 
 class TestO16Assignment:
-    def test_manager_assigns_and_the_chain_follows(self, monkeypatch):
+    def test_manager_assigns_and_the_chain_follows(self, monkeypatch, django_capture_on_commit_callbacks):
         from apps.alerts import tasks
 
         calls = []
@@ -709,11 +712,13 @@ class TestO16Assignment:
         w = _make_world()
         plan = _draft(w, breed="broiler", name="Assigned plan", status=LifecycleTemplate.PUBLISHED)
         saloon = w["saloon_b"]
-        res = _as(w, "manager").put(
-            reverse("ops:saloon-threshold-template", args=[saloon.pk]),
-            {"template_id": plan.pk},
-            format="json",
-        )
+        # D22: dispatched on COMMIT — execute the callback explicitly.
+        with django_capture_on_commit_callbacks(execute=True):
+            res = _as(w, "manager").put(
+                reverse("ops:saloon-threshold-template", args=[saloon.pk]),
+                {"template_id": plan.pk},
+                format="json",
+            )
         assert res.status_code == 200, res.content
         assert res.data == {
             "saloon_id": saloon.pk,

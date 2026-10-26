@@ -576,7 +576,7 @@ def test_position_create_rename_and_duplicate_label():
 # ---------------------------------------------------------------------------
 
 
-def test_flock_close_sets_end_date_and_rerarms(monkeypatch):
+def test_flock_close_sets_end_date_and_rerarms(monkeypatch, django_capture_on_commit_callbacks):
     world = _make_world()
     calls: list = []
     monkeypatch.setattr(
@@ -606,7 +606,10 @@ def test_flock_close_sets_end_date_and_rerarms(monkeypatch):
     assert "start_date" in res.data["error"]
 
     today = datetime.now(TEHRAN).date()
-    res = _as(world, "engineer").patch(url, {"end_date": today.isoformat()}, format="json")
+    # D22: the recache is dispatched on COMMIT (the writer runs in a
+    # transaction), so the callback has to be executed explicitly here.
+    with django_capture_on_commit_callbacks(execute=True):
+        res = _as(world, "engineer").patch(url, {"end_date": today.isoformat()}, format="json")
     assert res.status_code == 200, res.content
     assert res.data["status"] == "CLOSED"
     assert res.data["end_date"] == today.isoformat()

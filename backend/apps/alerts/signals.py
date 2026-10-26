@@ -18,6 +18,7 @@ explicit saloon assignment rebuilds exactly that one saloon:
 
 import logging
 
+from django.db import transaction
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 
@@ -29,11 +30,31 @@ from apps.telemetry.models import FlockCycle
 logger = logging.getLogger(__name__)
 
 
+def _dispatch(task, *args) -> None:
+    """Enqueue a recache ONLY after the writing transaction commits.
+
+    D22 (2026-10-26, found live on 82.115.17.252): every one of these handlers
+    fires inside the caller's transaction — `saloon_create`, the flock
+    placement/close writers and the template writers all wrap their writes in
+    `transaction.atomic()`. Dispatching immediately let a worker pick the task
+    up before COMMIT, where a different connection cannot see the row yet:
+    `cache_saloon_thresholds` died with `DoesNotExist('Saloon matching query
+    does not exist')` — 8 times in one afternoon of QA — and the hash it was
+    supposed to rebuild stayed stale until the next trigger, which is the
+    exact failure mode D5 was about.
+
+    `on_commit` is the same rule `issue_command` already follows for its
+    publish: a rolled-back request leaves no work behind, and a committed one
+    always sees its own row.
+    """
+    transaction.on_commit(lambda: task.delay(*args))
+
+
 @receiver(post_save, sender=FlockCycle, dispatch_uid="alerts_flock_recache")
 def flock_saved(sender, instance, created, **kwargs):
     """Fast path on EVERY flock save: placement starts day 1; setting
     end_date must re-arm the hash the moment it happens (Walkthrough line 646)."""
-    cache_saloon_thresholds.delay(str(instance.saloon_id))
+    _dispatch(cache_saloon_thresholds, str(instance.saloon_id))
 
 
 @receiver(
@@ -44,7 +65,7 @@ def flock_saved(sender, instance, created, **kwargs):
 def rules_changed(sender, instance, created, **kwargs):
     """Rule edits affect every active saloon using the template — run the full
     sweep asynchronously rather than guessing affected saloons here."""
-    cache_daily_thresholds.delay()
+    _dispatch(cache_daily_thresholds)
 
 
 @receiver(
@@ -67,7 +88,7 @@ def template_changed(sender, instance, created, **kwargs):
         {"status", "is_default", "breed_type", "org_id"} & set(update_fields)
     ):
         return  # a rename cannot move a band — skip the sweep
-    cache_daily_thresholds.delay()
+    _dispatch(cache_daily_thresholds)
 
 
 @receiver(post_save, sender=Saloon, dispatch_uid="alerts_saloon_template_recache")
@@ -79,4 +100,4 @@ def saloon_assignment_changed(sender, instance, created, **kwargs):
     update_fields = kwargs.get("update_fields")
     if update_fields is not None and "threshold_template" not in update_fields:
         return
-    cache_saloon_thresholds.delay(str(instance.pk))
+    _dispatch(cache_saloon_thresholds, str(instance.pk))
