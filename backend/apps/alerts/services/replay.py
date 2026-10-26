@@ -182,6 +182,7 @@ def run_replay_sweep(gateway_slot: str | None = None) -> list:
                                 current_value=worst,
                                 source="REPLAY_ANALYSIS",
                                 batch_id=batch_id,
+                                reason="Replay buffered breach",
                             )
                             created.append(batch_id)
                             logger.warning(

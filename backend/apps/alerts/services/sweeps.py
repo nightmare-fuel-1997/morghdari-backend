@@ -375,6 +375,7 @@ def los_watchdog(now_dt=None) -> int:
                         current_status="ACTIVE_TIER_1",
                         current_value=None,
                         source="REALTIME",
+                        reason="Sensor loss of signal",
                     )
                     fired += 1
                     new_episodes_by_farm.setdefault(saloon.farm_id, []).extend(

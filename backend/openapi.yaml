@@ -339,6 +339,11 @@ components:
           nullable: true
         highest_tier_reached:
           type: integer
+        reason:
+          type: string
+          maxLength: 200
+          nullable: true
+          description: Why the alert fired — velocity emergency, sustained threshold breach, sensor loss, replay buffered breach. Null for rows that predate the column.
 
     MaintenanceMute:
       type: object

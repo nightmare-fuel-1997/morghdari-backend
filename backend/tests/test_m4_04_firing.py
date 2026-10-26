@@ -114,6 +114,7 @@ def test_breach_creates_alert_instance(timescale_db):
     assert float(alert.current_value) == 32.0
     assert alert.current_status == "ACTIVE_TIER_1"
     assert alert.batch_id is None
+    assert alert.reason and "Sustained threshold breach" in alert.reason
 
 
 @pytest.mark.use_migrations
@@ -142,10 +143,12 @@ def test_coalesce_refreshes_open_alert_instead_of_new_row():
     rc = world["redis"]
     org_id, saloon = world["org"].org_id, world["saloon"]
 
-    first = fire_or_coalesce(rc, org_id, saloon.farm_id, saloon.id, "temp", 35.0)
+    first = fire_or_coalesce(rc, org_id, saloon.farm_id, saloon.id, "temp", 35.0,
+                             reason="Velocity emergency: temp +5.2C")
     assert first["action"] == "fired"
     alert = AlertInstance.objects.get(pk=first["alert_id"])
     assert float(alert.current_value) == 35.0
+    assert alert.reason == "Velocity emergency: temp +5.2C"
 
     second = fire_or_coalesce(rc, org_id, saloon.farm_id, saloon.id, "temp", 41.5)
     assert second["action"] == "coalesced"

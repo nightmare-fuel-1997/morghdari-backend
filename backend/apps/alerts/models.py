@@ -101,6 +101,14 @@ class AlertInstance(models.Model):
     resolved_at = models.DateTimeField(null=True, blank=True)
     highest_tier_reached = models.IntegerField(default=1, null=True)
     legal_hold = models.BooleanField(default=False)
+    # 2026-10-26 (alert forensics): WHY this row fired. The live episode's
+    # reason already travelled in the Redis blob, but the blob is cleared when
+    # the episode closes — after which a velocity emergency and a sustained
+    # breach were indistinguishable, which is exactly the question an operator
+    # asks first. Set once, at the ORIGIN of the episode (a coalesce never
+    # overwrites it: "this began as a 25→36 jump" is the fact worth keeping).
+    # Nullable: rows that predate the column, and no closer invents a reason.
+    reason = models.CharField(max_length=200, null=True, blank=True)
 
     class Meta:
         db_table = "alert_instances"

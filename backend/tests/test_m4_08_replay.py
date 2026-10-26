@@ -122,6 +122,7 @@ def test_replay_analysis_alert(timescale_db, _fresh_redis):
     assert alert.current_status == "ACTIVE_TIER_1"
     assert alert.batch_id.startswith(f"{world['slot'].slot_id}:")
     assert "2026-08-25T06:00:00" in alert.batch_id  # FIRST device_ts of window
+    assert alert.reason == "Replay buffered breach"
 
 
 @pytest.mark.use_migrations

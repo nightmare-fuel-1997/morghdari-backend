@@ -135,6 +135,8 @@ def test_los_alert_fires_exactly_once_across_sweeps(timescale_db, _fresh_redis):
     for _ in range(3):
         los_watchdog()
     assert _los_alerts(world["saloon"]).count() == 1
+    alert = _los_alerts(world["saloon"]).get()
+    assert alert.reason == "Sensor loss of signal"
 
 
 @pytest.mark.use_migrations

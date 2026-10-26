@@ -53,6 +53,7 @@ def _alert_out(row: AlertInstance) -> dict:
         "triggered_at": row.triggered_at.isoformat() if row.triggered_at else None,
         "resolved_at": row.resolved_at.isoformat() if row.resolved_at else None,
         "highest_tier_reached": row.highest_tier_reached,
+        "reason": row.reason,
     }
 
 

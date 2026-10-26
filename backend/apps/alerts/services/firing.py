@@ -97,6 +97,7 @@ def fire_or_coalesce(
                     current_value=value,
                     source=source,
                     batch_id=batch_id,
+                    reason=reason or None,
                 )
                 action = "fired"
                 # M7-04 observability: created counter (Redis bridge — runbook §3.1).

@@ -176,10 +176,12 @@ def evaluate_entry(
         # episode, only after breach_duration_sec of SUSTAINED breach.
         if consume_fire(redis_client, saloon_id, metric_key,
                         duration_sec, clock_now=clock_now):
+            reason = f"Sustained threshold breach: {metric_key} avg {float(metric_values['avg']):.2f} >= {max_threshold}"
             fire = fire_or_coalesce(
                 redis_client, org_id, farm_id, saloon_id,
                 metric=metric_key, value=float(metric_values["avg"]),
                 clock_now=clock_now,
+                reason=reason,
             )
             fired = {**fire, "metric": metric_key, "tier": 1}
 
@@ -212,9 +214,11 @@ def evaluate_entry(
             if result == "breaching" and consume_fire(
                 redis_client, saloon_id, "thi", duration_sec, clock_now=clock_now
             ):
+                reason = f"Sustained threshold breach: thi computed {thi:.2f} >= {float(thi_max_str)}"
                 fire = fire_or_coalesce(
                     redis_client, org_id, farm_id, saloon_id,
                     metric="thi", value=thi, clock_now=clock_now,
+                    reason=reason,
                 )
                 fired = {**fire, "metric": "thi", "tier": 1}
 

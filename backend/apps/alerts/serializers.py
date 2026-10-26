@@ -84,6 +84,13 @@ class AlertInstanceSerializer(serializers.Serializer):
     highest_tier_reached = serializers.IntegerField(
         min_value=1, max_value=3, help_text="Highest escalation tier reached (1-3)."
     )
+    reason = serializers.CharField(
+        max_length=200,
+        allow_null=True,
+        allow_blank=True,
+        required=False,
+        help_text="Why the alert fired: velocity emergency, sustained threshold breach, sensor loss, etc.",
+    )
 
 
 class SaloonAlertsResponseSerializer(serializers.Serializer):
@@ -123,6 +130,7 @@ ALERT_LIST_RESPONSE_EXAMPLE = OpenApiExample(
                 "triggered_at": "2026-08-20T14:32:00+03:30",
                 "resolved_at": None,
                 "highest_tier_reached": 1,
+                "reason": "NH3 velocity emergency: max_ts=52 >= 50",
             },
             {
                 "alert_id": "7a1e4c90-2f5b-4d8e-9c3a-6e8f1b4d7a2e",
@@ -133,6 +141,7 @@ ALERT_LIST_RESPONSE_EXAMPLE = OpenApiExample(
                 "triggered_at": "2026-08-20T13:05:00+03:30",
                 "resolved_at": None,
                 "highest_tier_reached": 2,
+                "reason": "Sustained threshold breach: temp avg 33.80 >= 26.00",
             },
         ]
     },
