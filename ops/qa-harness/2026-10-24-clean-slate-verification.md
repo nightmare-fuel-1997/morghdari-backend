@@ -324,3 +324,15 @@ coverage **88.88 %** (floor 80 %), module coverage gate GREEN.
   org therefore accumulates one inert farm + saloon per run.
 - **Org members have no DELETE** — `PATCH` (role) and `POST /deactivate/` only,
   so cleanup deactivates.
+- **There is no API surface to deactivate a sensor slot.** `sensor-slots/` is
+  POST-only; the slot has an `is_active` flag that nothing in the product can
+  flip. Retiring a QA slot during cleanup therefore had to be done out-of-band
+  (`UPDATE saloon_sensor_slots SET is_active = false`), which is exactly the
+  operator action the LOS watchdog (D20) is designed to react to. This is a
+  missing capability rather than a broken one, but an operator who removes a
+  sensor has no supported way to say so — worth a slot-level PATCH/DELETE when
+  the surface is next opened.
+- **Published QA templates cannot be removed** — `threshold-templates/` has no
+  DELETE, so each pass-2 run leaves one PUBLISHED, non-default template in the
+  QA org. Inert (it is neither the org default nor breed-matched), but it
+  accumulates.
