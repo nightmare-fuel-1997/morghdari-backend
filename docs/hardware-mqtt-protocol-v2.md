@@ -267,6 +267,14 @@ topic set with what it says — do not merge.
 4. Persist the applied `config_version` to flash **before** reporting.
 5. Publish the report (§8.1).
 
+**The first document after binding may take a few seconds.** The initial
+`desired` publish is queued server-side when the installer binds you — it is
+not instantaneous. A device that connects seconds after binding may subscribe
+to an empty retained slot and receive nothing yet. **This is not a fault:**
+stay subscribed (or re-subscribe every few seconds — idempotent, §3.2) and the
+document arrives as soon as the queue drains. Never conclude "no config = my
+subscribe failed"; verify with the retained-document arrival instead.
+
 The document **contains no secrets** — no password, no claim code. Safe to log
 and diff between versions.
 

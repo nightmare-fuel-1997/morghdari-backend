@@ -14,7 +14,10 @@ Runs the complete verification sequence against the LIVE deployment:
   4. DRILL    — role_probe_drill.py (56 checks: auth, role gates, tenant
                 isolation, data plane, alert lifecycle, template rules,
                 sensor slots, member state machine).
-  5. HARNESS  — api_actions.py (83 checks: every write surface end-to-end).
+  5. JOURNEY  — journey_e2e.py (25 steps: full farm lifecycle + device
+                provisioning + REAL MQTT connect → desired → APPLIED →
+                PROVISIONED → telemetry visible via REST).
+  6. HARNESS  — api_actions.py (85 checks: every write surface end-to-end).
 
 Exit code 0 only when every phase is green.
 
@@ -168,7 +171,18 @@ def main():
     else:
         check('role drill ran', False, (r.stdout[-200:] + r.stderr[-200:]))
 
-    # ── 5. HARNESS ───────────────────────────────────────────────────────────
+    # ── 5. JOURNEY (farm → device → real MQTT → telemetry) ──────────────────
+    journey = os.path.join(HARNESS_DIR, 'journey_e2e.py')
+    r = subprocess.run([sys.executable, journey], capture_output=True, text=True, timeout=600)
+    line = next((l for l in r.stdout.splitlines() if 'JOURNEY SUMMARY' in l), '')
+    m4 = re.search(r'(\d+) passed, (\d+) failed', line)
+    if m4:
+        p, f = int(m4.group(1)), int(m4.group(2))
+        check(f'journey green ({p} steps, farm+device+MQTT)', f == 0, line.strip())
+    else:
+        check('journey ran', False, (r.stdout[-200:] + r.stderr[-200:]))
+
+    # ── 6. HARNESS ───────────────────────────────────────────────────────────
     if not skip_harness:
         harness = os.path.join(HARNESS_DIR, 'api_actions.py')
         r = subprocess.run([sys.executable, harness], capture_output=True, text=True, timeout=900)
