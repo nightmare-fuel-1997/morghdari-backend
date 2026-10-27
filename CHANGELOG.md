@@ -3,6 +3,28 @@
 All notable changes per version. Format follows the spiral-roadmap discipline:
 one section per version tag, each listing what risk the version killed.
 
+## Contract 1.15.0 — 2026-10-26/27 — the two missing write surfaces + alert forensics (vps-17)
+
+Version number applied 2026-10-27 retroactively to the 2026-10-26 contract
+additions (the schema carried them; the version string had not been bumped).
+Shipped scope, all live-verified (QA harness 81/81; role-probe drill 56/56):
+
+- Added: `PATCH|DELETE /saloons/{id}/sensor-slots/{slot_id}/` (F7b) — the only
+  writer of `saloon_sensor_slots.is_active`; DELETE is the idempotent soft-off,
+  the row is never hard-deleted (hardware_registry + telemetry point at it);
+  manager+ and scoped to the saloon.
+- Added: `DELETE /threshold-templates/{id}/` (O17) — 409 while the template is
+  the org default or assigned to any saloon; a published non-default delete
+  fires the publish cache sweep on commit; audit snapshot in-transaction.
+- Added: `AlertInstance.reason` + migration 0008 — every alert creation site
+  records WHY it fired (velocity emergency text, sustained threshold breach
+  with metric/value/band, sensor loss of signal, replay buffered breach);
+  exposed on the alerts list; coalesce never overwrites (set at episode origin).
+- Added: `docs/hardware-mqtt-protocol-v2.md` — the complete device protocol
+  guide for the hardware team (abf141e).
+- Fixed: alert harness counts absent-precondition steps as SKIP, not FAIL.
+- Ops: deployed vps-17; CI gate 928 passed / 16 skipped / 0 failed (88.94%).
+
 ## [Unreleased] — 2026-10-18 — MQTT 3.1.1 protocol standardization (owner decision · Tracker §4t)
 
 No behavioral change — paho's default protocol was already MQTTv311; this makes the

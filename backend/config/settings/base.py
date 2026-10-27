@@ -282,7 +282,7 @@ SPECTACULAR_SETTINGS = {
     "TITLE": "Morghdari Poultry Monitoring API",
     "DESCRIPTION": (
         "REST API for the Morghdari multi-tenant poultry monitoring platform. "
-        "Contract v1.7.8 (ops wave + merged daily-report schemas + the "
+        "Contract v1.15.0 (ops wave + merged daily-report schemas + the "
         "threshold-template write surface O13–O16 + the follow-through core + "
         "the Hardware Team write path H0–H4 + alert-subscription mutes B2 + "
         "granular panels B3 + public status page B4 + reconciliation B5).\n\n"
@@ -300,7 +300,7 @@ SPECTACULAR_SETTINGS = {
         "WebSocket live docs (Swagger covers REST only): /api/ws-docs/ "
         "(human page with JS/Dart snippets) + /api/ws-schema/ (machine JSON)."
     ),
-    "VERSION": "1.7.8",
+    "VERSION": "1.15.0",
     "CONTACT": {"name": "Morghdari Platform Team"},
     "LICENSE": {"name": "Proprietary — Morghdari"},
     # 2026-09-11 fix (Swagger "Try it out" NetworkError): the server is a

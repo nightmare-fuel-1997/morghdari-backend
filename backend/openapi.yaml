@@ -1,10 +1,24 @@
 openapi: "3.0.3"
 info:
   title: Morghdari Poultry Monitoring API
-  version: "1.14.0"
+  version: "1.15.0"
   description: |
     REST API for the Morghdari multi-tenant poultry monitoring platform.
     WebSocket protocol: /api/ws-docs/ (human) + /api/ws-schema/ (JSON); Swagger covers REST only.
+
+    v1.15.0 (2026-10-26/27 — the two missing write surfaces + alert forensics):
+    `PATCH|DELETE /saloons/{id}/sensor-slots/{slot_id}/` — the only writer of
+    `saloon_sensor_slots.is_active`; DELETE is the idempotent soft-off (the row
+    is kept: hardware_registry and telemetry point at it), PATCH retires /
+    re-arms / re-scopes; manager+ and scoped to the saloon so a foreign slot id
+    is the same 404 as an unknown one. `DELETE /threshold-templates/{id}/` —
+    409 while the template is the org default or assigned to any saloon;
+    a published non-default delete fires the publish cache sweep on commit and
+    writes the audit snapshot in the same transaction. `AlertInstance.reason` —
+    every alert row now records WHY it fired (velocity emergency text, sustained
+    threshold breach with metric/value/band, sensor loss of signal, replay
+    buffered breach); exposed on the saloon alerts list. Version number applied
+    2026-10-27 retroactively to the 2026-10-26 contract additions (vps-17).
 
     v1.14.0 (2026-10-20 — device photos, AD-20 / task 2.9):
     `POST /provisioning/installations/{id}/gateway/photo/` and
