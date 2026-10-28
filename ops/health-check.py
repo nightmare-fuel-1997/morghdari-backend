@@ -110,8 +110,11 @@ def ssh_run(script, timeout=180):
         return -1, '', 'MORGHDARI_SSH_PASS not set'
     c = paramiko.SSHClient()
     c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    # look_for_keys/allow_agent OFF: password auth only — otherwise paramiko
+    # probes ~/.ssh and some sandboxes block that read (noise, not a failure).
     c.connect(host, port=22, username=user, password=pw, timeout=30,
-              banner_timeout=30, auth_timeout=30)
+              banner_timeout=30, auth_timeout=30,
+              look_for_keys=False, allow_agent=False)
     try:
         _in, out, err = c.exec_command(script, timeout=timeout)
         o = out.read().decode('utf-8', 'replace')
