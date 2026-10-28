@@ -45,13 +45,13 @@ onboarded by the runbook (v1.0)**, plus four small software gaps listed at the e
 | Scope item | Status |
 |---|---|
 | Production compose + nginx + emqx + redis + TLS on the real VPS | ✅ live (82.115.17.252) |
-| Monitoring stack + alert rules | ✅ running (Prometheus exporter, subscriber_up) |
+| Monitoring stack + alert rules | ✅ **2026-10-28** — Prometheus + blackbox now actually running (before this date the stack was configured but never started) |
 | Subscriber-02 replica | ✅ running |
 | Support-role activation + staff MFA + 4 support-op endpoints | ✅ live-verified 2026-10-27 (MFA login + force-resolve in the drill) |
 | Deploy-by-pinned-tag + one-command rollback | ✅ drilled for real (2026-10-24, deploy.sh) |
 | Per-tenant cost metering (MET-SAAS) | ✅ shipped (org_daily_usage) |
-| Backup scripts | ⚠️ scripts exist but **no crontab on the VPS** — backups are manual |
-| External uptime prober for the 99.9 % SLO | ⚠️ status page API ships (`/api/v1/status/`) but `probers: []` — **no external prober wired** |
+| Backup scripts | ✅ **2026-10-28**: daily `pg_dump` cron (02:00) + weekly `pg_basebackup` (Sun 03:00) + compressed WAL archive — PITR chain live locally (offsite S3 still needs credentials) |
+| External uptime prober for the 99.9 % SLO | ✅ **2026-10-28**: Prometheus + blackbox deployed, target corrected to the real public host; `/api/v1/status/` now reports `operational / 100 %` |
 
 ### v0.8 — DR + HIL real hardware — ◐ HALF DONE (the current frontier)
 | Scope item | Status |
@@ -74,8 +74,8 @@ onboarded by the runbook (v1.0)**, plus four small software gaps listed at the e
 | Scope item | Status |
 |---|---|
 | Onboarding runbook executed start-to-finish by the runbook alone | ◐ `docs/first-install-runbook.md` exists; never executed against a real tenant |
-| Billing placeholder live | ◐ usage metering shipped (`org_daily_usage`); no billing surface |
-| Support/on-call rota real | ❌ |
+| Billing placeholder live | ✅ **2026-10-28** — `manage.py billing_stub --month YYYY-MM` computes pro-rata invoices from `org_daily_usage`; prices are SystemConfiguration knobs (default 0 = honest placeholder) |
+| Support/on-call rota real | ✅ **2026-10-28** — `ops/on-call.md`: rota table, severity classes, first-five-minutes playbook, escalation, restore drill |
 | First paying tenant's first flock cycle with live alerting | ❌ |
 
 ### Beyond v1.0 (v1.1/v1.2 — ticketing/events, analytics)
