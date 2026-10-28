@@ -149,6 +149,12 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./initdb:/docker-entrypoint-initdb.d:ro
+      # 2026-10-28: WAL archive target (BUGS.md "No WAL archive target
+      # configured"). archive_command copies completed segments here; the
+      # directory lives on the HOST so it survives container recreation.
+      # Offsite (WALG_S3_PREFIX) stays empty until S3 credentials exist —
+      # local archive + daily pg_dump is the honest floor, not the ideal.
+      - /backups:/backups
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 30s
