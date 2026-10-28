@@ -356,6 +356,18 @@ def _on_message(client, userdata, message) -> None:
     global _messages_seen
     with _messages_lock:
         _messages_seen += 1  # M7: /metrics counter (best-effort — never blocks ingestion)
+    # 2026-10-28: a postgres restart (WAL work on the VPS) closed the
+    # subscriber's long-lived Django connection, and NOTHING reopened it — the
+    # reported/config lane silently stopped processing while telemetry kept
+    # flowing (no DB on that path). close_old_connections() is the canonical
+    # long-running-process fix: a dead handle is dropped here and Django opens
+    # a fresh one on the next query.
+    try:
+        from django.db import close_old_connections
+
+        close_old_connections()
+    except Exception:  # noqa: BLE001 — DB hygiene must never block a message
+        pass
     topic = message.topic or ""
     # Route the five non-telemetry lanes BEFORE the pipeline, which rejects
     # anything not ending in `/telemetry`. Two earlier defects came from
