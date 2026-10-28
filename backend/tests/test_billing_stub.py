@@ -31,6 +31,34 @@ pg_only = pytest.mark.skipif(
 )
 
 
+@pytest.fixture(autouse=True)
+def _ensure_usage_table():
+    """Materialise the unmanaged table on a FRESH test DB.
+
+    `--nomigrations` means RunSQL-only tables never get created, and
+    `--reuse-db` used to hide that (an old DB happened to have the table).
+    Same posture as conftest's migration-artifact materialisation: create it
+    here when absent, Postgres only.
+    """
+    if connection.vendor != "postgresql":
+        yield
+        return
+    with connection.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS public.org_daily_usage (
+              id           BIGSERIAL PRIMARY KEY,
+              org_id       UUID   NOT NULL,
+              day          DATE   NOT NULL,
+              msg_count    BIGINT NOT NULL DEFAULT 0,
+              stored_bytes BIGINT NOT NULL DEFAULT 0,
+              saloon_count INTEGER NOT NULL DEFAULT 0,
+              gateway_count INTEGER NOT NULL DEFAULT 0,
+              UNIQUE (org_id, day)
+            )
+        """)
+    yield
+
+
 def _org(name="Billing Test Org"):
     return Organization.objects.create(name=name)
 

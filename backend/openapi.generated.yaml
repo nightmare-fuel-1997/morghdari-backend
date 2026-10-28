@@ -943,6 +943,7 @@ paths:
       security:
       - BearerAuth: []
       - BearerAuth: []
+      - {}
       responses:
         '200':
           content:
@@ -980,12 +981,21 @@ paths:
         blocked (`mfa_required`) — enroll-then-login is the intended first-run flow.
         Calling setup again re-issues the secret; a previously confirmed enrollment is
         not silently trusted.
+
+        FIRST-RUN PATH (2026-10-24, defect found by live verification): a never-enrolled
+        staff account cannot obtain a JWT (login demands MFA, setup demanded a JWT) —
+        the two endpoints deadlocked. Setup therefore ALSO accepts `{username,
+        password}` in the body, valid ONLY while the account has no confirmed
+        enrollment. Once enrolled, the password-only path closes: re-issuing a secret
+        requires the JWT, i.e. a live TOTP code — a leaked password alone can never
+        hijack a confirmed enrollment.
       summary: (Re)issue the staff TOTP enrollment
       tags:
       - Platform Support
       security:
       - BearerAuth: []
       - BearerAuth: []
+      - {}
       responses:
         '200':
           content:
@@ -6158,6 +6168,7 @@ paths:
                       triggered_at: '2026-08-20T14:32:00+03:30'
                       resolved_at: null
                       highest_tier_reached: 1
+                      reason: 'NH3 velocity emergency: max_ts=52 >= 50'
                     - alert_id: 7a1e4c90-2f5b-4d8e-9c3a-6e8f1b4d7a2e
                       metric_type: temp
                       current_status: ACTIVE_TIER_2
@@ -6166,6 +6177,7 @@ paths:
                       triggered_at: '2026-08-20T13:05:00+03:30'
                       resolved_at: null
                       highest_tier_reached: 2
+                      reason: 'Sustained threshold breach: temp avg 33.80 >= 26.00'
                   summary: Active saloon alerts
           description: ''
         '400':
@@ -7881,78 +7893,122 @@ paths:
       description: |-
         The write surface `saloon_sensor_slots.is_active` never had.
 
-        Before this endpoint the column existed, the LOS watchdog read it, the
-        OpenAPI documented it - and nothing in the product could write it. An
-        operator who pulled a sensor had no supported way to say so, so the
-        saloon stayed flagged "lost" forever.
+        Before this endpoint the column existed, the LOS watchdog read it, the OpenAPI
+        documented it — and nothing in the product could write it. An operator who
+        pulled a sensor had no supported way to say so, so the saloon stayed flagged
+        "lost" forever (the D20 orphan-alert family, reached from the other side).
 
-        `is_active=false` retires the slot. The LOS watchdog closes the slot's
-        open LOS row on its next sweep - the same path a retired saloon takes,
-        no special case here. `allowed_metric_keys` re-scopes what the slot may
-        report; the list is replaced wholesale, never merged. An empty body is
-        a 400 rather than a silent no-op.
+        `is_active=false` retires the slot. The LOS watchdog closes the slot's open
+        LOS row on its next sweep — the same path a retired saloon takes, no special
+        case here. Re-arming (`true`) makes the slot eligible for LOS again from the
+        next sweep.
+
+        `allowed_metric_keys` re-scopes what the slot may report; the list is replaced
+        wholesale, never merged. An empty body is a 400 rather than a silent no-op.
+        Writes `SENSOR_SLOT_UPDATED` with the changed fields.
       summary: Retire, re-arm or re-scope a sensor slot (manager+)
       parameters:
       - in: path
         name: saloon_id
         schema:
           type: integer
+        description: Saloon id (caller's org).
         required: true
       - in: path
         name: slot_id
         schema:
           type: string
+        description: Sensor slot id (that saloon).
         required: true
       tags:
-      - Farms
-      security:
-      - BearerAuth: []
+      - Farms & Saloons
       requestBody:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/SensorSlotUpdateRequest'
-        required: true
+              $ref: '#/components/schemas/PatchedSensorSlotUpdateRequestRequest'
+            examples:
+              RetireTheSlot:
+                value:
+                  is_active: false
+                summary: Retire the slot
+              Re-scopeTheMetrics:
+                value:
+                  allowed_metric_keys:
+                  - temp
+                  - humidity
+                summary: Re-scope the metrics
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedSensorSlotUpdateRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedSensorSlotUpdateRequestRequest'
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
       responses:
         '200':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SensorSlotResponse'
-          description: The updated slot row
+          description: ''
         '400':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Validation error — malformed input, bad enum, or out-of-range
+            value.
         '401':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
         '403':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
         '404':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Not found — id/slug unknown OR outside the caller's org (never
+            distinguished).
     delete:
       operationId: retire_saloon_sensor_slot
       description: |-
         The DELETE verb is the soft-off: `is_active=false`, nothing removed.
 
-        The row is never hard-deleted - `hardware_registry` install history and
-        every telemetry row point at the slot, and a gap in that history is
-        worse than a retired row. Idempotent: retiring an already-retired slot
-        answers 200 with `idempotent: true` instead of a 404, so a retried
-        operator action converges.
-      summary: Retire a sensor slot (manager+) - soft-off, nothing removed
+        The row is never hard-deleted — `hardware_registry` install history and every
+        telemetry row point at the slot, and a gap in that history is worse than a
+        retired row. Idempotent: retiring an already-retired slot answers 200 with
+        `idempotent: true` instead of a 404, so a retried operator action converges.
+
+        Writes `SENSOR_SLOT_RETIRED`.
+      summary: Retire a sensor slot (manager+)
       parameters:
       - in: path
         name: saloon_id
         schema:
           type: integer
+        description: Saloon id (caller's org).
         required: true
       - in: path
         name: slot_id
         schema:
           type: string
+        description: Sensor slot id (that saloon).
         required: true
       tags:
-      - Farms
+      - Farms & Saloons
       security:
+      - BearerAuth: []
       - BearerAuth: []
       responses:
         '200':
@@ -7960,14 +8016,26 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SensorSlotResponse'
-          description: "The retired slot row (`retired: true`, `idempotent` when nothing
-            changed)"
+          description: ''
         '401':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
         '403':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
         '404':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Not found — id/slug unknown OR outside the caller's org (never
+            distinguished).
   /api/v1/saloons/{saloon_id}/telemetry/:
     get:
       operationId: list_saloon_telemetry
@@ -8418,24 +8486,27 @@ paths:
     delete:
       operationId: delete_threshold_template
       description: |-
-        Removes a template the org owns - the surface that made every template
-        permanent, because there was no DELETE at all.
+        Removes a template the org owns — the surface that made every QA
+        template permanent, because a published one had no way back.
 
         Refused with a 409 when the template is still in use, because deleting it
-        would silently change live alarm bands: the org DEFAULT (publish another
-        default first) and any template ASSIGNED to a saloon (clear the
-        assignment first).
+        would silently change live alarm bands:
 
-        Everything else goes, DRAFT or PUBLISHED. A published non-default template
-        can still be resolved through the org+breed step, so its removal fires the
-        same cache sweep a publish does (on COMMIT) and the affected saloons fall
-        through to the next template in the chain instead of keeping dead bands
-        armed.
+        * **the org default** — publish another default first (`is_default: true` on
+          the publish call promotes it in one transaction);
+        * **assigned to any saloon** — clear the assignment first
+          (`PUT /saloons/{id}/threshold-template/ {"template_id": null}`).
 
-        The audit row is written in the same transaction as the delete and carries
-        the snapshot. 404 for a foreign or org-NULL (built-in) template: the
-        shared catalog is deletable by NO ONE.
-      summary: O17 - delete a template (owner, manager)
+        Everything else goes, DRAFT or PUBLISHED. A published non-default template can
+        still be resolved through the `org + breed` step, so its removal fires the same
+        cache sweep a publish does (on COMMIT) and the affected saloons fall through to
+        the next template in the chain instead of keeping dead bands armed.
+
+        The audit row is written in the same transaction as the delete and carries the
+        snapshot (name, status, breed, farm, rule count) — the template is gone but
+        "who removed the band that was paging me" stays answerable. 404 for a foreign
+        or org-NULL (built-in) template: the shared catalog is deletable by NO ONE.
+      summary: O17 — delete a template (owner, manager)
       parameters:
       - in: path
         name: template_id
@@ -8447,21 +8518,35 @@ paths:
       - Ops
       security:
       - BearerAuth: []
+      - BearerAuth: []
       responses:
         '200':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ThresholdTemplateDeleteResponse'
-          description: The template that was removed
+          description: ''
         '401':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthenticated — missing, expired, or malformed Bearer token.
         '403':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden — valid token but the role claim lacks this surface.
         '404':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Not found — id/slug unknown OR outside the caller's org (never
+            distinguished).
         '409':
-          description: The template is the org default, or is assigned to saloons.
+          description: The template is the org default or is assigned to saloons.
   /api/v1/threshold-templates/{template_id}/publish/:
     post:
       operationId: publish_threshold_template
@@ -8833,9 +8918,10 @@ components:
           description: Highest escalation tier reached (1-3).
         reason:
           type: string
-          maxLength: 200
           nullable: true
-          description: Why the alert fired: velocity emergency, sustained threshold breach, sensor loss, etc.
+          description: 'Why the alert fired: velocity emergency, sustained threshold
+            breach, sensor loss, etc.'
+          maxLength: 200
       required:
       - alert_id
       - current_status
@@ -11462,6 +11548,28 @@ components:
           minLength: 1
           description: New display name (trimmed).
           maxLength: 255
+    PatchedSensorSlotUpdateRequestRequest:
+      type: object
+      description: |-
+        PATCH /saloons/{id}/sensor-slots/{slot_id}/ body.
+
+        Both fields are optional, but an empty body is a 400: a write that changes
+        nothing is worse than a refusal, because the operator believes it landed.
+
+        `is_active=false` is the operator's "I pulled this sensor" lever — before
+        this surface existed the column had no writer anywhere in the product, so
+        the LOS watchdog kept the saloon flagged lost forever.
+      properties:
+        is_active:
+          type: boolean
+          description: false retires the slot (LOS closes its alert on the next sweep);
+            true re-arms it.
+        allowed_metric_keys:
+          type: array
+          items:
+            type: string
+            minLength: 1
+          description: Metric keys this slot may report — same list shape as create.
     PhotoItem:
       type: object
       description: O5/O6 row — url ← file_url, taken_at ← uploaded_at (ISO Z).
@@ -12422,6 +12530,42 @@ components:
       required:
       - is_active
       - slot_id
+    SensorSlotResponse:
+      type: object
+      description: |-
+        The slot row, exactly as `POST /saloons/{id}/sensor-slots/` returns it.
+
+        `retired`/`idempotent` appear on the DELETE half only: `retired` is the
+        soft-off confirmation (the row is never deleted — hardware history and
+        telemetry point at it), `idempotent` means the call changed nothing.
+      properties:
+        slot_id:
+          type: string
+        saloon_id:
+          type: integer
+          description: Saloon PK.
+        org_id:
+          type: string
+          description: Stringified org UUID.
+        position_id:
+          type: integer
+        is_active:
+          type: boolean
+        allowed_metric_keys:
+          type: array
+          items:
+            type: string
+        retired:
+          type: boolean
+        idempotent:
+          type: boolean
+      required:
+      - allowed_metric_keys
+      - is_active
+      - org_id
+      - position_id
+      - saloon_id
+      - slot_id
     SessionItem:
       type: object
       description: O11 row — the caller's own live session register.
@@ -12852,6 +12996,25 @@ components:
       required:
       - name
       - rules
+    ThresholdTemplateDeleteResponse:
+      type: object
+      description: |-
+        O17 row — the template that was removed, echoed back for the operator.
+
+        `name` is included because an id alone is not proof to a human that the
+        right template went; the audit row carries the full snapshot either way.
+      properties:
+        template_id:
+          type: integer
+        name:
+          type: string
+          nullable: true
+        deleted:
+          type: boolean
+          description: Always true — a 409 carries the refusal.
+      required:
+      - deleted
+      - template_id
     ThresholdTemplateDetail:
       type: object
       description: O13/O14/O15 row — the template plus its bands.
@@ -12935,47 +13098,6 @@ components:
       required:
       - count
       - results
-    SensorSlotUpdateRequest:
-      type: object
-      description: |-
-        PATCH body for a sensor slot. Both fields are optional, but an empty body
-        is a 400: a write that changes nothing is worse than a refusal, because
-        the operator believes it landed.
-      properties:
-        is_active:
-          type: boolean
-          description: false retires the slot (LOS closes its alert on the next sweep);
-            true re-arms it.
-        allowed_metric_keys:
-          type: array
-          items:
-            type: string
-    SensorSlotResponse:
-      type: object
-      description: |-
-        The slot row as the write surface returns it - the same shape POST
-        /saloons/{id}/sensor-slots/ answers with. `retired`/`idempotent` appear on
-        the DELETE half only.
-      properties:
-        slot_id:
-          type: string
-        saloon_id:
-          type: integer
-        org_id:
-          type: string
-          format: uuid
-        position_id:
-          type: integer
-        is_active:
-          type: boolean
-        allowed_metric_keys:
-          type: array
-          items:
-            type: string
-        retired:
-          type: boolean
-        idempotent:
-          type: boolean
     ThresholdTemplatePublishRequestRequest:
       type: object
       description: |-
