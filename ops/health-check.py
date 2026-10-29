@@ -4,7 +4,8 @@
 Runs the complete verification sequence against the LIVE deployment:
 
   1. INFRA    — containers healthy, API health 200, beat dispatching,
-                worker/subscriber error-free, telemetry fresh, DLQ empty.
+                worker/subscriber error-free, telemetry fresh, DLQ empty,
+                backup dump + WAL archive fresh, crontab present.
   2. FIXTURES — reactivate the QA probe users (they are deactivated by the
                 drill's own cleanup at the end of every run).
   3. ALERTS   — fire two real alerts through the product's own firing service
@@ -50,6 +51,9 @@ echo "TELEMETRY_AGE_MIN=$(docker exec morghdari-postgres psql -U morghdari_admin
 echo "TELEMETRY_1H=$(docker exec morghdari-postgres psql -U morghdari_admin -d morghdari -t -A -c "select count(*) from saloon_telemetry where device_ts > now() - interval '1 hour';")"
 echo "DLQ_KEYS=$(docker exec morghdari-redis redis-cli -a "$(grep -E '^REDIS_PASSWORD=' /opt/morghdari/.env | cut -d= -f2-)" --no-auth-warning --scan --pattern '*dlq*' | wc -l)"
 echo "DISK_PCT=$(df --output=pcent / | tail -1 | tr -dc '0-9')"
+echo "DUMP_AGE_H=$(find /backups/postgres -name '*.dump' -printf '%T@\n' 2>/dev/null | sort -rn | head -1 | awk '{if($1=="")print -1; else print int((systime()-$1)/3600)}')"
+echo "WAL_AGE_MIN=$(find /backups/wal -name '*.gz' -printf '%T@\n' 2>/dev/null | sort -rn | head -1 | awk '{if($1=="")print -1; else print int((systime()-$1)/60)}')"
+echo "CRON_OK=$(crontab -l 2>/dev/null | grep -c 'backup.sh')"
 '''
 
 FIXTURE_SCRIPT = r'''
@@ -153,6 +157,14 @@ def main():
     check('telemetry volume (>= 20 rows/h)', int(m.get('TELEMETRY_1H') or 0) >= 20, f"n={m.get('TELEMETRY_1H')}")
     check('DLQ keys == 0', m.get('DLQ_KEYS') == '0', f"n={m.get('DLQ_KEYS')}")
     check('disk < 85%', int(m.get('DISK_PCT') or 100) < 85, f"pct={m.get('DISK_PCT')}")
+    # 2026-10-29: the daily dump cron fired but the script was not executable
+    # (checkout has core.fileMode=false) — it failed silently for a day. These
+    # two checks make "the backup ran" and "WAL is still archiving" observable.
+    dump_age = float(m.get('DUMP_AGE_H') or -1)
+    check('daily dump fresh (< 36 h)', 0 <= dump_age < 36, f"age_h={dump_age}")
+    wal_age = float(m.get('WAL_AGE_MIN') or -1)
+    check('WAL archive fresh (< 15 min)', 0 <= wal_age < 15, f"age_min={wal_age}")
+    check('backup crontab installed', int(m.get('CRON_OK') or 0) >= 1, f"n={m.get('CRON_OK')}")
 
     # ── 2. FIXTURES ──────────────────────────────────────────────────────────
     rc, out, err = ssh_run(FIXTURE_SCRIPT)
