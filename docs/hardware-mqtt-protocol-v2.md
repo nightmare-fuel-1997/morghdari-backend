@@ -11,7 +11,13 @@ unchanged where they overlap.
 
 Everything in this document is verified against the deployed production broker
 (EMQX 5.5 on the VPS) and the backend subscribers that consume these lanes as
-of tag `vps-17`.
+of tag `vps-18`.
+
+> **Reading this as a non-engineer, or asking an AI to explain it?**
+> Use the companion `hardware-mqtt-protocol-v2-EXPLAINED.md`. It carries the
+> context this contract assumes (what the product is, who the parties are) and
+> the reasoning behind every rule here — including the alternatives we rejected.
+> Where the two disagree, THIS document wins.
 
 ---
 
