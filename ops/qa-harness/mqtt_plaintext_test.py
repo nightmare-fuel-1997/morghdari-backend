@@ -8,6 +8,7 @@ Usage:
     pip install paho-mqtt
     python mqtt_test.py
 """
+import os
 import time
 import warnings
 
@@ -18,7 +19,22 @@ warnings.filterwarnings("ignore")
 HOST = "82.115.17.252"
 PORT = 1883
 USER = "GW-TEST-B784019A"
-PASSWORD = "JfnKx5wUbEYTzKDUBnQ8K2L6"  # 24 chars, rotated 2026-11-03 16:21
+
+# The password NEVER travels through chat text (it was corrupted in transit
+# once already — 2026-11-03). It lives only in this file, read at runtime:
+#   ops/qa-harness/test_unit_password.txt  (gitignored, one line, no quotes)
+# Override the location with MQTT_TEST_PW_FILE if needed.
+_PW_FILE = os.environ.get(
+    "MQTT_TEST_PW_FILE",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                 "test_unit_password.txt"),
+)
+with open(_PW_FILE, encoding="ascii") as f:
+    PASSWORD = f.read().strip()
+assert len(PASSWORD) == 24 and PASSWORD.isalnum(), (
+    f"password file {_PW_FILE} looks wrong (len={len(PASSWORD)}) — "
+    "regenerate it rather than editing by hand")
+
 SLOT = USER
 TOPIC = f"devices/{SLOT}/reported"
 

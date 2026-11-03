@@ -107,3 +107,4 @@ htmlcov/
 
 # --- QA scratch (server-side harness, never committed) ---
 .tmp-qa/
+ops/qa-harness/test_unit_password.txt
