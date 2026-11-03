@@ -53,6 +53,11 @@ services:
     stop_grace_period: 60s
     ports:
       - "8883:8883"                  # MQTT over TLS (gateways) — the only public broker port
+      # 2026-11-03 TEMPORARY: plaintext MQTT for software-team testing.
+      # EMQX_TCP_BIND comes from .env — "127.0.0.1" (default, loopback-only,
+      # reach it via SSH tunnel) or "0.0.0.0" (public, UNENCRYPTED credentials
+      # — only with a dated exception + firewall restriction). See emqx.conf.
+      - "${EMQX_TCP_BIND:-127.0.0.1}:1883:1883"
       - "127.0.0.1:18083:18083"      # Dashboard / Management API — loopback only (see §3.1)
     environment:
       EMQX_DASHBOARD__DEFAULT_PASSWORD: "${EMQX_DASHBOARD_PASSWORD}"
