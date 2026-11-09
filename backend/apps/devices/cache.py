@@ -3,7 +3,7 @@
 Maintains consistency across:
   - Option A+1 Redis subscriber metadata caches:
       gw:status:{slot_id}               (TTL 60s)
-      gw:ident:{org_id}:{slot_id}       (TTL 24h)
+      gw:ident:{org_id}:{slot_id}       (TTL 300s + jitter)
       gw:neg:{org_id}:{slot_id}         (TTL 30s)
   - Legacy Django status cache:
       gateway:status:{slot_id}

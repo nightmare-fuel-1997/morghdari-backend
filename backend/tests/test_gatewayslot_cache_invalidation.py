@@ -30,10 +30,11 @@ from apps.provisioning.services import transition
 
 
 class FakeRedis:
-    """Hermetic Redis stand-in tracking keys and deletions."""
+    """Hermetic Redis stand-in tracking keys, TTLs, and deletions."""
 
     def __init__(self):
         self.store = {}
+        self.ttls = {}
 
     def get(self, key):
         return self.store.get(key)
@@ -42,6 +43,8 @@ class FakeRedis:
         if nx and key in self.store:
             return False
         self.store[key] = str(val)
+        if ex is not None:
+            self.ttls[key] = ex
         return True
 
     def delete(self, *keys):
@@ -50,6 +53,8 @@ class FakeRedis:
             if k in self.store:
                 del self.store[k]
                 count += 1
+            if k in self.ttls:
+                del self.ttls[k]
         return count
 
     def exists(self, key):
@@ -57,6 +62,7 @@ class FakeRedis:
 
     def flush(self):
         self.store.clear()
+        self.ttls.clear()
 
 
 @pytest.fixture
@@ -513,4 +519,42 @@ def test_15_queryset_update_and_bulk_update_immutability_strictness(test_setup):
     # QuerySet.bulk_update with org_id in fields
     with pytest.raises(ValueError, match="org_id is immutable"):
         GatewaySlot.objects.bulk_update([slot], fields=["org_id", "provisioning_status"])
+
+
+# ===========================================================================
+# 16. Identity cache TTL (300s + jitter) and immediate invalidation behavior
+# ===========================================================================
+@pytest.mark.django_db(transaction=True)
+def test_16_identity_cache_ttl_and_jitter(fake_redis, test_setup):
+    from morghdari.subscriber.main import _fetch_gateway_meta
+
+    org = test_setup["org_a"]
+    farm = test_setup["farm_1"]
+    slot_id = f"GW-{uuid.uuid4().hex[:8]}"
+
+    slot = GatewaySlot.objects.create(slot_id=slot_id, org=org, farm=farm, provisioning_status="PROVISIONED")
+
+    # Fetch meta and populate Redis cache
+    meta = _fetch_gateway_meta(fake_redis, str(org.org_id), farm.pk, slot.slot_id)
+    assert meta is not None
+
+    ident_key = f"gw:ident:{org.org_id}:{slot.slot_id}"
+    status_key = f"gw:status:{slot.slot_id}"
+
+    # Verify TTL range: 300 <= TTL <= 360 (5 minutes + 0..60s jitter)
+    ttl = fake_redis.ttls.get(ident_key)
+    assert ttl is not None
+    assert 300 <= ttl <= 360
+
+    # Status key retains its standard 60s TTL
+    assert fake_redis.ttls.get(status_key) == 60
+
+    # Verify immediate invalidation on mutation still purges the 300s key
+    with transaction.atomic():
+        slot.position_label = "Updated Position"
+        slot.save()
+
+    assert fake_redis.get(ident_key) is None
+    assert fake_redis.get(status_key) is None
+
 
