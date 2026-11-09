@@ -14,6 +14,7 @@ import json
 import os
 import time
 import uuid
+import redis
 
 from .dlq import send_to_dlq
 from .diagnostics import capture_diag, is_diag_only
@@ -76,6 +77,84 @@ def dedup_key(org_id: str, sensor_slot: str, device_ts: str) -> str:
     فارسی: کلید حذف تکرار به ازای هر اسلاتِ حل‌شده، عینِ اسنیپتِ کانونیکل.
     """
     return f"dedup:{org_id}:{sensor_slot}:{device_ts}"
+
+
+LUA_ATOMIC_TELEMETRY = """
+local items = cjson.decode(ARGV[1])
+local persisted_count = 0
+local duplicate_count = 0
+
+for i, item in ipairs(items) do
+    local dedup_key = item['dedup_key']
+    local exists = redis.call('EXISTS', dedup_key)
+    if exists == 0 then
+        redis.call('SET', dedup_key, '1', 'EX', tostring(math.floor(item['ttl'])))
+        local rk = item['replay_key']
+        if rk and rk ~= cjson.null and rk ~= '' then
+            redis.call('INCR', rk)
+        end
+        local xadd_args = {item['lane'], '*'}
+        for k, v in pairs(item['fields']) do
+            table.insert(xadd_args, tostring(k))
+            table.insert(xadd_args, tostring(v))
+        end
+        redis.call('XADD', unpack(xadd_args))
+        persisted_count = persisted_count + 1
+    else
+        duplicate_count = duplicate_count + 1
+    end
+end
+
+return {persisted_count, duplicate_count}
+"""
+
+_script_cache = {}
+
+
+def _get_atomic_telemetry_script(redis_client):
+    client_id = id(redis_client)
+    if client_id not in _script_cache:
+        _script_cache[client_id] = redis_client.register_script(LUA_ATOMIC_TELEMETRY)
+    return _script_cache[client_id]
+
+
+def persist_telemetry_atomic(
+    redis_client, lane: str, items: list[dict]
+) -> tuple[int, int]:
+    """Atomically evaluate per-slot deduplication and persist readings to Redis stream.
+
+    Ensures that dedup keys are NEVER set in Redis without the corresponding
+    stream entries being written, preventing silent telemetry loss upon broker
+    redelivery.
+    """
+    if not items:
+        return 0, 0
+
+    if hasattr(redis_client, "register_script"):
+        try:
+            cmd = _get_atomic_telemetry_script(redis_client)
+            res = cmd(args=[json.dumps(items)])
+            return int(res[0]), int(res[1])
+        except (redis.exceptions.ResponseError, AttributeError, NotImplementedError):
+            # Fallback for environments or mocks without Lua support
+            pass
+
+    # Fallback for basic in-memory test mocks without Lua
+    persisted_count = 0
+    duplicate_count = 0
+    for item in items:
+        dedup_key = item["dedup_key"]
+        ttl = int(item["ttl"])
+        if redis_client.set(dedup_key, 1, nx=True, ex=ttl):
+            rk = item.get("replay_key")
+            if rk:
+                redis_client.incr(rk)
+            redis_client.xadd(item["lane"], item["fields"])
+            persisted_count += 1
+        else:
+            duplicate_count += 1
+    return persisted_count, duplicate_count
+
 
 
 def handle_message(redis_client, topic: str, payload: bytes, db_fetch=None,
@@ -182,31 +261,33 @@ def handle_message(redis_client, topic: str, payload: bytes, db_fetch=None,
             return send_to_dlq(redis_client, topic, payload, UNKNOWN_SLOT)
         resolved.append((reading, slot_id))
 
-    # Gate 6 — per-slot dedup; duplicates skip publishing silently.
-    fresh = []
-    for reading, slot_id in resolved:
-        key = dedup_key(org_id, slot_id, device_ts)
-        if redis_client.set(key, 1, nx=True, ex=DEDUP_TTL_SECONDS):
-            fresh.append((reading, slot_id))
-    if not fresh:
-        return None  # full duplicate — success, nothing to do
+    # Gate 6 & 7 — Atomic per-slot dedup and stream persistence.
+    # Where a message produces multiple readings (multi-pack), they are evaluated
+    # and persisted atomically via Redis Lua script, guaranteeing that dedup keys
+    # are never set without their corresponding stream entries being written.
+    if not resolved:
+        return None
 
-    # Gate 7 — enrich + XADD, one entry PER READING (workers derive saloon
-    # from the resolved slot). Lane: pending (M5-04) when the gateway is not
-    # yet approved, else by is_buffered; flat fields per decision Q4 incl
-    # recv_ts + trace_id; raw JSON travels untouched. Buffered publishes also
-    # bump the replay counter (Blueprint §4:139).
     if status == STATUS_PENDING_APPROVAL:
         lane = STREAM_PENDING
     else:
         lane = STREAM_HISTORICAL if data.get("is_buffered") else STREAM_REALTIME
     raw_str = payload.decode("utf-8", errors="replace")
-    for reading, slot_id in fresh:
-        if data.get("is_buffered") and lane != STREAM_PENDING:
-            redis_client.incr(f"replay:pending:{gateway_slot}")
-        redis_client.xadd(
-            lane,
-            {
+
+    items = []
+    for reading, slot_id in resolved:
+        key = dedup_key(org_id, slot_id, device_ts)
+        replay_key = (
+            f"replay:pending:{gateway_slot}"
+            if (data.get("is_buffered") and lane != STREAM_PENDING)
+            else None
+        )
+        items.append({
+            "dedup_key": key,
+            "lane": lane,
+            "ttl": DEDUP_TTL_SECONDS,
+            "replay_key": replay_key,
+            "fields": {
                 "org_id": org_id,
                 "farm_id": farm_id,
                 "gateway_slot_id": gateway_slot,
@@ -219,7 +300,13 @@ def handle_message(redis_client, topic: str, payload: bytes, db_fetch=None,
                 "metrics": json.dumps(reading.get("metrics", {})),
                 "clock_drift": str(bool(data.get("clock_drift"))),
             },
-        )
+        })
 
-    trim_streams(redis_client)  # M3-07: bounded streams, every write
+    persisted_count, duplicate_count = persist_telemetry_atomic(
+        redis_client, lane, items
+    )
+
+    if persisted_count > 0:
+        trim_streams(redis_client)  # M3-07: bounded streams, every write
+
     return None

@@ -22,6 +22,7 @@ survive broker restarts and load-balance across N instances, hence:
 import http.server
 import logging
 import os
+import random
 import sys
 import threading
 import time
@@ -39,6 +40,7 @@ from apps.provisioning.topics import (
     reported_subscription,
 )
 
+from .dlq import DLQWriteError
 from .pipeline import handle_message
 
 logging.basicConfig(
@@ -98,9 +100,17 @@ _granted_topics: set = set()  # topics the broker has currently granted
 # M7 (v0.7): the /metrics surface Observability §3.2 promises — subscriber_up
 # drives the SubscriberTierDegraded page (monitoring/alerts.yml).
 METRICS_PORT = int(os.environ.get("METRICS_PORT", "9091"))
-# True message counter — bumped ONLY by _on_message (a /metrics scrape must
-# never move the metric it reports; rehearsal fix M7-06).
+# Prometheus metrics counters and state
 _messages_seen = 0
+_messages_acked = 0
+_ack_failures = 0
+_processing_failures = 0
+_redis_failures = 0
+_dlq_failures = 0
+_redelivered_seen = 0
+_messages_unacked = 0
+_reconnect_attempts = 0
+_redis_retry_attempts = 0
 _messages_lock = threading.Lock()
 
 
@@ -155,11 +165,13 @@ def build_client() -> mqtt.Client:
     # Owner decision 2026-10-18 (Tracker §4t): MQTT 3.1.1 (MQTTv311) is the fleet
     # protocol — pinned explicitly (paho's default is already v3.1.1) so the
     # standard is grep-able, never left to a library default.
+    # manual_ack=True: manual PUBACK sent only after durable Redis persistence.
     client = mqtt.Client(
         callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
         client_id=client_id,
         clean_session=False,
         protocol=mqtt.MQTTv311,
+        manual_ack=True,
     )
     username = os.environ.get("MQTT_USERNAME", "").strip()
     if username:
@@ -434,13 +446,76 @@ def _status_fetch(org_id: str, gateway_slot: str):
         return None
 
 
+def _maybe_ack(client, message) -> bool:
+    """Send manual PUBACK for QoS >= 1 messages after successful processing."""
+    global _messages_acked, _ack_failures
+    qos = getattr(message, "qos", 0)
+    mid = getattr(message, "mid", None)
+    if qos > 0 and client is not None:
+        if hasattr(client, "ack"):
+            try:
+                rc = client.ack(mid, qos)
+                if rc == mqtt.MQTT_ERR_SUCCESS:
+                    with _messages_lock:
+                        _messages_acked += 1
+                    return True
+                else:
+                    with _messages_lock:
+                        _ack_failures += 1
+                    logger.error("client.ack failed for mid=%s: %s", mid, rc)
+                    return False
+            except Exception as exc:
+                with _messages_lock:
+                    _ack_failures += 1
+                logger.error("Exception during client.ack for mid=%s: %s", mid, exc)
+                return False
+        else:
+            with _messages_lock:
+                _messages_acked += 1
+            return True
+    return True
+
+
+def _handle_transient_failure(client, exc: Exception) -> None:
+    """Disconnect MQTT client upon transient failure to trigger broker redelivery without crashing."""
+    logger.warning("Transient processing failure (%s); disconnecting client to trigger broker redelivery", exc)
+    if client is not None and hasattr(client, "disconnect"):
+        try:
+            client.disconnect()
+        except Exception as disc_exc:
+            logger.warning("Error while disconnecting client: %s", disc_exc)
+
+
+def _wait_for_redis_healthy(max_backoff: float = 30.0) -> None:
+    """Probe Redis health with bounded exponential backoff and jitter before connecting to broker."""
+    global _redis_retry_attempts
+    client = _redis()
+    backoff = 1.0
+    while True:
+        try:
+            with _messages_lock:
+                _redis_retry_attempts += 1
+            if client.ping():
+                logger.info("Redis connection healthy")
+                return
+        except Exception as exc:
+            jitter = random.uniform(0, 0.5)
+            sleep_time = min(max_backoff, backoff + jitter)
+            logger.warning("Redis unavailable (%s); probing again in %.1fs", exc, sleep_time)
+            time.sleep(sleep_time)
+            backoff = min(max_backoff, backoff * 2.0)
+
+
 def _on_message(client, userdata, message) -> None:
     # M3-02: every message now passes the pipeline's ordered gates; rejections
     # dead-letter with a reason. M5-04: telemetry from unapproved gateways is
     # held in the pending stream; rejected/suspended gateways are archived.
-    global _messages_seen
+    global _messages_seen, _redelivered_seen, _messages_unacked, _redis_failures, _dlq_failures, _processing_failures
     with _messages_lock:
         _messages_seen += 1  # M7: /metrics counter (best-effort — never blocks ingestion)
+        if getattr(message, "dup", False):
+            _redelivered_seen += 1
+
     # 2026-10-28: a postgres restart (WAL work on the VPS) closed the
     # subscriber's long-lived Django connection, and NOTHING reopened it — the
     # reported/config lane silently stopped processing while telemetry kept
@@ -453,7 +528,7 @@ def _on_message(client, userdata, message) -> None:
         close_old_connections()
     except Exception:  # noqa: BLE001 — DB hygiene must never block a message
         pass
-    topic = message.topic or ""
+    topic = getattr(message, "topic", "") or ""
     # Route the five non-telemetry lanes BEFORE the pipeline, which rejects
     # anything not ending in `/telemetry`. Two earlier defects came from
     # routing late: the status lane was subscribed since v0.3 and dead-lettered
@@ -461,22 +536,25 @@ def _on_message(client, userdata, message) -> None:
     # subscribed at all (finding D9). Both looked like "nothing is happening"
     # while the server was perfectly healthy.
     parts = topic.split("/")
-    if _is_command_response_topic(topic):
-        _handle_command_response(topic, message.payload, parts[4] if len(parts) > 4 else "")
-        return
-    if _is_command_response_device_topic(topic):
-        # Pre-bind command responses: the device has no org yet, so the answer
-        # can only arrive on its own lane. Without this, commands sent before
-        # binding (factory diagnostics, credential rotation) never complete.
-        _handle_command_response(topic, message.payload, parts[1] if len(parts) > 1 else "")
-        return
-    if _is_reported_device_topic(topic):
-        # THE config-apply lane (AD-3). See `_handle_reported_device`.
-        _handle_reported_device(topic, message.payload, parts[1] if len(parts) > 1 else "")
-        return
+    try:
+        if _is_command_response_topic(topic):
+            _handle_command_response(topic, message.payload, parts[4] if len(parts) > 4 else "")
+            _maybe_ack(client, message)
+            return
+        if _is_command_response_device_topic(topic):
+            # Pre-bind command responses: the device has no org yet, so the answer
+            # can only arrive on its own lane. Without this, commands sent before
+            # binding (factory diagnostics, credential rotation) never complete.
+            _handle_command_response(topic, message.payload, parts[1] if len(parts) > 1 else "")
+            _maybe_ack(client, message)
+            return
+        if _is_reported_device_topic(topic):
+            # THE config-apply lane (AD-3). See `_handle_reported_device`.
+            _handle_reported_device(topic, message.payload, parts[1] if len(parts) > 1 else "")
+            _maybe_ack(client, message)
+            return
 
-    if _is_status_topic(topic):
-        try:
+        if _is_status_topic(topic):
             # FOURTH defect, found while writing the regression test: the
             # handler's `client` argument is the REDIS client (it calls
             # client.set), but the only caller passes the paho MQTT client from
@@ -484,18 +562,36 @@ def _on_message(client, userdata, message) -> None:
             # surfaced — and had it been called, the status lane would have died
             # with AttributeError on every publish. Pass Redis explicitly.
             _handle_status(_redis(), topic, message.payload)
-        except Exception:
-            # The lane is advisory; a failure must never take ingestion down.
-            logger.exception("status lane failed for topic=%s", topic)
-        return
-    # T1 topic shape: {org}/farms/{farm}/gateways/{slot}/telemetry — Option A+1
-    # uses the topic's claimed (org, farm, gateway_slot) to perform an early,
-    # tenant-scoped metadata check via PostgreSQL RLS and Redis caching.
-    handle_message(
-        _redis(), topic, message.payload,
-        db_fetch=_slot_db_fetch,
-        meta_fetch=lambda org, farm, gw: _fetch_gateway_meta(_redis(), org, farm, gw),
-    )
+            _maybe_ack(client, message)
+            return
+        # T1 topic shape: {org}/farms/{farm}/gateways/{slot}/telemetry — Option A+1
+        # uses the topic's claimed (org, farm, gateway_slot) to perform an early,
+        # tenant-scoped metadata check via PostgreSQL RLS and Redis caching.
+        handle_message(
+            _redis(), topic, message.payload,
+            db_fetch=_slot_db_fetch,
+            meta_fetch=lambda org, farm, gw: _fetch_gateway_meta(_redis(), org, farm, gw),
+        )
+        _maybe_ack(client, message)
+    except DLQWriteError as exc:
+        with _messages_lock:
+            _redis_failures += 1
+            _dlq_failures += 1
+            _messages_unacked += 1
+        logger.error("DLQ write failure on topic %s: %s", topic, exc)
+        _handle_transient_failure(client, exc)
+    except (redis.exceptions.RedisError, OSError) as exc:
+        with _messages_lock:
+            _redis_failures += 1
+            _messages_unacked += 1
+        logger.error("Redis failure processing topic %s: %s", topic, exc)
+        _handle_transient_failure(client, exc)
+    except Exception as exc:
+        with _messages_lock:
+            _processing_failures += 1
+            _messages_unacked += 1
+        logger.exception("Unexpected processing failure on topic %s: %s", topic, exc)
+        _handle_transient_failure(client, exc)
 
 
 def _is_command_response_topic(topic: str) -> bool:
@@ -521,9 +617,7 @@ def _handle_command_response(topic: str, payload: bytes, slot_id: str) -> None:
     Runs the reconciler directly rather than through Celery: it is a short,
     bounded row update, and a lost response degrades to EXPIRED via the
     `expires_at` sweep, so the lane can afford to be synchronous without
-    blocking the network loop on anything slow. Failures are logged and
-    swallowed — a wedged subscriber would be far more expensive than a missed
-    response.
+    blocking the network loop on anything slow.
     """
     import json
 
@@ -532,20 +626,18 @@ def _handle_command_response(topic: str, payload: bytes, slot_id: str) -> None:
     except Exception:  # noqa: BLE001
         logger.warning("command response on %s was not JSON; dropped", topic)
         return
-    try:
-        # Belt and braces: `main()` initialises the ORM at startup, but this
-        # lane must never depend on another lane having done it first.
-        if not _django_ready():
-            logger.error(
-                "command response on %s dropped: the ORM is unavailable "
-                "(DATABASE_URL / DJANGO_SETTINGS_MODULE missing?)", topic
-            )
-            return
-        from apps.provisioning.tasks import reconcile_command_response
 
-        reconcile_command_response(body, topic_slot_id=slot_id or None)
-    except Exception:  # noqa: BLE001
-        logger.exception("command response handling failed for %s", topic)
+    # Belt and braces: `main()` initialises the ORM at startup, but this
+    # lane must never depend on another lane having done it first.
+    if not _django_ready():
+        logger.error(
+            "command response on %s dropped: the ORM is unavailable "
+            "(DATABASE_URL / DJANGO_SETTINGS_MODULE missing?)", topic
+        )
+        raise RuntimeError("Django ORM unavailable for command response lane")
+    from apps.provisioning.tasks import reconcile_command_response
+
+    reconcile_command_response(body, topic_slot_id=slot_id or None)
 
 
 def _handle_reported_device(topic: str, payload: bytes, slot_id: str) -> None:
@@ -567,18 +659,16 @@ def _handle_reported_device(topic: str, payload: bytes, slot_id: str) -> None:
     except Exception:  # noqa: BLE001
         logger.warning("reported on %s was not JSON; dropped", topic)
         return
-    try:
-        if not _django_ready():
-            logger.error(
-                "reported on %s dropped: the ORM is unavailable "
-                "(DATABASE_URL / DJANGO_SETTINGS_MODULE missing?)", topic
-            )
-            return
-        from apps.provisioning.tasks import reconcile_reported
 
-        reconcile_reported(body, topic_slot_id=slot_id or None)
-    except Exception:  # noqa: BLE001
-        logger.exception("reported handling failed for %s", topic)
+    if not _django_ready():
+        logger.error(
+            "reported on %s dropped: the ORM is unavailable "
+            "(DATABASE_URL / DJANGO_SETTINGS_MODULE missing?)", topic
+        )
+        raise RuntimeError("Django ORM unavailable for reported lane")
+    from apps.provisioning.tasks import reconcile_reported
+
+    reconcile_reported(body, topic_slot_id=slot_id or None)
 
 
 def _is_reported_device_topic(topic: str) -> bool:
@@ -619,17 +709,58 @@ class _MetricsHandler(http.server.BaseHTTPRequestHandler):
         if urlparse(self.path).path != "/metrics":
             self.send_error(404)
             return
+        with _messages_lock:
+            seen = _messages_seen
+            acked = _messages_acked
+            ack_fails = _ack_failures
+            proc_fails = _processing_failures
+            redis_fails = _redis_failures
+            dlq_fails = _dlq_failures
+            unacked = _messages_unacked
+            redelivered = _redelivered_seen
+            recon_attempts = _reconnect_attempts
+            redis_retries = _redis_retry_attempts
         body = (
             "# HELP subscriber_up Subscriber liveness (heartbeat per Observability §3.2)\n"
             "# TYPE subscriber_up gauge\n"
             "subscriber_up 1\n"
             "# HELP telemetry_messages_received_total MQTT messages handed to the pipeline\n"
             "# TYPE telemetry_messages_received_total counter\n"
-            f"telemetry_messages_received_total {_messages_seen}\n"
+            f"telemetry_messages_received_total {seen}\n"
+            "# HELP mqtt_messages_received_total Total MQTT messages received\n"
+            "# TYPE mqtt_messages_received_total counter\n"
+            f"mqtt_messages_received_total {seen}\n"
+            "# HELP mqtt_messages_acked_total Successfully acknowledged MQTT messages\n"
+            "# TYPE mqtt_messages_acked_total counter\n"
+            f"mqtt_messages_acked_total {acked}\n"
+            "# HELP mqtt_ack_failures_total Failures while sending MQTT ACK\n"
+            "# TYPE mqtt_ack_failures_total counter\n"
+            f"mqtt_ack_failures_total {ack_fails}\n"
+            "# HELP mqtt_processing_failures_total Messages that failed processing\n"
+            "# TYPE mqtt_processing_failures_total counter\n"
+            f"mqtt_processing_failures_total {proc_fails}\n"
+            "# HELP mqtt_redis_failures_total Redis operation failures\n"
+            "# TYPE mqtt_redis_failures_total counter\n"
+            f"mqtt_redis_failures_total {redis_fails}\n"
+            "# HELP mqtt_dlq_failures_total Failures writing to dead-letter queue\n"
+            "# TYPE mqtt_dlq_failures_total counter\n"
+            f"mqtt_dlq_failures_total {dlq_fails}\n"
+            "# HELP mqtt_redelivered_messages_total MQTT messages flagged as redelivered (DUP)\n"
+            "# TYPE mqtt_redelivered_messages_total counter\n"
+            f"mqtt_redelivered_messages_total {redelivered}\n"
+            "# HELP mqtt_messages_unacked Total messages that failed acknowledgement\n"
+            "# TYPE mqtt_messages_unacked counter\n"
+            f"mqtt_messages_unacked {unacked}\n"
+            "# HELP subscriber_reconnect_attempts_total Reconnection attempts to MQTT broker\n"
+            "# TYPE subscriber_reconnect_attempts_total counter\n"
+            f"subscriber_reconnect_attempts_total {recon_attempts}\n"
+            "# HELP subscriber_redis_retry_attempts_total Redis health check / retry attempts\n"
+            "# TYPE subscriber_redis_retry_attempts_total counter\n"
+            f"subscriber_redis_retry_attempts_total {redis_retries}\n"
             "# HELP subscriber_subscribed Both lanes granted by the broker (0 = ingestion DOWN)\n"
             "# TYPE subscriber_subscribed gauge\n"
             f"subscriber_subscribed {1 if _subscriptions_ok() else 0}\n"
-        ).encode()
+        ).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; version=0.0.4")
         self.send_header("Content-Length", str(len(body)))
@@ -758,17 +889,31 @@ def main() -> None:
     # The reported lane had the same latent bug — it was only ever safe because
     # telemetry happened to warm Django first.
     _django_ready()
-    client = build_client()
     threading.Thread(target=_serve_metrics, daemon=True, name="metrics").start()
     logger.info("booting subscriber → %s:%s", host, port)
+
     while True:
+        _wait_for_redis_healthy()
+        client = build_client()
+        broker_backoff = 2.0
+        while True:
+            try:
+                with _messages_lock:
+                    _reconnect_attempts += 1
+                client.connect(host, port, keepalive=60)
+                break
+            except OSError as exc:
+                jitter = random.uniform(0, 0.5)
+                sleep_time = broker_backoff + jitter
+                logger.warning("broker unreachable (%s); retrying in %.1fs", exc, sleep_time)
+                time.sleep(sleep_time)
+                broker_backoff = min(30.0, broker_backoff * 1.5)
         try:
-            client.connect(host, port, keepalive=60)
-            break
-        except OSError as exc:
-            logger.warning("broker unreachable (%s); retrying in 2s", exc)
-            time.sleep(2)
-    client.loop_forever()  # reconnects automatically; blocking by design
+            client.loop_forever()
+        except Exception as exc:
+            logger.exception("subscriber network loop exited: %s", exc)
+        logger.warning("subscriber network loop ended; waiting before recovery restart")
+        time.sleep(1.0)
 
 
 if __name__ == "__main__":
