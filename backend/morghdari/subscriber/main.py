@@ -106,6 +106,7 @@ _messages_acked = 0
 _ack_failures = 0
 _processing_failures = 0
 _redis_failures = 0
+_lua_failures = 0
 _dlq_failures = 0
 _redelivered_seen = 0
 _messages_unacked = 0
@@ -158,18 +159,23 @@ def _apply_tls(client) -> None:
     logger.info("TLS enabled (ca=%s)", ca or "<system trust store>")
 
 
-def build_client() -> mqtt.Client:
+def build_client(clean_session: bool | None = None) -> mqtt.Client:
     """Construct the paho client exactly as the docs prescribe (S1)."""
     client_id = _required_env("SUBSCRIBER_CLIENT_ID")
-    # clean_session=False (MQTT v3.1.1): persistent session — offline queueing.
-    # Owner decision 2026-10-18 (Tracker §4t): MQTT 3.1.1 (MQTTv311) is the fleet
-    # protocol — pinned explicitly (paho's default is already v3.1.1) so the
-    # standard is grep-able, never left to a library default.
+    if clean_session is None:
+        clean_env = os.environ.get("MQTT_CLEAN_SESSION")
+        if clean_env is not None:
+            clean_session = clean_env.strip().lower() in ("1", "true", "yes")
+        else:
+            # Default to True for shared subscription workers to guarantee immediate
+            # failover upon subscriber failure in EMQX 5.5.1 (clean_session=False pins
+            # unacknowledged messages to disconnected client sessions in EMQX 5.5.1).
+            clean_session = True
     # manual_ack=True: manual PUBACK sent only after durable Redis persistence.
     client = mqtt.Client(
         callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
         client_id=client_id,
-        clean_session=False,
+        clean_session=clean_session,
         protocol=mqtt.MQTTv311,
         manual_ack=True,
     )
@@ -447,7 +453,12 @@ def _status_fetch(org_id: str, gateway_slot: str):
 
 
 def _maybe_ack(client, message) -> bool:
-    """Send manual PUBACK for QoS >= 1 messages after successful processing."""
+    """Send manual PUBACK for QoS >= 1 messages after successful persistence.
+
+    Queues the PUBACK packet into Paho's outgoing network socket buffer.
+    In MQTT 3.1.1, the broker does not acknowledge receipt of PUBACK, so this
+    metric measures local ACK queueing upon durable completion.
+    """
     global _messages_acked, _ack_failures
     qos = getattr(message, "qos", 0)
     mid = getattr(message, "mid", None)
@@ -510,7 +521,7 @@ def _on_message(client, userdata, message) -> None:
     # M3-02: every message now passes the pipeline's ordered gates; rejections
     # dead-letter with a reason. M5-04: telemetry from unapproved gateways is
     # held in the pending stream; rejected/suspended gateways are archived.
-    global _messages_seen, _redelivered_seen, _messages_unacked, _redis_failures, _dlq_failures, _processing_failures
+    global _messages_seen, _redelivered_seen, _messages_unacked, _redis_failures, _lua_failures, _dlq_failures, _processing_failures
     with _messages_lock:
         _messages_seen += 1  # M7: /metrics counter (best-effort — never blocks ingestion)
         if getattr(message, "dup", False):
@@ -580,6 +591,13 @@ def _on_message(client, userdata, message) -> None:
             _messages_unacked += 1
         logger.error("DLQ write failure on topic %s: %s", topic, exc)
         _handle_transient_failure(client, exc)
+    except redis.exceptions.ResponseError as exc:
+        with _messages_lock:
+            _redis_failures += 1
+            _lua_failures += 1
+            _messages_unacked += 1
+        logger.error("Redis Lua/ResponseError failure processing topic %s: %s", topic, exc)
+        _handle_transient_failure(client, exc)
     except (redis.exceptions.RedisError, OSError) as exc:
         with _messages_lock:
             _redis_failures += 1
@@ -620,11 +638,17 @@ def _handle_command_response(topic: str, payload: bytes, slot_id: str) -> None:
     blocking the network loop on anything slow.
     """
     import json
+    from .dlq import send_to_dlq
 
     try:
         body = json.loads(payload or b"{}")
-    except Exception:  # noqa: BLE001
-        logger.warning("command response on %s was not JSON; dropped", topic)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("command response on %s was not JSON; DLQ: %s", topic, exc)
+        send_to_dlq(_redis(), topic, payload, f"command_response_bad_json: {exc}")
+        return
+    if not isinstance(body, dict):
+        logger.warning("command response on %s was not a JSON object; DLQ", topic)
+        send_to_dlq(_redis(), topic, payload, "command_response_non_dict")
         return
 
     # Belt and braces: `main()` initialises the ORM at startup, but this
@@ -653,11 +677,17 @@ def _handle_reported_device(topic: str, payload: bytes, slot_id: str) -> None:
     with a periodic sweep as the safety net.
     """
     import json
+    from .dlq import send_to_dlq
 
     try:
         body = json.loads(payload or b"{}")
-    except Exception:  # noqa: BLE001
-        logger.warning("reported on %s was not JSON; dropped", topic)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("reported on %s was not JSON; DLQ: %s", topic, exc)
+        send_to_dlq(_redis(), topic, payload, f"reported_bad_json: {exc}")
+        return
+    if not isinstance(body, dict):
+        logger.warning("reported on %s was not a JSON object; DLQ", topic)
+        send_to_dlq(_redis(), topic, payload, "reported_non_dict")
         return
 
     if not _django_ready():
@@ -715,6 +745,7 @@ class _MetricsHandler(http.server.BaseHTTPRequestHandler):
             ack_fails = _ack_failures
             proc_fails = _processing_failures
             redis_fails = _redis_failures
+            lua_fails = _lua_failures
             dlq_fails = _dlq_failures
             unacked = _messages_unacked
             redelivered = _redelivered_seen
@@ -730,7 +761,7 @@ class _MetricsHandler(http.server.BaseHTTPRequestHandler):
             "# HELP mqtt_messages_received_total Total MQTT messages received\n"
             "# TYPE mqtt_messages_received_total counter\n"
             f"mqtt_messages_received_total {seen}\n"
-            "# HELP mqtt_messages_acked_total Successfully acknowledged MQTT messages\n"
+            "# HELP mqtt_messages_acked_total Local PUBACK packets queued into outgoing socket buffer after persistence\n"
             "# TYPE mqtt_messages_acked_total counter\n"
             f"mqtt_messages_acked_total {acked}\n"
             "# HELP mqtt_ack_failures_total Failures while sending MQTT ACK\n"
@@ -742,6 +773,9 @@ class _MetricsHandler(http.server.BaseHTTPRequestHandler):
             "# HELP mqtt_redis_failures_total Redis operation failures\n"
             "# TYPE mqtt_redis_failures_total counter\n"
             f"mqtt_redis_failures_total {redis_fails}\n"
+            "# HELP mqtt_lua_failures_total Lua script atomicity or rollback failures\n"
+            "# TYPE mqtt_lua_failures_total counter\n"
+            f"mqtt_lua_failures_total {lua_fails}\n"
             "# HELP mqtt_dlq_failures_total Failures writing to dead-letter queue\n"
             "# TYPE mqtt_dlq_failures_total counter\n"
             f"mqtt_dlq_failures_total {dlq_fails}\n"
@@ -813,12 +847,14 @@ def _handle_status(client, topic: str, payload: bytes) -> None:
     pins, exactly as for telemetry.
     """
     import json
+    from .dlq import send_to_dlq
 
     from apps.alerts.services.redis_keys import gateway_lwt_key, pack_lwt_key
     from apps.devices.models import SaloonSensorSlot
 
     parts = topic.split("/")
     if not _is_status_topic(topic):
+        send_to_dlq(client, topic, payload, "status_invalid_topic_shape")
         return
     org_id, _farm_level, _literal, _gateway_literal, gateway_slot = (
         parts[0], parts[1], parts[2], parts[3], parts[4],
@@ -826,19 +862,23 @@ def _handle_status(client, topic: str, payload: bytes) -> None:
 
     try:
         body = json.loads(payload)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as json_exc:
+        send_to_dlq(client, topic, payload, f"status_bad_json: {json_exc}")
         return
     if not isinstance(body, dict):
+        send_to_dlq(client, topic, payload, "status_non_dict_payload")
         return
 
     # The payload mirrors one field of the topic. If it disagrees, the message
-    # is an identity fault — drop it rather than trust either side.
+    # is an identity fault — dead-letter it rather than trust either side.
     if str(body.get("gateway_slot_id") or "") != gateway_slot:
         logger.warning("status identity mismatch on %s", topic)
+        send_to_dlq(client, topic, payload, "status_identity_mismatch")
         return
 
     status = str(body.get("status") or "").upper()
     if status not in {"ONLINE", "OFFLINE"}:
+        send_to_dlq(client, topic, payload, f"status_unsupported_status_{status}")
         return
 
     client.set(gateway_lwt_key(org_id, gateway_slot), status.lower())

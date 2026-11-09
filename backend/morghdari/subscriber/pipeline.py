@@ -80,25 +80,92 @@ def dedup_key(org_id: str, sensor_slot: str, device_ts: str) -> str:
 
 
 LUA_ATOMIC_TELEMETRY = """
+local function get_key_type(k)
+    local t = redis.call('TYPE', k)
+    if type(t) == 'table' then
+        return t['ok'] or ''
+    end
+    return tostring(t)
+end
+
 local items = cjson.decode(ARGV[1])
+
+-- Preflight validation: ensure keys have compatible types before modifying state
+for i, item in ipairs(items) do
+    local lane = item['lane']
+    local ltype = get_key_type(lane)
+    if ltype ~= 'none' and ltype ~= 'stream' then
+        error('WRONGTYPE lane key ' .. tostring(lane) .. ' is ' .. ltype .. ', expected stream')
+    end
+    local rk = item['replay_key']
+    if rk and rk ~= cjson.null and rk ~= '' then
+        local rtype = get_key_type(rk)
+        if rtype ~= 'none' and rtype ~= 'string' then
+            error('WRONGTYPE replay key ' .. tostring(rk) .. ' is ' .. rtype .. ', expected string')
+        end
+    end
+end
+
+local created_dedup = {}
+local created_streams = {}
+local incremented_rk = {}
+
+local function rollback()
+    for _, dk in ipairs(created_dedup) do
+        pcall(redis.call, 'DEL', dk)
+    end
+    for _, rk in ipairs(incremented_rk) do
+        pcall(redis.call, 'DECR', rk)
+    end
+    for _, se in ipairs(created_streams) do
+        pcall(redis.call, 'XDEL', se[1], se[2])
+    end
+end
+
 local persisted_count = 0
 local duplicate_count = 0
 
 for i, item in ipairs(items) do
+    if item['simulated_fail'] then
+        rollback()
+        error('Simulated failure in Lua script')
+    end
+
     local dedup_key = item['dedup_key']
     local exists = redis.call('EXISTS', dedup_key)
     if exists == 0 then
-        redis.call('SET', dedup_key, '1', 'EX', tostring(math.floor(item['ttl'])))
-        local rk = item['replay_key']
-        if rk and rk ~= cjson.null and rk ~= '' then
-            redis.call('INCR', rk)
-        end
+        -- 1. Stream write (XADD) first
         local xadd_args = {item['lane'], '*'}
         for k, v in pairs(item['fields']) do
             table.insert(xadd_args, tostring(k))
             table.insert(xadd_args, tostring(v))
         end
-        redis.call('XADD', unpack(xadd_args))
+        local ok_xadd, stream_id_or_err = pcall(redis.call, 'XADD', unpack(xadd_args))
+        if not ok_xadd then
+            rollback()
+            error(stream_id_or_err)
+        end
+        table.insert(created_streams, {item['lane'], stream_id_or_err})
+
+        -- 2. Optional replay key increment
+        local rk = item['replay_key']
+        if rk and rk ~= cjson.null and rk ~= '' then
+            local ok_rk, rk_err = pcall(redis.call, 'INCR', rk)
+            if not ok_rk then
+                rollback()
+                error(rk_err)
+            end
+            table.insert(incremented_rk, rk)
+        end
+
+        -- 3. Commit deduplication key
+        local ok_dedup, dedup_err = pcall(redis.call, 'SET', dedup_key, '1', 'EX', tostring(math.floor(item['ttl'])))
+        if not ok_dedup then
+            rollback()
+            error(dedup_err)
+        end
+        table.insert(created_dedup, dedup_key)
+
         persisted_count = persisted_count + 1
     else
         duplicate_count = duplicate_count + 1
@@ -125,35 +192,64 @@ def persist_telemetry_atomic(
 
     Ensures that dedup keys are NEVER set in Redis without the corresponding
     stream entries being written, preventing silent telemetry loss upon broker
-    redelivery.
+    redelivery. Uses pre-flight type checks, XADD-first execution, and pcall
+    rollback compensation in Lua (mirrored in Python fallback).
     """
     if not items:
         return 0, 0
 
     if hasattr(redis_client, "register_script"):
+        cmd = _get_atomic_telemetry_script(redis_client)
         try:
-            cmd = _get_atomic_telemetry_script(redis_client)
             res = cmd(args=[json.dumps(items)])
             return int(res[0]), int(res[1])
-        except (redis.exceptions.ResponseError, AttributeError, NotImplementedError):
+        except (redis.exceptions.ResponseError, AttributeError, NotImplementedError) as exc:
+            if isinstance(exc, redis.exceptions.ResponseError):
+                raise
             # Fallback for environments or mocks without Lua support
-            pass
 
     # Fallback for basic in-memory test mocks without Lua
     persisted_count = 0
     duplicate_count = 0
-    for item in items:
-        dedup_key = item["dedup_key"]
-        ttl = int(item["ttl"])
-        if redis_client.set(dedup_key, 1, nx=True, ex=ttl):
-            rk = item.get("replay_key")
-            if rk:
-                redis_client.incr(rk)
-            redis_client.xadd(item["lane"], item["fields"])
-            persisted_count += 1
-        else:
-            duplicate_count += 1
-    return persisted_count, duplicate_count
+    created_dedup = []
+    created_streams = []
+    incremented_rk = []
+
+    try:
+        for item in items:
+            if item.get("simulated_fail"):
+                raise RuntimeError("Simulated failure in Python fallback")
+            dedup_key = item["dedup_key"]
+            ttl = int(item["ttl"])
+            if redis_client.set(dedup_key, 1, nx=True, ex=ttl):
+                created_dedup.append(dedup_key)
+                rk = item.get("replay_key")
+                if rk and hasattr(redis_client, "incr"):
+                    redis_client.incr(rk)
+                    incremented_rk.append(rk)
+                entry_id = redis_client.xadd(item["lane"], item["fields"])
+                created_streams.append((item["lane"], entry_id))
+                persisted_count += 1
+            else:
+                duplicate_count += 1
+        return persisted_count, duplicate_count
+    except Exception:
+        for dk in created_dedup:
+            try:
+                redis_client.delete(dk)
+            except Exception:
+                pass
+        for rk in incremented_rk:
+            try:
+                redis_client.decr(rk)
+            except Exception:
+                pass
+        for lane, entry_id in created_streams:
+            try:
+                redis_client.xdel(lane, entry_id)
+            except Exception:
+                pass
+        raise
 
 
 

@@ -75,7 +75,13 @@ def ensure_redis_server():
         srv.fake_server.config[b"requirepass"] = b"dev_redis_password"
         t = threading.Thread(target=srv.serve_forever, daemon=True)
         t.start()
-        time.sleep(0.1)
+        for _ in range(20):
+            try:
+                probe = r_lib.Redis.from_url(url, socket_timeout=0.2)
+                if probe.ping():
+                    break
+            except Exception:
+                time.sleep(0.05)
         try:
             yield
         finally:

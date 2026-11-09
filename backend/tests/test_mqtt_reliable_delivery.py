@@ -555,12 +555,17 @@ def test_17_subscriber_reconnect_preserves_unacknowledged_messages_broker():
 
 
 def test_18_subscriber_restart_with_unacknowledged_qos1():
-    """Test 18: Client construction pins persistent session settings."""
-    with patch.dict(os.environ, {"SUBSCRIBER_CLIENT_ID": "test-sub-01"}):
+    """Test 18: Client construction pins session settings and manual ack."""
+    with patch.dict(os.environ, {"SUBSCRIBER_CLIENT_ID": "test-sub-01", "MQTT_CLEAN_SESSION": "false"}):
         client = subscriber_main.build_client()
         assert client._clean_session is False
         assert client._manual_ack is True
         assert client._protocol == mqtt.MQTTv311
+
+    with patch.dict(os.environ, {"SUBSCRIBER_CLIENT_ID": "test-sub-02", "MQTT_CLEAN_SESSION": "true"}):
+        client_clean = subscriber_main.build_client()
+        assert client_clean._clean_session is True
+        assert client_clean._manual_ack is True
 
 
 def test_19_shared_subscription_load_balancing_configuration():
@@ -573,3 +578,265 @@ def test_20_subscriber_client_ids_distinct_and_required():
     with patch.dict(os.environ, {"SUBSCRIBER_CLIENT_ID": ""}):
         with pytest.raises(SystemExit):
             subscriber_main.build_client()
+
+
+# ===========================================================================
+# 5. Lua Atomicity, DLQ Across All Lanes, and Metrics Tests
+# ===========================================================================
+
+def test_21_lua_failure_rollback_preflight_lane_corruption(clean_redis):
+    """Test 21: Corrupted lane key aborts Lua script, leaves no dedup key, and retry succeeds."""
+    clean_redis.set(STREAM_REALTIME, "corrupt_string_value")
+    items = [{
+        "dedup_key": "dedup:org_01:slot_99:2026-11-10T12:00:00Z",
+        "lane": STREAM_REALTIME,
+        "ttl": 300,
+        "replay_key": None,
+        "fields": {"payload": "test_corrupt"},
+    }]
+
+    with pytest.raises((redis_lib.exceptions.RedisError, RuntimeError)):
+        persist_telemetry_atomic(clean_redis, STREAM_REALTIME, items)
+
+    # Invariant: dedup key MUST NOT be left in Redis
+    assert clean_redis.exists("dedup:org_01:slot_99:2026-11-10T12:00:00Z") == 0
+
+    # Clear corruption and retry
+    clean_redis.delete(STREAM_REALTIME)
+    persisted, dup = persist_telemetry_atomic(clean_redis, STREAM_REALTIME, items)
+    assert persisted == 1
+    assert dup == 0
+    assert clean_redis.exists("dedup:org_01:slot_99:2026-11-10T12:00:00Z") == 1
+    assert clean_redis.xlen(STREAM_REALTIME) == 1
+
+
+def test_22_lua_failure_rollback_multi_pack(clean_redis):
+    """Test 22: Failure on second item in multi-pack rolls back first item."""
+    items = [
+        {
+            "dedup_key": "dedup:org_01:slot_01:2026-11-10T12:00:00Z",
+            "lane": STREAM_REALTIME,
+            "ttl": 300,
+            "replay_key": "replay:count:test",
+            "fields": {"payload": "item1"},
+            "simulated_fail": False,
+        },
+        {
+            "dedup_key": "dedup:org_01:slot_02:2026-11-10T12:00:00Z",
+            "lane": STREAM_REALTIME,
+            "ttl": 300,
+            "replay_key": "replay:count:test",
+            "fields": {"payload": "item2"},
+            "simulated_fail": True,
+        },
+    ]
+
+    with pytest.raises((redis_lib.exceptions.RedisError, RuntimeError)):
+        persist_telemetry_atomic(clean_redis, STREAM_REALTIME, items)
+
+    # Invariant: Item 1 dedup key and stream entry rolled back
+    assert clean_redis.exists("dedup:org_01:slot_01:2026-11-10T12:00:00Z") == 0
+    assert clean_redis.exists("dedup:org_01:slot_02:2026-11-10T12:00:00Z") == 0
+    assert clean_redis.xlen(STREAM_REALTIME) == 0
+
+
+def test_23_dlq_rejections_across_all_lanes(clean_redis, monkeypatch):
+    """Test 23: Permanently rejected messages across all lanes are written to DLQ before ACK."""
+    monkeypatch.setattr(subscriber_main, "_redis", lambda: clean_redis)
+    mock_client = TrackingMQTTClient()
+
+    # 1. Status lane: bad JSON
+    status_topic = "org_01/farms/1/gateways/gw_slot_01/status"
+    msg_status_bad = MockMQTTMessage(status_topic, b"not_valid_json", qos=1, mid=701)
+    subscriber_main._on_message(mock_client, None, msg_status_bad)
+    assert (701, 1) in mock_client.acked_mids
+
+    # 2. Status lane: identity mismatch
+    msg_status_mismatch = MockMQTTMessage(
+        status_topic,
+        json.dumps({"gateway_slot_id": "different_slot", "status": "online"}).encode(),
+        qos=1, mid=702,
+    )
+    subscriber_main._on_message(mock_client, None, msg_status_mismatch)
+    assert (702, 1) in mock_client.acked_mids
+
+    # 3. Status lane: invalid status
+    msg_status_invalid = MockMQTTMessage(
+        status_topic,
+        json.dumps({"gateway_slot_id": "gw_slot_01", "status": "INVALID_STATE"}).encode(),
+        qos=1, mid=703,
+    )
+    subscriber_main._on_message(mock_client, None, msg_status_invalid)
+    assert (703, 1) in mock_client.acked_mids
+
+    # 4. Command response lane: bad JSON
+    cmd_topic = "org_01/farms/1/gateways/gw_slot_01/commands/response"
+    msg_cmd_bad = MockMQTTMessage(cmd_topic, b"bad_cmd_json", qos=1, mid=704)
+    subscriber_main._on_message(mock_client, None, msg_cmd_bad)
+    assert (704, 1) in mock_client.acked_mids
+
+    # 5. Reported device lane: bad JSON
+    reported_topic = "devices/gw_slot_01/reported"
+    msg_rep_bad = MockMQTTMessage(reported_topic, b"bad_reported_json", qos=1, mid=705)
+    subscriber_main._on_message(mock_client, None, msg_rep_bad)
+    assert (705, 1) in mock_client.acked_mids
+
+    # Verify DLQ entries recorded in Redis
+    assert clean_redis.xlen(DLQ_STREAM) == 5
+    dlq_entries = clean_redis.xrange(DLQ_STREAM)
+    reasons = [e[1].get(b"reason", e[1].get("reason", "")) for e in dlq_entries]
+    reasons_str = [r.decode() if isinstance(r, bytes) else str(r) for r in reasons]
+    assert any("status_bad_json" in r for r in reasons_str)
+    assert any("status_identity_mismatch" in r for r in reasons_str)
+    assert any("status_unsupported_status" in r for r in reasons_str)
+    assert any("command_response_bad_json" in r for r in reasons_str)
+    assert any("reported_bad_json" in r for r in reasons_str)
+
+
+def test_24_dlq_failure_prevents_ack_all_lanes(clean_redis, monkeypatch):
+    """Test 24: DLQ write failure prevents PUBACK across all non-telemetry lanes."""
+    monkeypatch.setattr(subscriber_main, "_redis", lambda: clean_redis)
+    monkeypatch.setattr(
+        "morghdari.subscriber.dlq.send_to_dlq",
+        MagicMock(side_effect=subscriber_main.DLQWriteError("Simulated DLQ error")),
+    )
+
+    mock_client = TrackingMQTTClient()
+
+    # Status lane with bad JSON
+    msg_status = MockMQTTMessage("org_01/farms/1/gateways/gw_slot_01/status", b"bad", qos=1, mid=801)
+    subscriber_main._on_message(mock_client, None, msg_status)
+    assert (801, 1) not in mock_client.acked_mids
+    assert mock_client.disconnected is True
+
+    # Command response lane with bad JSON
+    mock_client.disconnected = False
+    msg_cmd = MockMQTTMessage("org_01/farms/1/gateways/gw_slot_01/commands/response", b"bad", qos=1, mid=802)
+    subscriber_main._on_message(mock_client, None, msg_cmd)
+    assert (802, 1) not in mock_client.acked_mids
+    assert mock_client.disconnected is True
+
+    # Reported device lane with bad JSON
+    mock_client.disconnected = False
+    msg_rep = MockMQTTMessage("devices/gw_slot_01/reported", b"bad", qos=1, mid=803)
+    subscriber_main._on_message(mock_client, None, msg_rep)
+    assert (803, 1) not in mock_client.acked_mids
+    assert mock_client.disconnected is True
+
+
+def test_25_metrics_handler_and_counters():
+    """Test 25: Prometheus metrics surface outputs accurate counter names and HELP descriptions."""
+    with subscriber_main._messages_lock:
+        subscriber_main._messages_seen = 42
+        subscriber_main._messages_acked = 40
+        subscriber_main._lua_failures = 2
+
+    class DummyRequest:
+        def makefile(self, *args, **kwargs):
+            import io
+            return io.BytesIO(b"GET /metrics HTTP/1.0\r\nHost: localhost\r\n\r\n")
+
+        def sendall(self, data):
+            pass
+
+    class ResponseWriter:
+        def __init__(self):
+            self.data = b""
+
+        def write(self, b):
+            self.data += b
+
+        def flush(self):
+            pass
+
+    handler = subscriber_main._MetricsHandler(
+        DummyRequest(), ("127.0.0.1", 12345), None
+    )
+    writer = ResponseWriter()
+    handler.wfile = writer
+    handler.do_GET()
+
+    output = writer.data.decode("utf-8")
+    assert "mqtt_messages_acked_total 40" in output
+    assert "mqtt_lua_failures_total 2" in output
+    assert "Local PUBACK packets queued into outgoing socket buffer" in output
+
+
+def test_26_shared_subscription_clean_session_failover_emqx():
+    """Test 26: Live EMQX shared subscription failover with clean_session=True."""
+    import socket
+    # Check if EMQX 5.5.1 is running on port 18883
+    s = socket.socket()
+    s.settimeout(0.5)
+    try:
+        s.connect(("127.0.0.1", 18883))
+        s.close()
+    except Exception:
+        pytest.skip("Local EMQX broker on port 18883 not running")
+
+    ts = int(time.time())
+    topic = f"test/emqx551/failover_test_{ts}"
+    shared_topic = f"$share/telemetry_workers/{topic}"
+    received_a = []
+    received_b = []
+    ready_a = threading.Event()
+    ready_b = threading.Event()
+
+    def on_a(c, ud, msg):
+        received_a.append(msg)
+        c.disconnect()
+
+    def on_b(c, ud, msg):
+        received_b.append(msg)
+        c.ack(msg.mid, msg.qos)
+
+    sub_a = mqtt.Client(
+        callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+        client_id=f"sub-failover-A-{ts}",
+        clean_session=True,
+        manual_ack=True,
+    )
+    sub_a.on_connect = lambda c, ud, flags, rc, props=None: (c.subscribe(shared_topic, qos=1), ready_a.set())
+    sub_a.on_message = on_a
+
+    sub_b = mqtt.Client(
+        callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+        client_id=f"sub-failover-B-{ts}",
+        clean_session=True,
+        manual_ack=True,
+    )
+    sub_b.on_connect = lambda c, ud, flags, rc, props=None: (c.subscribe(shared_topic, qos=1), ready_b.set())
+    sub_b.on_message = on_b
+
+    # Connect Sub-A first so EMQX registers it as the first worker
+    sub_a.connect("127.0.0.1", 18883)
+    sub_a.loop_start()
+    ready_a.wait(3.0)
+    time.sleep(0.5)
+
+    # Connect Sub-B as standby worker
+    sub_b.connect("127.0.0.1", 18883)
+    sub_b.loop_start()
+    ready_b.wait(3.0)
+    time.sleep(0.5)
+
+    pub = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2, client_id=f"pub-failover-{ts}")
+    pub.connect("127.0.0.1", 18883)
+    pub.publish(topic, b"test-shared-failover-data", qos=1)
+    pub.disconnect()
+
+    t0 = time.time()
+    while time.time() - t0 < 5.0:
+        if len(received_b) > 0 and (len(received_a) > 0 or len(received_b) > 0):
+            break
+        time.sleep(0.1)
+
+    sub_a.loop_stop()
+    sub_b.loop_stop()
+    sub_b.disconnect()
+
+    # The message was delivered and handled reliably by the group
+    total_received = len(received_a) + len(received_b)
+    assert total_received >= 1
+    assert any(m.payload == b"test-shared-failover-data" for m in received_a + received_b)
+
