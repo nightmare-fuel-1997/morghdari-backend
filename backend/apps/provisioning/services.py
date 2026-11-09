@@ -14,6 +14,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.devices.models import GatewaySlot
+from apps.devices.cache import invalidate_gateway_slot_caches
 from apps.provisioning.models import ProvisioningAuditLog
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,15 @@ def _redis():
             decode_responses=True,
         )
     return _redis_client
+
+
+def _invalidate_gateway_caches(slot_id: str, org_id: str | None = None, *, client=None) -> None:
+    """Invalidate gateway caches, honoring any configured or monkeypatched service Redis."""
+    try:
+        r = client or _redis()
+    except Exception:
+        r = None
+    invalidate_gateway_slot_caches(slot_id, org_id, client=r)
 
 
 class SyncConflict(Exception):
@@ -89,17 +99,7 @@ def transition(
         slot.provisioning_status = new_status
         slot.save(update_fields=["provisioning_status"])
 
-        cache_key = STATUS_CACHE_KEY.format(slot_id=slot.slot_id)
-        cache.delete(cache_key)
-
-        try:
-            r = _redis()
-            r.delete(f"gw:status:{slot.slot_id}")
-            if slot.org_id:
-                r.delete(f"gw:ident:{slot.org_id}:{slot.slot_id}")
-                r.delete(f"gw:neg:{slot.org_id}:{slot.slot_id}")
-        except Exception:
-            logger.exception("failed to invalidate redis gateway cache for %s", slot.slot_id)
+        _invalidate_gateway_caches(slot.slot_id, slot.org_id)
     return slot
 
 

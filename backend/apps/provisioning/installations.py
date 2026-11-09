@@ -564,14 +564,8 @@ def _bind_job_to_unit(job, unit, *, actor, via_override: bool, reason: str, ip=N
         )
 
     # Invalidate subscriber Redis cache so new identity and status are immediate
-    try:
-        from apps.provisioning.services import _redis
-        r = _redis()
-        r.delete(f"gw:status:{slot_id}")
-        r.delete(f"gw:ident:{job.org_id}:{slot_id}")
-        r.delete(f"gw:neg:{job.org_id}:{slot_id}")
-    except Exception:
-        pass
+    from apps.devices.cache import invalidate_gateway_slot_caches
+    invalidate_gateway_slot_caches(slot_id, str(job.org_id))
 
     # AD-4: bump the desired version so the device treats the next document as
     # NEW. Without the bump, a unit that already applied config_version 1 would

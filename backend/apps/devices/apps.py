@@ -8,3 +8,6 @@ class DevicesConfig(AppConfig):
     # MUST equal the dotted path or Django raises duplicate-app errors and
     # migrations split-brain (v0.1 TUTORIAL §3.5 pitfall table).
     name = "apps.devices"
+
+    def ready(self):
+        import apps.devices.signals  # noqa: F401

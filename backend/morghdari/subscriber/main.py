@@ -314,13 +314,23 @@ def _slot_db_fetch(org_id: str, hardware_id: str, pack_id: str):
         return None
 
 
+IDENT_CACHE_TTL_BASE_SECONDS = 300  # 5 minutes
+IDENT_CACHE_TTL_JITTER_SECONDS = 60  # +0..60s jitter to prevent synchronized cache thundering herd
+
+
+def _calculate_ident_cache_ttl() -> int:
+    """Return identity cache TTL with jitter (300 to 360 seconds)."""
+    import random
+    return IDENT_CACHE_TTL_BASE_SECONDS + random.randint(0, IDENT_CACHE_TTL_JITTER_SECONDS)
+
+
 def _fetch_gateway_meta(redis_client, org_id: str, farm_id: str, gateway_slot: str) -> dict | None:
     """Option A+1: Tenant-scoped gateway metadata lookup with Redis caching.
 
     Uses tenant_context(org_id) so PostgreSQL RLS prevents cross-tenant access.
     Cache architecture:
       - Negative cache: gw:neg:{org_id}:{slot_id} (TTL 30s)
-      - Identity cache: gw:ident:{org_id}:{slot_id} (TTL 24h)
+      - Identity cache: gw:ident:{org_id}:{slot_id} (TTL 300s + 0..60s jitter)
       - Status cache: gw:status:{slot_id} (TTL 60s)
     """
     import json
@@ -377,7 +387,8 @@ def _fetch_gateway_meta(redis_client, org_id: str, farm_id: str, gateway_slot: s
 
         if redis_client is not None:
             try:
-                redis_client.set(ident_key, json.dumps({"farm_id": canonical_farm}), ex=86400)
+                ident_ttl = _calculate_ident_cache_ttl()
+                redis_client.set(ident_key, json.dumps({"farm_id": canonical_farm}), ex=ident_ttl)
                 redis_client.set(status_key, canonical_status, ex=60)
             except Exception:
                 pass

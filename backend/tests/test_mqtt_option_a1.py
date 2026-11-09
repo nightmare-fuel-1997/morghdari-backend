@@ -404,7 +404,7 @@ def test_case_13_cache_keys_are_strictly_tenant_scoped(fake_redis, org_and_farm)
     status_key = f"gw:status:{slot.slot_id}"
     assert fake_redis.get(ident_key) is not None
     assert fake_redis.get(status_key) == "PROVISIONED"
-    assert fake_redis.ttls.get(ident_key) == 86400
+    assert 300 <= fake_redis.ttls.get(ident_key) <= 360
     assert fake_redis.ttls.get(status_key) == 60
 
 

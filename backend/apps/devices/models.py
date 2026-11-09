@@ -56,6 +56,49 @@ class GatewayRequest(models.Model):
         ]
 
 
+class GatewaySlotQuerySet(models.QuerySet):
+    """Custom QuerySet ensuring org_id immutability and cache invalidation."""
+
+    def update(self, **kwargs):
+        if "org" in kwargs or "org_id" in kwargs:
+            raise ValueError("org_id is immutable on GatewaySlot")
+        affected = list(self.values_list("slot_id", "org_id"))
+        result = super().update(**kwargs)
+        from apps.devices.signals import schedule_gateway_slot_invalidation
+        for slot_id, org_id in affected:
+            schedule_gateway_slot_invalidation(slot_id, org_id)
+        return result
+
+    def delete(self):
+        # In Django, QuerySet.delete() triggers Collector.delete(), which emits
+        # post_delete signals for every deleted model instance (fast_delete is
+        # disabled by the active post_delete signal receiver on GatewaySlot).
+        # The post_delete receiver automatically schedules post-commit cache invalidation
+        # via transaction.on_commit(). Therefore, super().delete() handles invalidation
+        # cleanly without duplicate manual scheduling.
+        return super().delete()
+
+    def bulk_create(self, objs, *args, **kwargs):
+        created_objs = super().bulk_create(objs, *args, **kwargs)
+        from apps.devices.signals import schedule_gateway_slot_invalidation
+        for obj in created_objs:
+            s_id = getattr(obj, "slot_id", None)
+            o_id = getattr(obj, "org_id", None) or (getattr(obj.org, "pk", None) if getattr(obj, "org", None) else None)
+            schedule_gateway_slot_invalidation(s_id, o_id)
+        return created_objs
+
+    def bulk_update(self, objs, fields, *args, **kwargs):
+        if "org" in fields or "org_id" in fields:
+            raise ValueError("org_id is immutable on GatewaySlot")
+        result = super().bulk_update(objs, fields, *args, **kwargs)
+        from apps.devices.signals import schedule_gateway_slot_invalidation
+        for obj in objs:
+            s_id = getattr(obj, "slot_id", None)
+            o_id = getattr(obj, "org_id", None) or (getattr(obj.org, "pk", None) if getattr(obj, "org", None) else None)
+            schedule_gateway_slot_invalidation(s_id, o_id)
+        return result
+
+
 class GatewaySlot(models.Model):
     slot_id = models.CharField(max_length=50, primary_key=True)
     org = models.ForeignKey("tenants.Organization", on_delete=models.RESTRICT, related_name="+")
@@ -76,6 +119,19 @@ class GatewaySlot(models.Model):
     applied_at = models.DateTimeField(null=True, blank=True)
     last_reported_at = models.DateTimeField(null=True, blank=True)
     last_publish_error = models.TextField(null=True, blank=True)
+
+    objects = GatewaySlotQuerySet.as_manager()
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            orig_org_id = (
+                GatewaySlot.objects.filter(pk=self.pk)
+                .values_list("org_id", flat=True)
+                .first()
+            )
+            if orig_org_id is not None and str(orig_org_id) != str(self.org_id):
+                raise ValueError("org_id is immutable on GatewaySlot")
+        super().save(*args, **kwargs)
 
     class Meta:
         db_table = "gateway_slots"
