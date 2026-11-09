@@ -19,6 +19,8 @@ def schedule_gateway_slot_invalidation(slot_id: str, org_id: str | None) -> None
 
     If not in an active transaction, transaction.on_commit executes immediately.
     If the surrounding transaction rolls back, the callback is safely discarded.
+    Deduplicates invalidation callbacks within the same transaction to prevent
+    redundant post-commit operations.
     """
     if not slot_id:
         return
@@ -26,9 +28,17 @@ def schedule_gateway_slot_invalidation(slot_id: str, org_id: str | None) -> None
     s_id = str(slot_id)
     o_id = str(org_id) if org_id is not None else None
 
+    conn = transaction.get_connection()
+    if conn.in_atomic_block:
+        for item in conn.run_on_commit:
+            cb = item[1]
+            if getattr(cb, "_gateway_invalidation", None) == (s_id, o_id):
+                return
+
     def _do_invalidate():
         invalidate_gateway_slot_caches(s_id, o_id)
 
+    _do_invalidate._gateway_invalidation = (s_id, o_id)
     transaction.on_commit(_do_invalidate)
 
 
@@ -37,6 +47,8 @@ def on_gateway_slot_post_save(sender, instance, **kwargs):
     """Automatic invalidation when a GatewaySlot is created or modified."""
     slot_id = getattr(instance, "slot_id", None)
     org_id = getattr(instance, "org_id", None)
+    if org_id is None and getattr(instance, "org", None) is not None:
+        org_id = getattr(instance.org, "pk", None)
     schedule_gateway_slot_invalidation(slot_id, org_id)
 
 
@@ -45,4 +57,6 @@ def on_gateway_slot_post_delete(sender, instance, **kwargs):
     """Automatic invalidation when a GatewaySlot is deleted."""
     slot_id = getattr(instance, "slot_id", None)
     org_id = getattr(instance, "org_id", None)
+    if org_id is None and getattr(instance, "org", None) is not None:
+        org_id = getattr(instance.org, "pk", None)
     schedule_gateway_slot_invalidation(slot_id, org_id)

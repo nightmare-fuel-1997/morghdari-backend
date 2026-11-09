@@ -347,3 +347,170 @@ def test_09_org_id_immutability_enforced(test_setup):
     slot.org = org_b
     with pytest.raises(ValueError, match="org_id is immutable"):
         GatewaySlot.objects.bulk_update([slot], fields=["org"])
+
+
+# ===========================================================================
+# 10. GatewaySlot.objects.bulk_create() invalidates negative cache after commit
+# ===========================================================================
+@pytest.mark.django_db(transaction=True)
+def test_10_bulk_create_invalidates_negative_cache_after_commit(fake_redis, test_setup):
+    org = test_setup["org_a"]
+    farm = test_setup["farm_1"]
+    slot_id1 = f"GW-{uuid.uuid4().hex[:8]}"
+    slot_id2 = f"GW-{uuid.uuid4().hex[:8]}"
+
+    # Prior probing created negative cache entries for both slots
+    fake_redis.set(f"gw:neg:{org.org_id}:{slot_id1}", "1")
+    fake_redis.set(f"gw:neg:{org.org_id}:{slot_id2}", "1")
+
+    with transaction.atomic():
+        GatewaySlot.objects.bulk_create([
+            GatewaySlot(slot_id=slot_id1, org=org, farm=farm, provisioning_status="PENDING_INSTALLATION"),
+            GatewaySlot(slot_id=slot_id2, org=org, farm=farm, provisioning_status="PENDING_INSTALLATION"),
+        ])
+        # Before commit: negative cache still exists
+        assert fake_redis.get(f"gw:neg:{org.org_id}:{slot_id1}") == "1"
+        assert fake_redis.get(f"gw:neg:{org.org_id}:{slot_id2}") == "1"
+
+    # After commit: both negative cache entries must be purged
+    assert fake_redis.get(f"gw:neg:{org.org_id}:{slot_id1}") is None
+    assert fake_redis.get(f"gw:neg:{org.org_id}:{slot_id2}") is None
+
+
+# ===========================================================================
+# 11. bulk_create() rollback does not invalidate prematurely
+# ===========================================================================
+@pytest.mark.django_db(transaction=True)
+def test_11_bulk_create_rollback_does_not_invalidate_prematurely(fake_redis, test_setup):
+    org = test_setup["org_a"]
+    farm = test_setup["farm_1"]
+    slot_id = f"GW-{uuid.uuid4().hex[:8]}"
+
+    fake_redis.set(f"gw:neg:{org.org_id}:{slot_id}", "1")
+
+    with pytest.raises(RuntimeError):
+        with transaction.atomic():
+            GatewaySlot.objects.bulk_create([
+                GatewaySlot(slot_id=slot_id, org=org, farm=farm, provisioning_status="PENDING_INSTALLATION"),
+            ])
+            raise RuntimeError("Database error during bulk_create")
+
+    # Transaction rolled back: negative cache must remain intact
+    assert fake_redis.get(f"gw:neg:{org.org_id}:{slot_id}") == "1"
+    assert not GatewaySlot.objects.filter(pk=slot_id).exists()
+
+
+# ===========================================================================
+# 12. GatewaySlot.objects.filter(...).delete() invalidates relevant cache keys
+# ===========================================================================
+@pytest.mark.django_db(transaction=True)
+def test_12_queryset_filter_delete_invalidates_caches_after_commit(fake_redis, test_setup):
+    org = test_setup["org_a"]
+    farm = test_setup["farm_1"]
+    slot_id1 = f"GW-{uuid.uuid4().hex[:8]}"
+    slot_id2 = f"GW-{uuid.uuid4().hex[:8]}"
+
+    GatewaySlot.objects.create(slot_id=slot_id1, org=org, farm=farm, provisioning_status="PROVISIONED")
+    GatewaySlot.objects.create(slot_id=slot_id2, org=org, farm=farm, provisioning_status="PROVISIONED")
+
+    fake_redis.set(f"gw:status:{slot_id1}", "PROVISIONED")
+    fake_redis.set(f"gw:ident:{org.org_id}:{slot_id1}", "data1")
+    fake_redis.set(f"gw:status:{slot_id2}", "PROVISIONED")
+    fake_redis.set(f"gw:ident:{org.org_id}:{slot_id2}", "data2")
+
+    with transaction.atomic():
+        deleted_count, _ = GatewaySlot.objects.filter(pk__in=[slot_id1, slot_id2]).delete()
+        assert deleted_count == 2
+        # Inside transaction before commit: keys remain
+        assert fake_redis.get(f"gw:status:{slot_id1}") is not None
+        assert fake_redis.get(f"gw:status:{slot_id2}") is not None
+
+    # After commit: all keys purged
+    assert fake_redis.get(f"gw:status:{slot_id1}") is None
+    assert fake_redis.get(f"gw:ident:{org.org_id}:{slot_id1}") is None
+    assert fake_redis.get(f"gw:status:{slot_id2}") is None
+    assert fake_redis.get(f"gw:ident:{org.org_id}:{slot_id2}") is None
+
+
+# ===========================================================================
+# 13. QuerySet.delete() rollback does not invalidate prematurely
+# ===========================================================================
+@pytest.mark.django_db(transaction=True)
+def test_13_queryset_delete_rollback_does_not_invalidate_prematurely(fake_redis, test_setup):
+    org = test_setup["org_a"]
+    farm = test_setup["farm_1"]
+    slot_id = f"GW-{uuid.uuid4().hex[:8]}"
+
+    GatewaySlot.objects.create(slot_id=slot_id, org=org, farm=farm, provisioning_status="PROVISIONED")
+
+    fake_redis.set(f"gw:status:{slot_id}", "PROVISIONED")
+    fake_redis.set(f"gw:ident:{org.org_id}:{slot_id}", "active_ident")
+
+    with pytest.raises(RuntimeError):
+        with transaction.atomic():
+            GatewaySlot.objects.filter(pk=slot_id).delete()
+            raise RuntimeError("Transaction abort")
+
+    # Transaction was rolled back: caches must NOT be deleted
+    assert fake_redis.get(f"gw:status:{slot_id}") == "PROVISIONED"
+    assert fake_redis.get(f"gw:ident:{org.org_id}:{slot_id}") == "active_ident"
+    assert GatewaySlot.objects.filter(pk=slot_id).exists()
+
+
+# ===========================================================================
+# 14. No duplicate or harmful callbacks when QuerySet.delete() triggers signals
+# ===========================================================================
+@pytest.mark.django_db(transaction=True)
+def test_14_queryset_delete_no_duplicate_or_harmful_callbacks(fake_redis, test_setup):
+    org = test_setup["org_a"]
+    farm = test_setup["farm_1"]
+    slot_id = f"GW-{uuid.uuid4().hex[:8]}"
+
+    GatewaySlot.objects.create(slot_id=slot_id, org=org, farm=farm, provisioning_status="PROVISIONED")
+    fake_redis.set(f"gw:status:{slot_id}", "PROVISIONED")
+
+    from django.db import connection
+
+    with transaction.atomic():
+        GatewaySlot.objects.filter(pk=slot_id).delete()
+        # Check on_commit callbacks for this transaction: exactly 1 invalidation callback registered
+        gw_callbacks = [
+            item[1] for item in connection.run_on_commit
+            if getattr(item[1], "_gateway_invalidation", None) is not None
+        ]
+        assert len(gw_callbacks) == 1
+        assert gw_callbacks[0]._gateway_invalidation == (slot_id, str(org.org_id))
+
+    # After commit: key is successfully deleted
+    assert fake_redis.get(f"gw:status:{slot_id}") is None
+
+
+# ===========================================================================
+# 15. QuerySet.update() and bulk_update() strictly enforce org_id immutability
+# ===========================================================================
+@pytest.mark.django_db(transaction=True)
+def test_15_queryset_update_and_bulk_update_immutability_strictness(test_setup):
+    org_a = test_setup["org_a"]
+    org_b = test_setup["org_b"]
+    farm = test_setup["farm_1"]
+    slot_id = f"GW-{uuid.uuid4().hex[:8]}"
+
+    slot = GatewaySlot.objects.create(slot_id=slot_id, org=org_a, farm=farm, provisioning_status="PROVISIONED")
+
+    # QuerySet.update(org=...)
+    with pytest.raises(ValueError, match="org_id is immutable"):
+        GatewaySlot.objects.filter(pk=slot_id).update(org=org_b)
+
+    # QuerySet.update(org_id=...)
+    with pytest.raises(ValueError, match="org_id is immutable"):
+        GatewaySlot.objects.filter(pk=slot_id).update(org_id=org_b.pk)
+
+    # QuerySet.bulk_update with org in fields
+    slot.org = org_b
+    with pytest.raises(ValueError, match="org_id is immutable"):
+        GatewaySlot.objects.bulk_update([slot], fields=["org"])
+
+    # QuerySet.bulk_update with org_id in fields
+    with pytest.raises(ValueError, match="org_id is immutable"):
+        GatewaySlot.objects.bulk_update([slot], fields=["org_id", "provisioning_status"])
+

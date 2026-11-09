@@ -70,18 +70,21 @@ class GatewaySlotQuerySet(models.QuerySet):
         return result
 
     def delete(self):
-        affected = list(self.values_list("slot_id", "org_id"))
-        result = super().delete()
-        from apps.devices.signals import schedule_gateway_slot_invalidation
-        for slot_id, org_id in affected:
-            schedule_gateway_slot_invalidation(slot_id, org_id)
-        return result
+        # In Django, QuerySet.delete() triggers Collector.delete(), which emits
+        # post_delete signals for every deleted model instance (fast_delete is
+        # disabled by the active post_delete signal receiver on GatewaySlot).
+        # The post_delete receiver automatically schedules post-commit cache invalidation
+        # via transaction.on_commit(). Therefore, super().delete() handles invalidation
+        # cleanly without duplicate manual scheduling.
+        return super().delete()
 
     def bulk_create(self, objs, *args, **kwargs):
         created_objs = super().bulk_create(objs, *args, **kwargs)
         from apps.devices.signals import schedule_gateway_slot_invalidation
         for obj in created_objs:
-            schedule_gateway_slot_invalidation(getattr(obj, "slot_id", None), getattr(obj, "org_id", None))
+            s_id = getattr(obj, "slot_id", None)
+            o_id = getattr(obj, "org_id", None) or (getattr(obj.org, "pk", None) if getattr(obj, "org", None) else None)
+            schedule_gateway_slot_invalidation(s_id, o_id)
         return created_objs
 
     def bulk_update(self, objs, fields, *args, **kwargs):
@@ -90,7 +93,9 @@ class GatewaySlotQuerySet(models.QuerySet):
         result = super().bulk_update(objs, fields, *args, **kwargs)
         from apps.devices.signals import schedule_gateway_slot_invalidation
         for obj in objs:
-            schedule_gateway_slot_invalidation(getattr(obj, "slot_id", None), getattr(obj, "org_id", None))
+            s_id = getattr(obj, "slot_id", None)
+            o_id = getattr(obj, "org_id", None) or (getattr(obj.org, "pk", None) if getattr(obj, "org", None) else None)
+            schedule_gateway_slot_invalidation(s_id, o_id)
         return result
 
 
