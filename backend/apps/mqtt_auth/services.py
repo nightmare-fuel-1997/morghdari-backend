@@ -289,6 +289,34 @@ def update_gateway_user_password(username: str, plaintext: str) -> bool:
     return False
 
 
+def canonical_gateway_acl_rules(
+    slot_id: str,
+    org_id: str | None = None,
+    farm_id: int | str | None = None,
+) -> list[dict]:
+    """The canonical MQTT ACL rule builder across the gateway lifecycle.
+
+    Returns the exact list of ACL rules (permission, action, topic):
+    - Unbound (org_id or farm_id is None): 4 device-lane bootstrap rules.
+    - Bound (org_id and farm_id present): 13 rules (4 device + 9 tenant).
+    Strictly literal topics; zero wildcards.
+    """
+    from apps.provisioning import topics
+    from apps.provisioning.api import gateway_acl_rule_items
+
+    device_rules = [
+        {"topic": topics.desired_topic(slot_id), "permission": "allow", "action": "subscribe"},
+        {"topic": topics.command_topic(slot_id), "permission": "allow", "action": "subscribe"},
+        {"topic": topics.reported_topic(slot_id), "permission": "allow", "action": "publish"},
+        {"topic": topics.command_response_topic(slot_id), "permission": "allow", "action": "publish"},
+    ]
+    if org_id is None or farm_id is None:
+        return device_rules
+
+    tenant_rules = gateway_acl_rule_items(str(org_id), farm_id, slot_id)
+    return device_rules + tenant_rules
+
+
 def bootstrap_acl_rule_items(unit_id: str) -> list[dict]:
     """The FOUR rules a factory-registered, unbound unit needs — and no more.
 
@@ -310,14 +338,7 @@ def bootstrap_acl_rule_items(unit_id: str) -> list[dict]:
     has an org and a farm. Keeping the two functions separate is what makes the
     pre-binding state strictly less privileged than a provisioned gateway.
     """
-    from apps.provisioning import topics
-
-    return [
-        {"topic": topics.desired_topic(unit_id), "permission": "allow", "action": "subscribe"},
-        {"topic": topics.command_topic(unit_id), "permission": "allow", "action": "subscribe"},
-        {"topic": topics.reported_topic(unit_id), "permission": "allow", "action": "publish"},
-        {"topic": topics.command_response_topic(unit_id), "permission": "allow", "action": "publish"},
-    ]
+    return canonical_gateway_acl_rules(unit_id)
 
 
 def sync_gateway_acls(slot) -> dict:

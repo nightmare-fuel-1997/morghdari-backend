@@ -91,6 +91,15 @@ def transition(
 
         cache_key = STATUS_CACHE_KEY.format(slot_id=slot.slot_id)
         cache.delete(cache_key)
+
+        try:
+            r = _redis()
+            r.delete(f"gw:status:{slot.slot_id}")
+            if slot.org_id:
+                r.delete(f"gw:ident:{slot.org_id}:{slot.slot_id}")
+                r.delete(f"gw:neg:{slot.org_id}:{slot.slot_id}")
+        except Exception:
+            logger.exception("failed to invalidate redis gateway cache for %s", slot.slot_id)
     return slot
 
 
@@ -155,25 +164,13 @@ def _restore_db_acl_rules(slot) -> int:
     """Regenerate the gateway's DB allow-rows (resume path). Idempotent:
     delete-then-recreate from the canonical rule set."""
     from apps.mqtt_auth.models import MqttAclRule
-    from apps.mqtt_auth.services import bootstrap_acl_rule_items
-    from apps.provisioning.api import gateway_acl_rule_items
+    from apps.mqtt_auth.services import canonical_gateway_acl_rules
 
     username = slot.slot_id
     MqttAclRule.objects.filter(username=username).delete()
-    # D21 (2026-10-25, live on 82.115.17.252): the set a BOUND gateway holds is
-    # the bootstrap device lane PLUS the tenant set — the bind path
-    # (installations.py) is deliberately additive for exactly this reason
-    # ("expand the ACL from the device lane to the full tenant set").
-    # Restoring only the tenant rows left the device lanes revoked after a
-    # resume, and the command channel rides the device lane: the backend
-    # publishes to devices/{slot}/command and the device answers on
-    # devices/{slot}/command/response. The downlink still reached a connected
-    # twin through its pre-existing subscription, but its ACK/SUCCESS
-    # publishes were silently dropped by no_match=deny — so every command
-    # after a resume expired unacknowledged (16 rows in one afternoon), and a
-    # twin that reconnected could no longer even re-apply its config.
-    items = list(bootstrap_acl_rule_items(username))
-    items += gateway_acl_rule_items(str(slot.org_id), slot.farm_id, username)
+    # D21 fix: use canonical_gateway_acl_rules which guarantees the complete
+    # union of 4 bootstrap device-lane rules + 9 tenant rules (13 total).
+    items = canonical_gateway_acl_rules(username, str(slot.org_id), slot.farm_id)
     MqttAclRule.objects.bulk_create(
         [MqttAclRule(username=username, **item) for item in items]
     )

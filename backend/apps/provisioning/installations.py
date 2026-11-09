@@ -552,17 +552,26 @@ def _bind_job_to_unit(job, unit, *, actor, via_override: bool, reason: str, ip=N
         slot.provisioning_status = "PENDING_INSTALLATION"
         slot.save(update_fields=["provisioning_status"])
 
-    # Expand the ACL from the 3-row device lane to the full tenant set. Written
+    # Expand the ACL to the full canonical set (4 device + 9 tenant). Written
     # as get_or_create so a replayed bind cannot raise on the unique index.
-    rules = [
-        {"topic": rule["topic"], "permission": "allow", "action": rule["action"]}
-        for rule in gateway_acl_rule_items(str(job.org_id), job.farm_id, slot_id)
-    ]
+    from apps.mqtt_auth.services import canonical_gateway_acl_rules
+
+    rules = canonical_gateway_acl_rules(slot_id, str(job.org_id), job.farm_id)
     for rule in rules:
         MqttAclRule.objects.get_or_create(
             username=slot_id, topic=rule["topic"],
             defaults={"permission": rule["permission"], "action": rule["action"]},
         )
+
+    # Invalidate subscriber Redis cache so new identity and status are immediate
+    try:
+        from apps.provisioning.services import _redis
+        r = _redis()
+        r.delete(f"gw:status:{slot_id}")
+        r.delete(f"gw:ident:{job.org_id}:{slot_id}")
+        r.delete(f"gw:neg:{job.org_id}:{slot_id}")
+    except Exception:
+        pass
 
     # AD-4: bump the desired version so the device treats the next document as
     # NEW. Without the bump, a unit that already applied config_version 1 would

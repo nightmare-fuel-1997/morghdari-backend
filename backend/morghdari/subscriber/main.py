@@ -314,6 +314,80 @@ def _slot_db_fetch(org_id: str, hardware_id: str, pack_id: str):
         return None
 
 
+def _fetch_gateway_meta(redis_client, org_id: str, farm_id: str, gateway_slot: str) -> dict | None:
+    """Option A+1: Tenant-scoped gateway metadata lookup with Redis caching.
+
+    Uses tenant_context(org_id) so PostgreSQL RLS prevents cross-tenant access.
+    Cache architecture:
+      - Negative cache: gw:neg:{org_id}:{slot_id} (TTL 30s)
+      - Identity cache: gw:ident:{org_id}:{slot_id} (TTL 24h)
+      - Status cache: gw:status:{slot_id} (TTL 60s)
+    """
+    import json
+
+    neg_key = f"gw:neg:{org_id}:{gateway_slot}"
+    ident_key = f"gw:ident:{org_id}:{gateway_slot}"
+    status_key = f"gw:status:{gateway_slot}"
+
+    if redis_client is not None:
+        try:
+            if redis_client.get(neg_key):
+                return None
+            cached_ident = redis_client.get(ident_key)
+            cached_status = redis_client.get(status_key)
+            if cached_ident is not None and cached_status is not None:
+                meta = json.loads(cached_ident)
+                meta["provisioning_status"] = cached_status
+                return meta
+        except Exception:
+            logger.exception("Redis gateway cache read failed for %s", gateway_slot)
+
+    if not _django_ready():
+        return None
+
+    try:
+        from django.db import connection, transaction
+        from apps.devices.models import GatewaySlot
+
+        def _lookup():
+            qs = GatewaySlot.objects.filter(pk=gateway_slot)
+            if org_id:
+                qs = qs.filter(org_id=org_id)
+            return qs.values("farm_id", "provisioning_status").first()
+
+        if connection.vendor == "postgresql" and org_id:
+            from apps.tenants.context import tenant_context
+
+            with transaction.atomic(), tenant_context(org_id):
+                row = _lookup()
+        else:
+            row = _lookup()
+
+        if row is None:
+            if redis_client is not None:
+                try:
+                    redis_client.set(neg_key, "1", ex=30)
+                except Exception:
+                    pass
+            return None
+
+        canonical_farm = row["farm_id"]
+        canonical_status = row["provisioning_status"]
+        meta = {"farm_id": canonical_farm, "provisioning_status": canonical_status}
+
+        if redis_client is not None:
+            try:
+                redis_client.set(ident_key, json.dumps({"farm_id": canonical_farm}), ex=86400)
+                redis_client.set(status_key, canonical_status, ex=60)
+            except Exception:
+                pass
+
+        return meta
+    except Exception:
+        logger.exception("gateway metadata lookup failed for %s in org %s", gateway_slot, org_id)
+        return None
+
+
 def _status_fetch(org_id: str, gateway_slot: str):
     """M5-04: the gateway's provisioning status from Django, lazily — a
     pure-MQTT process without Django keeps legacy behavior (no record ⇒
@@ -403,14 +477,13 @@ def _on_message(client, userdata, message) -> None:
             # The lane is advisory; a failure must never take ingestion down.
             logger.exception("status lane failed for topic=%s", topic)
         return
-    # T1 topic shape: {org}/farms/{farm}/gateways/{slot}/... — the ACL pins
-    # each gateway to publish under its OWN org's prefix, so segment 0 is the
-    # trustworthy org for the RLS-scoped lookups below.
-    org_from_topic = topic.split("/", 1)[0]
+    # T1 topic shape: {org}/farms/{farm}/gateways/{slot}/telemetry — Option A+1
+    # uses the topic's claimed (org, farm, gateway_slot) to perform an early,
+    # tenant-scoped metadata check via PostgreSQL RLS and Redis caching.
     handle_message(
         _redis(), topic, message.payload,
         db_fetch=_slot_db_fetch,
-        status_fetch=lambda gw: _status_fetch(org_from_topic, gw),
+        meta_fetch=lambda org, farm, gw: _fetch_gateway_meta(_redis(), org, farm, gw),
     )
 
 

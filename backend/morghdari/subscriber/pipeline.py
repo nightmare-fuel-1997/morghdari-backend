@@ -1,9 +1,9 @@
 """Per-message pipeline — the ordered gates every reading passes (M3-02..04).
 
-Order is CONTRACTUAL (TUTORIAL §3.1–3.4, pitfalls table):
-  ① parse topic → ② identity cross-check → ③ schema gate → ④ device_ts
-  → ⑤ CHEAP dedup → ⑥ slot resolution → ⑦ enrich + XADD per reading
-  (+ trim on the write path, M3-07).
+Order is CONTRACTUAL (TUTORIAL §3.1–3.4, pitfalls table; Option A+1):
+  ① parse topic → ② identity cross-check → ②.5 ownership & metadata gate
+  → ③ schema gate → ④ device_ts → ④.5 diag capture → ⑤ slot resolution
+  → ⑥ dedup → ⑦ enrich + XADD per reading (+ trim on the write path, M3-07).
 A rejection at ANY gate dead-letters with a reason; a duplicate drops
 silently as a success.
 فارسی: ترتیبِ دروازه‌ها قراردادی است؛ هر رد در هر دروازه با دلیل به صندوق مرده
@@ -11,6 +11,7 @@ silently as a success.
 """
 
 import json
+import os
 import time
 import uuid
 
@@ -78,19 +79,19 @@ def dedup_key(org_id: str, sensor_slot: str, device_ts: str) -> str:
 
 
 def handle_message(redis_client, topic: str, payload: bytes, db_fetch=None,
-                   status_fetch=None) -> str | None:
+                   status_fetch=None, meta_fetch=None, *,
+                   allow_unverified_legacy: bool = False) -> str | None:
     """Process one MQTT message.
 
     Returns None on success/duplicate, or a DLQ entry id on rejection.
     `payload` is raw bytes exactly as received — they travel intact into the
     stream entry so workers never depend on this process's parsing choices.
 
-    M5-04 trust boundary (`status_fetch(gateway_slot_id) -> status|None`):
-    when a provisioning status record EXISTS for the gateway, its telemetry is
-    routed by status — PENDING_APPROVAL is held in STREAM_PENDING (FIFO until
-    approval drains it), REJECTED/SUSPENDED is archived to the DLQ with a
-    reason (never silently dropped, never inserted). No record (legacy/demo
-    worlds) flows normally.
+    Option A+1 trust boundary:
+    Early Gate 2.5 authoritative lookup validates (org_id, farm_id, gateway_slot)
+    against the database/cache under tenant_context(org_id).
+    Rejects unknown slots, tenant mismatches, farm mismatches, and inactive/unassigned
+    gateways to DLQ BEFORE any diagnostic capture, pack resolution, or stream write.
     """
     # Gate 1 — transport identity.
     try:
@@ -109,6 +110,40 @@ def handle_message(redis_client, topic: str, payload: bytes, db_fetch=None,
     fault = identity_fault(gateway_slot, data)
     if fault is not None:
         return send_to_dlq(redis_client, topic, payload, fault)
+
+    # Gate 2.5 — Option A+1: Authoritative gateway ownership & status gate.
+    # Evaluated BEFORE diagnostic capture, pack resolution, dedup, or streaming.
+    # In production, meta_fetch uses tenant_context(org_id) so PostgreSQL RLS
+    # fails closed if the slot does not exist or belongs to another tenant.
+    meta = None
+    if meta_fetch is not None:
+        meta = meta_fetch(org_id, farm_id, gateway_slot)
+    elif status_fetch is not None:
+        st = status_fetch(gateway_slot)
+        if st is not None:
+            meta = {"farm_id": farm_id, "provisioning_status": st}
+
+    if meta is None:
+        if allow_unverified_legacy or os.environ.get("MORGHDARI_ALLOW_LEGACY_UNVERIFIED") == "1":
+            meta = {"farm_id": farm_id, "provisioning_status": "PROVISIONED"}
+        else:
+            return send_to_dlq(redis_client, topic, payload, "UNKNOWN_OR_UNAUTHORIZED_SLOT")
+
+    canonical_farm = meta.get("farm_id")
+    if canonical_farm is None:
+        return send_to_dlq(redis_client, topic, payload, "UNASSIGNED_FARM")
+    if str(canonical_farm) != str(farm_id):
+        return send_to_dlq(redis_client, topic, payload, "TOPIC_FARM_MISMATCH")
+
+    status = meta.get("provisioning_status")
+    if status in (STATUS_REJECTED, STATUS_SUSPENDED):
+        return send_to_dlq(
+            redis_client, topic, payload, f"gateway_{status.lower()}"
+        )
+    if status not in (STATUS_PENDING_APPROVAL, "PROVISIONED", "PENDING_SYNC", "PENDING_INSTALLATION"):
+        return send_to_dlq(
+            redis_client, topic, payload, f"gateway_unsupported_status_{status}"
+        )
 
     # Gate 3 — schema version gates the parser (Firmware Spec).
     if data.get("schema_version") != SUPPORTED_SCHEMA_VERSION:
@@ -143,17 +178,6 @@ def handle_message(redis_client, topic: str, payload: bytes, db_fetch=None,
         if slot_id == UNKNOWN_SLOT:
             return send_to_dlq(redis_client, topic, payload, UNKNOWN_SLOT)
         resolved.append((reading, slot_id))
-
-    # Gate 5.5 — M5-04 trust boundary: route by the gateway's provisioning
-    # status BEFORE anything is published. Absent record = legacy/demo world
-    # (flows normally); provisioned gateways flow; unapproved ones are held;
-    # rejected/suspended ones are archived with a reason. One status lookup
-    # per MESSAGE (a gateway's status is common to all its packs).
-    status = status_fetch(gateway_slot) if status_fetch is not None else None
-    if status in (STATUS_REJECTED, STATUS_SUSPENDED):
-        return send_to_dlq(
-            redis_client, topic, payload, f"gateway_{status.lower()}"
-        )
 
     # Gate 6 — per-slot dedup; duplicates skip publishing silently.
     fresh = []
