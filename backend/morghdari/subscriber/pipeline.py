@@ -14,6 +14,7 @@ import json
 import os
 import time
 import uuid
+import redis
 
 from .dlq import send_to_dlq
 from .diagnostics import capture_diag, is_diag_only
@@ -76,6 +77,249 @@ def dedup_key(org_id: str, sensor_slot: str, device_ts: str) -> str:
     فارسی: کلید حذف تکرار به ازای هر اسلاتِ حل‌شده، عینِ اسنیپتِ کانونیکل.
     """
     return f"dedup:{org_id}:{sensor_slot}:{device_ts}"
+
+
+LUA_ATOMIC_TELEMETRY = """
+local function get_key_type(k)
+    local t = redis.call('TYPE', k)
+    if type(t) == 'table' then
+        return t['ok'] or ''
+    end
+    return tostring(t)
+end
+
+local items = cjson.decode(ARGV[1])
+
+-- Preflight validation: ensure keys have compatible types before modifying state
+for i, item in ipairs(items) do
+    local lane = item['lane']
+    local ltype = get_key_type(lane)
+    if ltype ~= 'none' and ltype ~= 'stream' then
+        error('WRONGTYPE lane key ' .. tostring(lane) .. ' is ' .. ltype .. ', expected stream')
+    end
+    local rk = item['replay_key']
+    if rk and rk ~= cjson.null and rk ~= '' then
+        local rtype = get_key_type(rk)
+        if rtype ~= 'none' and rtype ~= 'string' then
+            error('WRONGTYPE replay key ' .. tostring(rk) .. ' is ' .. rtype .. ', expected string')
+        end
+    end
+end
+
+local created_dedup = {}
+local created_streams = {}
+local incremented_rk = {}
+local stream_initial_exists = {}
+
+local function rollback()
+    for _, dk in ipairs(created_dedup) do
+        pcall(redis.call, 'DEL', dk)
+    end
+    for _, rk_info in ipairs(incremented_rk) do
+        if rk_info[2] then
+            pcall(redis.call, 'DECR', rk_info[1])
+        else
+            pcall(redis.call, 'DEL', rk_info[1])
+        end
+    end
+    for _, se in ipairs(created_streams) do
+        pcall(redis.call, 'XDEL', se[1], se[2])
+        if not stream_initial_exists[se[1]] then
+            local ok_len, len = pcall(redis.call, 'XLEN', se[1])
+            if ok_len and len == 0 then
+                pcall(redis.call, 'DEL', se[1])
+            end
+        end
+    end
+end
+
+local persisted_count = 0
+local duplicate_count = 0
+
+for i, item in ipairs(items) do
+    if item['simulated_fail'] then
+        rollback()
+        error('Simulated failure in Lua script')
+    end
+
+    local dedup_key = item['dedup_key']
+    local exists = redis.call('EXISTS', dedup_key)
+    if exists == 0 then
+        local lane = item['lane']
+        if stream_initial_exists[lane] == nil then
+            stream_initial_exists[lane] = (redis.call('EXISTS', lane) == 1)
+        end
+
+        -- 1. Stream write (XADD) first
+        local xadd_args = {lane, '*'}
+        for k, v in pairs(item['fields']) do
+            table.insert(xadd_args, tostring(k))
+            table.insert(xadd_args, tostring(v))
+        end
+        local ok_xadd, stream_id_or_err = pcall(redis.call, 'XADD', unpack(xadd_args))
+        if not ok_xadd then
+            rollback()
+            error(stream_id_or_err)
+        end
+        table.insert(created_streams, {lane, stream_id_or_err})
+
+        if item['fail_after_xadd'] then
+            rollback()
+            error('Simulated failure after XADD')
+        end
+
+        -- 2. Optional replay key increment
+        local rk = item['replay_key']
+        if rk and rk ~= cjson.null and rk ~= '' then
+            local rk_existed = (redis.call('EXISTS', rk) == 1)
+            local ok_rk, rk_err = pcall(redis.call, 'INCR', rk)
+            if not ok_rk then
+                rollback()
+                error(rk_err)
+            end
+            table.insert(incremented_rk, {rk, rk_existed})
+
+            if item['fail_after_rk'] then
+                rollback()
+                error('Simulated failure after replay key INCR')
+            end
+        end
+
+        -- 3. Commit deduplication key
+        local ok_dedup, dedup_err = pcall(redis.call, 'SET', dedup_key, '1', 'EX', tostring(math.floor(item['ttl'])))
+        if not ok_dedup then
+            rollback()
+            error(dedup_err)
+        end
+        table.insert(created_dedup, dedup_key)
+
+        if item['fail_after_dedup'] then
+            rollback()
+            error('Simulated failure after dedup SET')
+        end
+
+        persisted_count = persisted_count + 1
+    else
+        duplicate_count = duplicate_count + 1
+    end
+end
+
+return {persisted_count, duplicate_count}
+"""
+
+def _get_atomic_telemetry_script(redis_client):
+    script = getattr(redis_client, "_atomic_telemetry_script", None)
+    if script is None:
+        script = redis_client.register_script(LUA_ATOMIC_TELEMETRY)
+        try:
+            redis_client._atomic_telemetry_script = script
+        except Exception:
+            pass
+    return script
+
+
+def persist_telemetry_atomic(
+    redis_client, lane: str, items: list[dict]
+) -> tuple[int, int]:
+    """Atomically evaluate per-slot deduplication and persist readings to Redis stream.
+
+    Ensures that dedup keys are NEVER set in Redis without the corresponding
+    stream entries being written, preventing silent telemetry loss upon broker
+    redelivery. Uses pre-flight type checks, XADD-first execution, and pcall
+    rollback compensation in Lua (mirrored in Python fallback).
+    """
+    if not items:
+        return 0, 0
+
+    if hasattr(redis_client, "register_script"):
+        cmd = _get_atomic_telemetry_script(redis_client)
+        try:
+            res = cmd(args=[json.dumps(items)])
+            return int(res[0]), int(res[1])
+        except (redis.exceptions.ResponseError, AttributeError, NotImplementedError) as exc:
+            if isinstance(exc, redis.exceptions.ResponseError):
+                raise
+            # Fallback for environments or mocks without Lua support
+
+    # Fallback for basic in-memory test mocks without Lua
+    persisted_count = 0
+    duplicate_count = 0
+    created_dedup = []
+    created_streams = []
+    incremented_rk = []
+    stream_initial_exists = {}
+
+    try:
+        for item in items:
+            if item.get("simulated_fail"):
+                raise RuntimeError("Simulated failure in Python fallback")
+
+            lane = item["lane"]
+            if lane not in stream_initial_exists:
+                stream_initial_exists[lane] = bool(
+                    hasattr(redis_client, "exists") and redis_client.exists(lane)
+                )
+
+            dedup_key = item["dedup_key"]
+            ttl = int(item["ttl"])
+
+            exists = False
+            if hasattr(redis_client, "exists"):
+                exists = bool(redis_client.exists(dedup_key))
+
+            if not exists:
+                # 1. Stream write (XADD) first
+                entry_id = redis_client.xadd(lane, item["fields"])
+                created_streams.append((lane, entry_id))
+
+                if item.get("fail_after_xadd"):
+                    raise RuntimeError("Simulated failure after XADD")
+
+                # 2. Replay key increment
+                rk = item.get("replay_key")
+                if rk and hasattr(redis_client, "incr"):
+                    rk_existed = bool(hasattr(redis_client, "exists") and redis_client.exists(rk))
+                    redis_client.incr(rk)
+                    incremented_rk.append((rk, rk_existed))
+
+                    if item.get("fail_after_rk"):
+                        raise RuntimeError("Simulated failure after replay key INCR")
+
+                # 3. Commit deduplication key
+                redis_client.set(dedup_key, 1, ex=ttl)
+                created_dedup.append(dedup_key)
+
+                if item.get("fail_after_dedup"):
+                    raise RuntimeError("Simulated failure after dedup SET")
+
+                persisted_count += 1
+            else:
+                duplicate_count += 1
+        return persisted_count, duplicate_count
+    except Exception:
+        for dk in created_dedup:
+            try:
+                redis_client.delete(dk)
+            except Exception:
+                pass
+        for rk, existed in incremented_rk:
+            try:
+                if existed:
+                    redis_client.decr(rk)
+                else:
+                    redis_client.delete(rk)
+            except Exception:
+                pass
+        for lane, entry_id in created_streams:
+            try:
+                redis_client.xdel(lane, entry_id)
+                if not stream_initial_exists.get(lane, True):
+                    if hasattr(redis_client, "xlen") and redis_client.xlen(lane) == 0:
+                        redis_client.delete(lane)
+            except Exception:
+                pass
+        raise
+
 
 
 def handle_message(redis_client, topic: str, payload: bytes, db_fetch=None,
@@ -182,31 +426,33 @@ def handle_message(redis_client, topic: str, payload: bytes, db_fetch=None,
             return send_to_dlq(redis_client, topic, payload, UNKNOWN_SLOT)
         resolved.append((reading, slot_id))
 
-    # Gate 6 — per-slot dedup; duplicates skip publishing silently.
-    fresh = []
-    for reading, slot_id in resolved:
-        key = dedup_key(org_id, slot_id, device_ts)
-        if redis_client.set(key, 1, nx=True, ex=DEDUP_TTL_SECONDS):
-            fresh.append((reading, slot_id))
-    if not fresh:
-        return None  # full duplicate — success, nothing to do
+    # Gate 6 & 7 — Atomic per-slot dedup and stream persistence.
+    # Where a message produces multiple readings (multi-pack), they are evaluated
+    # and persisted atomically via Redis Lua script, guaranteeing that dedup keys
+    # are never set without their corresponding stream entries being written.
+    if not resolved:
+        return None
 
-    # Gate 7 — enrich + XADD, one entry PER READING (workers derive saloon
-    # from the resolved slot). Lane: pending (M5-04) when the gateway is not
-    # yet approved, else by is_buffered; flat fields per decision Q4 incl
-    # recv_ts + trace_id; raw JSON travels untouched. Buffered publishes also
-    # bump the replay counter (Blueprint §4:139).
     if status == STATUS_PENDING_APPROVAL:
         lane = STREAM_PENDING
     else:
         lane = STREAM_HISTORICAL if data.get("is_buffered") else STREAM_REALTIME
     raw_str = payload.decode("utf-8", errors="replace")
-    for reading, slot_id in fresh:
-        if data.get("is_buffered") and lane != STREAM_PENDING:
-            redis_client.incr(f"replay:pending:{gateway_slot}")
-        redis_client.xadd(
-            lane,
-            {
+
+    items = []
+    for reading, slot_id in resolved:
+        key = dedup_key(org_id, slot_id, device_ts)
+        replay_key = (
+            f"replay:pending:{gateway_slot}"
+            if (data.get("is_buffered") and lane != STREAM_PENDING)
+            else None
+        )
+        items.append({
+            "dedup_key": key,
+            "lane": lane,
+            "ttl": DEDUP_TTL_SECONDS,
+            "replay_key": replay_key,
+            "fields": {
                 "org_id": org_id,
                 "farm_id": farm_id,
                 "gateway_slot_id": gateway_slot,
@@ -219,7 +465,13 @@ def handle_message(redis_client, topic: str, payload: bytes, db_fetch=None,
                 "metrics": json.dumps(reading.get("metrics", {})),
                 "clock_drift": str(bool(data.get("clock_drift"))),
             },
-        )
+        })
 
-    trim_streams(redis_client)  # M3-07: bounded streams, every write
+    persisted_count, duplicate_count = persist_telemetry_atomic(
+        redis_client, lane, items
+    )
+
+    if persisted_count > 0:
+        trim_streams(redis_client)  # M3-07: bounded streams, every write
+
     return None

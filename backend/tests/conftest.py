@@ -57,6 +57,41 @@ def fake_redis():
     return FakeRedis()
 
 
+@pytest.fixture(scope="session", autouse=True)
+def ensure_redis_server():
+    import threading
+    import time
+    import redis as r_lib
+    from fakeredis import TcpFakeServer
+
+    url = redis_base_url()
+    try:
+        client = r_lib.Redis.from_url(url, socket_timeout=0.5)
+        client.ping()
+        yield
+    except Exception:
+        srv = TcpFakeServer(("127.0.0.1", 6379))
+        srv.daemon_threads = True
+        srv.fake_server.config[b"requirepass"] = b"dev_redis_password"
+        t = threading.Thread(target=srv.serve_forever, daemon=True)
+        t.start()
+        for _ in range(20):
+            try:
+                probe = r_lib.Redis.from_url(url, socket_timeout=0.2)
+                if probe.ping():
+                    break
+            except Exception:
+                time.sleep(0.05)
+        try:
+            yield
+        finally:
+            try:
+                srv.shutdown()
+                srv.server_close()
+            except Exception:
+                pass
+
+
 def _sql_from_migration(path: Path) -> str:
     spec = importlib.util.spec_from_file_location(path.stem, path)
     module = importlib.util.module_from_spec(spec)
