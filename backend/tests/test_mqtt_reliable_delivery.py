@@ -640,6 +640,100 @@ def test_22_lua_failure_rollback_multi_pack(clean_redis):
     assert clean_redis.xlen(STREAM_REALTIME) == 0
 
 
+def test_27_lua_failure_rollback_after_xadd(clean_redis):
+    """Test 27: Failure after XADD before SET dedup deletes empty stream and leaves no dedup."""
+    lane = "stream:telemetry:test27"
+    assert clean_redis.exists(lane) == 0
+    items = [{
+        "dedup_key": "dedup:org_01:slot_27:2026-11-10T12:00:00Z",
+        "lane": lane,
+        "ttl": 300,
+        "replay_key": None,
+        "fields": {"val": 42},
+        "fail_after_xadd": True,
+    }]
+
+    with pytest.raises((redis_lib.exceptions.RedisError, RuntimeError)):
+        persist_telemetry_atomic(clean_redis, lane, items)
+
+    assert clean_redis.exists("dedup:org_01:slot_27:2026-11-10T12:00:00Z") == 0
+    assert clean_redis.exists(lane) == 0, "Empty stream key must be deleted when newly created"
+
+    # Retry succeeds
+    items[0]["fail_after_xadd"] = False
+    p, d = persist_telemetry_atomic(clean_redis, lane, items)
+    assert p == 1 and d == 0
+    assert clean_redis.exists("dedup:org_01:slot_27:2026-11-10T12:00:00Z") == 1
+    assert clean_redis.xlen(lane) == 1
+
+
+def test_28_lua_failure_rollback_after_dedup(clean_redis):
+    """Test 28: Failure after SET dedup rolls back dedup key, stream entry, and stream key."""
+    lane = "stream:telemetry:test28"
+    assert clean_redis.exists(lane) == 0
+    items = [{
+        "dedup_key": "dedup:org_01:slot_28:2026-11-10T12:00:00Z",
+        "lane": lane,
+        "ttl": 300,
+        "replay_key": None,
+        "fields": {"val": 99},
+        "fail_after_dedup": True,
+    }]
+
+    with pytest.raises((redis_lib.exceptions.RedisError, RuntimeError)):
+        persist_telemetry_atomic(clean_redis, lane, items)
+
+    assert clean_redis.exists("dedup:org_01:slot_28:2026-11-10T12:00:00Z") == 0
+    assert clean_redis.exists(lane) == 0
+
+
+def test_29_lua_failure_rollback_replay_key_exact_deletion(clean_redis):
+    """Test 29: Replay key rollback deletes non-existent key rather than leaving value 0."""
+    lane = "stream:telemetry:test29"
+    rk_new = "replay:count:brand_new_key"
+    assert clean_redis.exists(rk_new) == 0
+
+    items_new = [{
+        "dedup_key": "dedup:org_01:slot_29a:2026-11-10T12:00:00Z",
+        "lane": lane,
+        "ttl": 300,
+        "replay_key": rk_new,
+        "fields": {"val": 10},
+        "fail_after_rk": True,
+    }]
+
+    with pytest.raises((redis_lib.exceptions.RedisError, RuntimeError)):
+        persist_telemetry_atomic(clean_redis, lane, items_new)
+
+    # Invariant: DECR must NOT leave value 0; key must not exist
+    assert clean_redis.exists(rk_new) == 0
+    assert clean_redis.exists("dedup:org_01:slot_29a:2026-11-10T12:00:00Z") == 0
+    assert clean_redis.exists(lane) == 0
+
+    # Part B: Existing replay key is decremented and preserves TTL
+    rk_exist = "replay:count:existing_key"
+    clean_redis.set(rk_exist, "5")
+    clean_redis.expire(rk_exist, 600)
+
+    items_exist = [{
+        "dedup_key": "dedup:org_01:slot_29b:2026-11-10T12:00:00Z",
+        "lane": lane,
+        "ttl": 300,
+        "replay_key": rk_exist,
+        "fields": {"val": 20},
+        "fail_after_rk": True,
+    }]
+
+    with pytest.raises((redis_lib.exceptions.RedisError, RuntimeError)):
+        persist_telemetry_atomic(clean_redis, lane, items_exist)
+
+    assert clean_redis.exists(rk_exist) == 1
+    raw_val = clean_redis.get(rk_exist)
+    val_int = int(raw_val.decode() if isinstance(raw_val, bytes) else raw_val)
+    assert val_int == 5
+    assert clean_redis.ttl(rk_exist) > 0
+
+
 def test_23_dlq_rejections_across_all_lanes(clean_redis, monkeypatch):
     """Test 23: Permanently rejected messages across all lanes are written to DLQ before ACK."""
     monkeypatch.setattr(subscriber_main, "_redis", lambda: clean_redis)
@@ -839,4 +933,60 @@ def test_26_shared_subscription_clean_session_failover_emqx():
     total_received = len(received_a) + len(received_b)
     assert total_received >= 1
     assert any(m.payload == b"test-shared-failover-data" for m in received_a + received_b)
+
+
+def test_30_scenario_b_all_subscribers_offline_emqx_drops_messages():
+    """Test 30: When all subscribers are offline, EMQX sends PUBACK to publisher and drops QoS 1 message."""
+    import socket
+    s = socket.socket()
+    s.settimeout(0.5)
+    try:
+        s.connect(("127.0.0.1", 18883))
+        s.close()
+    except Exception:
+        pytest.skip("Local EMQX broker on port 18883 not running")
+
+    ts = int(time.time())
+    topic = f"test/emqx551/scenB_drop_{ts}"
+    shared_topic = f"$share/telemetry_workers/{topic}"
+
+    # Verify no subscriber is connected to this shared topic
+    pub_acks = []
+    def on_pub(client, userdata, mid, reason_code=None, properties=None):
+        pub_acks.append(mid)
+
+    pub = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2, client_id=f"pub-scenB-test-{ts}")
+    pub.on_publish = on_pub
+    pub.connect("127.0.0.1", 18883)
+    pub.loop_start()
+
+    res = pub.publish(topic, b"unbuffered-offline-payload", qos=1)
+    res.wait_for_publish(timeout=3.0)
+    time.sleep(0.5)
+    pub.loop_stop()
+    pub.disconnect()
+
+    # EMQX sends PUBACK to publisher even with no subscribers!
+    assert res.is_published() is True
+    assert res.mid in pub_acks
+
+    # Now subscriber connects afterwards
+    received_after = []
+    sub = mqtt.Client(
+        callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+        client_id=f"sub-after-offline-{ts}",
+        clean_session=True,
+        manual_ack=True,
+    )
+    sub.on_message = lambda c, ud, msg: (received_after.append(msg), c.ack(msg.mid, msg.qos))
+    sub.connect("127.0.0.1", 18883)
+    sub.subscribe(shared_topic, qos=1)
+    sub.loop_start()
+
+    time.sleep(2.0)
+    sub.loop_stop()
+    sub.disconnect()
+
+    # The message was dropped by EMQX because no members were online when published
+    assert len(received_after) == 0
 
