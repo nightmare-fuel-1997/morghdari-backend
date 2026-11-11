@@ -914,6 +914,7 @@ def _on_disconnect(client, userdata, disconnect_flags, reason_code, properties=N
 
 
 def main() -> None:
+    global _reconnect_attempts
     host = os.environ.get("MQTT_HOST", "127.0.0.1")
     port = int(os.environ.get("MQTT_PORT", "1883"))
     # Bring the ORM up ONCE, here, rather than leaving it to happen by accident.

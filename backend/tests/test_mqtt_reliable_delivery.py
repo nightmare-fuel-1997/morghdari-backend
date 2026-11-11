@@ -990,3 +990,30 @@ def test_30_scenario_b_all_subscribers_offline_emqx_drops_messages():
     # The message was dropped by EMQX because no members were online when published
     assert len(received_after) == 0
 
+
+class _TestBreakException(BaseException):
+    pass
+
+
+def test_31_subscriber_main_reconnect_attempts_scoping(monkeypatch):
+    """Verify that main() increments module-level _reconnect_attempts without UnboundLocalError."""
+    import morghdari.subscriber.main as sub_main
+    from unittest.mock import MagicMock
+
+    initial_reconnects = sub_main._reconnect_attempts
+    monkeypatch.setattr(sub_main, "_django_ready", lambda: None)
+    monkeypatch.setattr(sub_main, "_wait_for_redis_healthy", lambda: None)
+    monkeypatch.setattr(sub_main, "_serve_metrics", lambda: None)
+
+    mock_client = MagicMock()
+    mock_client.loop_forever.side_effect = _TestBreakException("break main loop")
+    monkeypatch.setattr(sub_main, "build_client", lambda: mock_client)
+
+    try:
+        sub_main.main()
+    except _TestBreakException:
+        pass
+
+    assert sub_main._reconnect_attempts == initial_reconnects + 1
+
+
