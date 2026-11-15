@@ -62,7 +62,6 @@ def ensure_redis_server():
     import threading
     import time
     import redis as r_lib
-    from fakeredis import TcpFakeServer
 
     url = redis_base_url()
     try:
@@ -70,6 +69,8 @@ def ensure_redis_server():
         client.ping()
         yield
     except Exception:
+        from fakeredis import TcpFakeServer
+
         srv = TcpFakeServer(("127.0.0.1", 6379))
         srv.daemon_threads = True
         srv.fake_server.config[b"requirepass"] = b"dev_redis_password"
