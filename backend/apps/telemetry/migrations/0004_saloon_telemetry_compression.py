@@ -11,17 +11,32 @@ metric_hourly_aggregates همچنان FORCE RLS دارد).
 from django.db import migrations
 
 SQL = """
-DROP POLICY IF EXISTS tenant_isolation ON saloon_telemetry;
-ALTER TABLE saloon_telemetry NO FORCE ROW LEVEL SECURITY;
-ALTER TABLE saloon_telemetry DISABLE ROW LEVEL SECURITY;
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_class
+        WHERE relname = 'saloon_telemetry' AND (relrowsecurity OR relforcerowsecurity)
+    ) THEN
+        DROP POLICY IF EXISTS tenant_isolation ON saloon_telemetry;
+        ALTER TABLE saloon_telemetry NO FORCE ROW LEVEL SECURITY;
+        ALTER TABLE saloon_telemetry DISABLE ROW LEVEL SECURITY;
+    END IF;
 
-ALTER TABLE saloon_telemetry SET (
-    timescaledb.compress,
-    timescaledb.compress_orderby = 'server_received_ts DESC',
-    timescaledb.compress_segmentby = 'org_id, saloon_id'
-);
+    IF EXISTS (
+        SELECT 1 FROM timescaledb_information.hypertables
+        WHERE hypertable_name = 'saloon_telemetry' AND NOT compression_enabled
+    ) THEN
+        ALTER TABLE saloon_telemetry SET (
+            timescaledb.compress,
+            timescaledb.compress_orderby = 'server_received_ts DESC',
+            timescaledb.compress_segmentby = 'org_id, saloon_id'
+        );
+    END IF;
 
-SELECT add_compression_policy('saloon_telemetry', INTERVAL '90 days', if_not_exists => TRUE);
+    PERFORM add_compression_policy('saloon_telemetry', INTERVAL '90 days', if_not_exists => TRUE);
+    PERFORM add_retention_policy('saloon_telemetry', INTERVAL '180 days', if_not_exists => TRUE);
+END
+$$;
 """
 
 
@@ -32,8 +47,7 @@ def _apply_compression(apps, schema_editor):
         cursor.execute("SELECT to_regclass('public.saloon_telemetry') IS NOT NULL")
         if not cursor.fetchone()[0]:
             return
-        for stmt in (s.strip() for s in SQL.split(";") if s.strip()):
-            cursor.execute(stmt)
+        cursor.execute(SQL)
 
 
 class Migration(migrations.Migration):
