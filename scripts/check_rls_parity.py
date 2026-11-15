@@ -28,7 +28,8 @@ FALLBACK_DOCS = [
     REPO.parent / "poultry" / "backend_docs" / "database.md",
     DEFAULT_DOC,
 ]
-HYPERTABLES_RLS_IN_TELEMETRY = {"saloon_telemetry", "metric_hourly_aggregates"}
+HYPERTABLES_RLS_IN_TELEMETRY = {"metric_hourly_aggregates"}
+COMPRESSED_HYPERTABLES_EXEMPT_FROM_RLS = {"saloon_telemetry"}
 
 
 def doc_tenant_tables(doc_path: Path) -> set[str]:
@@ -71,14 +72,24 @@ def migration_rls_list() -> set[str]:
 
 
 def main() -> int:
-    doc_path = Path(sys.argv[1]) if len(sys.argv) > 1 else next(p for p in FALLBACK_DOCS if p.exists())
-    expected = doc_tenant_tables(doc_path)
+    doc_path = Path(sys.argv[1]) if len(sys.argv[1:]) >= 1 else next(p for p in FALLBACK_DOCS if p.exists())
+    all_doc_org_tables = doc_tenant_tables(doc_path)
+    expected = all_doc_org_tables - COMPRESSED_HYPERTABLES_EXEMPT_FROM_RLS
     sources = {
-        f"initdb/02_rls.sql": initdb_rls_list(),
+        "initdb/02_rls.sql": initdb_rls_list(),
         "tenants/0002_rls_policies.py (+hypertables)": migration_rls_list(),
     }
     ok = True
-    print(f"database.md org-scoped tables: {len(expected)}")
+    if not COMPRESSED_HYPERTABLES_EXEMPT_FROM_RLS.issubset(all_doc_org_tables):
+        ok = False
+        print(
+            f"DRIFT in COMPRESSED_HYPERTABLES_EXEMPT_FROM_RLS: "
+            f"{sorted(COMPRESSED_HYPERTABLES_EXEMPT_FROM_RLS - all_doc_org_tables)} not in database.md"
+        )
+    print(
+        f"database.md org-scoped tables: {len(all_doc_org_tables)} "
+        f"(RLS-enforced: {len(expected)}, C-11 compressed exempt: {sorted(COMPRESSED_HYPERTABLES_EXEMPT_FROM_RLS)})"
+    )
     for label, actual in sources.items():
         missing, extra = expected - actual, actual - expected
         if missing or extra or len(actual) != len(expected):

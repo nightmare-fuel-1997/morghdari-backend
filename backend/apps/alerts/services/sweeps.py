@@ -159,7 +159,7 @@ def _resolve_replay_alerts(client, now) -> int:
             if max_str is not None:
                 latest = (
                     SaloonTelemetry.objects.using(admin_alias())
-                    .filter(saloon_id=alert.saloon_id)
+                    .filter(org_id=alert.org_id, saloon_id=alert.saloon_id)
                     .order_by("-device_ts")
                     .values_list("metrics", flat=True)
                     .first()

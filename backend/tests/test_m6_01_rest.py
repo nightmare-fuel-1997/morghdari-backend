@@ -473,28 +473,53 @@ def test_health_probe_states(monkeypatch):
 @pytest.mark.django_db
 @pytest.mark.use_migrations
 def test_saloon_analytics_hourly(timescale_db):
-    """Hourly analytics needs the metric_hourly_aggregates hypertable (Postgres).
-
-    فارسی: نمودار ساعتی جدولِ هایپرتبل می‌خواهد؛ روی sqlite رد می‌شود.
+    """Hourly analytics reads metric_hourly_aggregates (portable DDL on SQLite,
+    TimescaleDB hypertable on PostgreSQL) and enforces tenant isolation.
     """
-    if connection.vendor != "postgresql":
-        pytest.skip("metric_hourly_aggregates is a TimescaleDB hypertable")
-    world = _make_world()
-    from apps.telemetry.models import SensorMetricType
+    from datetime import timezone as dt_tz
 
-    # Postgres carries the 0003 seed rows (temp etc.) — reuse instead of re-insert.
-    # فارسی: ردیف‌های seed در Postgres از قبل هست؛ به‌جای درجِ مجدد، به‌روزرسانی می‌کنیم.
+    from apps.telemetry.models import MetricHourlyAggregate, SensorMetricType
+
+    if connection.vendor == "sqlite":
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "CREATE TABLE IF NOT EXISTS metric_hourly_aggregates ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, bucket_hr TIMESTAMP NOT NULL, "
+                "org_id VARCHAR(32) NOT NULL, saloon_id INTEGER NOT NULL, "
+                "slot_id VARCHAR(50) NOT NULL, metric_key VARCHAR(20) NOT NULL, "
+                "avg_val NUMERIC(10,4) NULL, min_val NUMERIC(10,4) NULL, "
+                "max_val NUMERIC(10,4) NULL, stddev_val NUMERIC(10,4) NULL, "
+                "sample_count INTEGER NOT NULL DEFAULT 0, high_variance BOOLEAN NULL)"
+            )
+            cursor.execute("DELETE FROM metric_hourly_aggregates")
+
+    world = _make_world()
     SensorMetricType.objects.update_or_create(
         metric_key="temp", defaults={"display_name": "Temperature", "unit": "C"}
     )
-    bucket = datetime(2026, 9, 1, 12, 0, 0)
-    with connection.cursor() as cursor:
-        cursor.execute(
-            "INSERT INTO metric_hourly_aggregates "
-            "(bucket_hr, org_id, saloon_id, slot_id, metric_key, avg_val, min_val, max_val, stddev_val, sample_count) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            [bucket, world["org"].org_id, world["saloon"].pk, world["slot"].slot_id,
-             "temp", 28.5, 27.0, 30.0, 0.5, 12],
+    bucket = datetime(2026, 9, 1, 12, 0, 0, tzinfo=dt_tz.utc)
+    if connection.vendor == "postgresql":
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO metric_hourly_aggregates "
+                "(bucket_hr, org_id, saloon_id, slot_id, metric_key, avg_val, min_val, max_val, stddev_val, sample_count) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                [bucket, world["org"].org_id, world["saloon"].pk, world["slot"].slot_id,
+                 "temp", 28.5, 27.0, 30.0, 0.5, 12],
+            )
+    else:
+        MetricHourlyAggregate.objects.create(
+            bucket_hr=bucket,
+            org_id=world["org"].org_id,
+            saloon_id=world["saloon"].pk,
+            slot_id=world["slot"].slot_id,
+            metric_id="temp",
+            avg_val=28.5,
+            min_val=27.0,
+            max_val=30.0,
+            stddev_val=0.5,
+            sample_count=12,
+            high_variance=False,
         )
     client = _login(world["owner"])
     url = reverse("telemetry:saloon-analytics-hourly", args=[world["saloon"].pk])
@@ -521,6 +546,20 @@ def test_saloon_analytics_hourly(timescale_db):
     assert response.status_code == 400
     # missing required params → 400
     assert client.get(url).status_code == 400
+
+    # Cross-tenant isolation: Org B cannot read Org A's hourly aggregates (even as superuser).
+    foreign = _login(world["stranger"])
+    foreign_resp = foreign.get(
+        url,
+        {
+            "from": "2026-09-01T00:00:00Z",
+            "to": "2026-09-02T00:00:00Z",
+            "metric": "temp",
+            "slot_id": world["slot"].slot_id,
+        },
+    )
+    assert foreign_resp.status_code == 200
+    assert foreign_resp.data["results"] == []
 
 
 @pytest.mark.django_db

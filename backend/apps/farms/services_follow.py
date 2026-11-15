@@ -102,7 +102,7 @@ def farm_delete_error(farm) -> str | None:
     return None
 
 
-def saloon_has_telemetry(saloon_id) -> bool:
+def saloon_has_telemetry(saloon_id, org_id=None) -> bool:
     """True when the saloon already has telemetry rows (Postgres only).
 
     Off Postgres the answer is False — the guard degrades to allow, documented
@@ -110,9 +110,14 @@ def saloon_has_telemetry(saloon_id) -> bool:
     """
     if connection.vendor != "postgresql":
         return False
+    from apps.farms.models import Saloon
     from apps.telemetry.models import SaloonTelemetry
 
-    return SaloonTelemetry.objects.filter(saloon_id=saloon_id).exists()
+    if org_id is None:
+        org_id = Saloon.objects.filter(pk=saloon_id).values_list("org_id", flat=True).first()
+    if org_id is None:
+        return False
+    return SaloonTelemetry.objects.filter(org_id=org_id, saloon_id=saloon_id).exists()
 
 
 REFERENCED = "still referenced by history"
@@ -188,6 +193,6 @@ def saloon_delete_error(saloon) -> str | None:
         return "saloon has an active flock"
     if cycles.exists():
         return "saloon has flock history"
-    if saloon_has_telemetry(saloon.pk):
+    if saloon_has_telemetry(saloon.pk, org_id=saloon.org_id):
         return "saloon has telemetry history"
     return None

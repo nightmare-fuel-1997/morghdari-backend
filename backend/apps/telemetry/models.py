@@ -12,8 +12,164 @@ Unmanaged models (saloon_telemetry, metric_hourly_aggregates):
   AddConstraint ops that duplicate the RunSQL DDL).
 """
 
+from django.core.exceptions import PermissionDenied
 from django.db import models
 from django.db.models.functions import Now
+
+
+class UnscopedTelemetryQueryError(PermissionDenied, RuntimeError):
+    """Raised when SaloonTelemetry is queried or written on the tenant connection
+    without an explicit org_id predicate (CONSTRAINTS C-11 Approach B)."""
+
+
+def _where_node_has_org_filter(node) -> bool:
+    """True when `node` positively constrains `org_id` on every branch."""
+    if getattr(node, "negated", False):
+        return False
+    children = getattr(node, "children", None)
+    if not children:
+        return False
+    connector = getattr(node, "connector", "AND")
+    results = []
+    for child in children:
+        if hasattr(child, "children"):
+            results.append(_where_node_has_org_filter(child))
+            continue
+        lhs = getattr(child, "lhs", None)
+        target = getattr(lhs, "target", None)
+        col = getattr(target, "column", None) or getattr(target, "attname", None)
+        lookup_name = getattr(child, "lookup_name", None)
+        rhs = getattr(child, "rhs", None)
+        if col == "org_id" and not getattr(child, "negated", False):
+            if lookup_name == "exact" and rhs not in (None, ""):
+                results.append(True)
+                continue
+            if (
+                lookup_name == "in"
+                and rhs
+                and not hasattr(rhs, "resolve_expression")
+                and all(v not in (None, "") for v in rhs)
+            ):
+                results.append(True)
+                continue
+        results.append(False)
+    if connector == "OR":
+        return bool(results) and all(results)
+    return any(results)
+
+
+class TenantSafeTelemetryQuerySet(models.QuerySet):
+    """Fail-closed QuerySet for SaloonTelemetry (CONSTRAINTS C-11 Approach B).
+
+    TimescaleDB 2.29 forbids PostgreSQL RLS on compressed hypertables, so
+    SaloonTelemetry enforces tenant isolation at the ORM layer:
+    - Any query on the default (tenant) connection MUST carry an explicit,
+      non-empty `org_id` (or `org`) filter.
+    - Legitimate cross-org background jobs (`replay`, `sweeps`, `aggregates`,
+      `ops_services`, `tasks`) that route through `.using(admin_alias())`
+      are marked admin-scoped.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._admin_unscoped = False
+
+    def _clone(self):
+        c = super()._clone()
+        c._admin_unscoped = self._admin_unscoped
+        return c
+
+    def using(self, alias):
+        clone = super().using(alias)
+        from django.db import connections
+
+        if alias == "admin" or (alias is not None and "admin" not in connections.databases):
+            clone._admin_unscoped = True
+        else:
+            clone._admin_unscoped = False
+        return clone
+
+    def _has_org_filter(self) -> bool:
+        return _where_node_has_org_filter(self.query.where)
+
+    def _require_org_scope(self) -> None:
+        if self._admin_unscoped or self._db == "admin":
+            return
+        if not self._has_org_filter():
+            raise UnscopedTelemetryQueryError(
+                "SaloonTelemetry queries on the default connection require an "
+                "explicit org_id filter (C-11 fail-closed manager)."
+            )
+
+    def filter(self, *args, **kwargs):
+        if not self._admin_unscoped and self._db != "admin" and not self._has_org_filter():
+            if ("org_id" in kwargs and kwargs["org_id"] in (None, "")) or (
+                "org" in kwargs and kwargs["org"] in (None, "")
+            ):
+                raise UnscopedTelemetryQueryError(
+                    "SaloonTelemetry queries on the default connection require a "
+                    "non-empty org_id filter (C-11 fail-closed manager)."
+                )
+        clone = super().filter(*args, **kwargs)
+        clone._require_org_scope()
+        return clone
+
+    def exclude(self, *args, **kwargs):
+        clone = super().exclude(*args, **kwargs)
+        clone._require_org_scope()
+        return clone
+
+    def get(self, *args, **kwargs):
+        if not args and not kwargs:
+            self._require_org_scope()
+        return super().get(*args, **kwargs)
+
+    def _fetch_all(self):
+        self._require_org_scope()
+        return super()._fetch_all()
+
+    def count(self):
+        self._require_org_scope()
+        return super().count()
+
+    def exists(self):
+        self._require_org_scope()
+        return super().exists()
+
+    def aggregate(self, *args, **kwargs):
+        self._require_org_scope()
+        return super().aggregate(*args, **kwargs)
+
+    def _iterator(self, use_chunked_fetch, chunk_size):
+        self._require_org_scope()
+        return super()._iterator(use_chunked_fetch, chunk_size)
+
+    def update(self, **kwargs):
+        self._require_org_scope()
+        return super().update(**kwargs)
+
+    def delete(self):
+        self._require_org_scope()
+        return super().delete()
+
+    def create(self, **kwargs):
+        if kwargs.get("org") is None and kwargs.get("org_id") in (None, ""):
+            raise UnscopedTelemetryQueryError(
+                "SaloonTelemetry.create() requires a non-null org / org_id."
+            )
+        return super().create(**kwargs)
+
+    def bulk_create(self, objs, *args, **kwargs):
+        objs_list = list(objs)
+        for obj in objs_list:
+            if getattr(obj, "org_id", None) in (None, ""):
+                raise UnscopedTelemetryQueryError(
+                    "SaloonTelemetry.bulk_create() requires every row to carry a non-null org_id."
+                )
+        return super().bulk_create(objs_list, *args, **kwargs)
+
+
+TenantSafeTelemetryManager = models.Manager.from_queryset(TenantSafeTelemetryQuerySet)
 
 
 class SensorMetricType(models.Model):
@@ -64,6 +220,8 @@ class SaloonTelemetry(models.Model):
     # هنگام خواندن با annotate اضافه می‌شود.
     metrics = models.JSONField(default=dict)
     clock_drift = models.BooleanField(default=False, null=True)
+
+    objects = TenantSafeTelemetryManager()
 
     class Meta:
         db_table = "saloon_telemetry"

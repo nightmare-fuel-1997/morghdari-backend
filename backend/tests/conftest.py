@@ -443,6 +443,8 @@ def timescale_db(seeded_rls_db, django_db_blocker):
                 cursor.execute("CREATE EXTENSION IF NOT EXISTS timescaledb")
                 if not cursor.execute("SELECT to_regclass('public.saloon_telemetry') IS NOT NULL").fetchone()[0]:
                     _execute_sql(cursor, _sql_from_migration(BACKEND_DIR / "apps" / "telemetry" / "migrations" / "0002_timescale_hypertables.py"))
+                else:
+                    _execute_sql(cursor, _sql_from_migration(BACKEND_DIR / "apps" / "telemetry" / "migrations" / "0004_saloon_telemetry_compression.py"))
     yield
 
 

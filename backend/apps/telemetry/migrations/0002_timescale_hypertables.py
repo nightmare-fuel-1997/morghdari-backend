@@ -10,12 +10,14 @@ Everything here is verbatim from database.md Compartment 3:
 - create_hypertable + add_dimension(org_id, 4) — org space-partition.
 - idx_telemetry_buffered partial index: crucial for the Celery retroactive
   alert sweep (v0.4).
-- tenant_isolation RLS on both hypertables (Compartment 8 mandate).
-- Retention (180 d) policy enforces the §5 Storage Strategy drop date;
-  compression is BLOCKED by C-11 (mutually exclusive with RLS) pending the
-  owner decision in Open Items Tracker §7.1.
+- tenant_isolation RLS on metric_hourly_aggregates (Compartment 8 mandate).
+- Compression (90 d) + Retention (180 d) policies on saloon_telemetry
+  (CONSTRAINTS C-11 Approach B: saloon_telemetry is the sole compressed
+  hypertable exempt from PostgreSQL RLS, protected by fail-closed
+  TenantSafeTelemetryManager + explicit org_id predicates + parent topology
+  RLS gatekeepers).
   metric_hourly_aggregates is deliberately NOT retained away — permanent
-  summaries (AU-fix 2026-08-16).
+  summaries (AU-fix 2026-08-16) and retains FORCE RLS.
 
 Guarded to vendor=='postgresql': sqlite laptop runs skip silently; CI/dev/prod
 all run the timescale image (C-04 pin). The leading CREATE EXTENSION IF NOT
@@ -55,20 +57,25 @@ SELECT add_dimension('saloon_telemetry', 'org_id', number_partitions => 4);
 -- Crucial partial index for the Celery retroactive alert sweep.
 CREATE INDEX idx_telemetry_buffered ON saloon_telemetry (saloon_id, device_ts DESC) WHERE is_buffered = TRUE;
 
--- CONSTRAINTS C-11 / Tracker §7.1: TimescaleDB 2.29 refuses compression AND
--- row-level security on the same hypertable in EITHER order. Compartment 8
--- mandates tenant_isolation on every org-scoped table, so the security-first
--- interim state is RLS ON / columnstore OFF; RETENTION below still runs.
--- Owner decision pending in the docs repo before compression may return.
-ALTER TABLE saloon_telemetry ENABLE ROW LEVEL SECURITY;
-ALTER TABLE saloon_telemetry FORCE ROW LEVEL SECURITY;
+-- CONSTRAINTS C-11 (Approach B): TimescaleDB 2.29 refuses compression AND
+-- row-level security on the same hypertable in EITHER order. saloon_telemetry
+-- disables PostgreSQL RLS (enforced instead by TenantSafeTelemetryManager +
+-- explicit org_id filters + parent saloons/farms RLS gatekeepers) so native
+-- columnstore compression + 90-day policy can run alongside 180-day retention.
 DROP POLICY IF EXISTS tenant_isolation ON saloon_telemetry;
-CREATE POLICY tenant_isolation ON saloon_telemetry
-    USING (org_id = NULLIF(current_setting('app.current_org_id', true), '')::UUID)
-    WITH CHECK (org_id = current_setting('app.current_org_id', true)::UUID);
+ALTER TABLE saloon_telemetry NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE saloon_telemetry DISABLE ROW LEVEL SECURITY;
+
+ALTER TABLE saloon_telemetry SET (
+    timescaledb.compress,
+    timescaledb.compress_orderby = 'server_received_ts DESC',
+    timescaledb.compress_segmentby = 'org_id, saloon_id'
+);
+
+SELECT add_compression_policy('saloon_telemetry', INTERVAL '90 days', if_not_exists => TRUE);
 
 -- Lifecycle enforcement (§5 Storage Strategy): drop raw chunks after 180 d.
-SELECT add_retention_policy('saloon_telemetry', INTERVAL '180 days');
+SELECT add_retention_policy('saloon_telemetry', INTERVAL '180 days', if_not_exists => TRUE);
 
 -- ================= metric_hourly_aggregates (permanent) ======================
 CREATE TABLE IF NOT EXISTS metric_hourly_aggregates (

@@ -10,10 +10,15 @@ The four mandated assertions, against REAL TimescaleDB with FORCE'd RLS:
   3. unset GUC ⇒ 0 rows everywhere (fail-closed)
   4. no GUC leakage between transactions on a pooled connection
 
-Hypertable note: saloon_telemetry / metric_hourly_aggregates are managed=False
-and do not exist under --nomigrations table synthesis; their identical policy
-text ships inside telemetry/0002 and is exercised by every real-migrate boot.
-scripts/check_rls_parity.py guards that the policy TABLE LIST can never drift.
+Hypertable note (C-11 Approach B): saloon_telemetry / metric_hourly_aggregates
+are managed=False and do not exist under --nomigrations table synthesis; their
+DDL ships inside telemetry/0002. metric_hourly_aggregates retains ENABLE +
+FORCE ROW LEVEL SECURITY, whereas saloon_telemetry disables PostgreSQL RLS so
+TimescaleDB columnstore compression + add_compression_policy can run, and is
+protected instead by fail-closed TenantSafeTelemetryManager + explicit org_id
+predicates + parent saloons/farms RLS gatekeepers.
+scripts/check_rls_parity.py guards that the policy TABLE LIST and C-11
+exemption set stay explicit.
 """
 
 import pytest
@@ -181,3 +186,126 @@ def test_login_resolution_under_enforced_rls(seeded_rls_db):
     finally:
         with connection.cursor() as cursor:
             cursor.execute("RESET ROLE")
+
+
+def test_saloon_telemetry_fail_closed_manager_blocks_unscoped_queries():
+    """C-11 Approach B: any SaloonTelemetry query or write on the default
+    connection without an explicit org_id filter raises immediately."""
+    from django.core.exceptions import PermissionDenied
+    from django.db.models import Q
+    from django.utils import timezone
+
+    from apps.telemetry.models import SaloonTelemetry, UnscopedTelemetryQueryError
+
+    with pytest.raises((PermissionDenied, RuntimeError, UnscopedTelemetryQueryError)):
+        SaloonTelemetry.objects.filter(saloon_id=1)
+
+    with pytest.raises(UnscopedTelemetryQueryError):
+        SaloonTelemetry._default_manager.filter(saloon_id=1)
+
+    with pytest.raises(UnscopedTelemetryQueryError):
+        SaloonTelemetry.objects.filter(org_id=None, saloon_id=1)
+
+    with pytest.raises(UnscopedTelemetryQueryError):
+        SaloonTelemetry.objects.filter(org_id="", saloon_id=1)
+
+    with pytest.raises(UnscopedTelemetryQueryError):
+        SaloonTelemetry.objects.exclude(org_id="00000000-0000-0000-0000-000000000001")
+
+    with pytest.raises(UnscopedTelemetryQueryError):
+        SaloonTelemetry.objects.filter(
+            Q(org_id="00000000-0000-0000-0000-000000000001") | Q(saloon_id=1)
+        )
+
+    with pytest.raises(UnscopedTelemetryQueryError):
+        SaloonTelemetry.objects.all().count()
+
+    with pytest.raises(UnscopedTelemetryQueryError):
+        SaloonTelemetry.objects.all().exists()
+
+    with pytest.raises(UnscopedTelemetryQueryError):
+        list(SaloonTelemetry.objects.all())
+
+    with pytest.raises(UnscopedTelemetryQueryError):
+        SaloonTelemetry.objects.create(
+            device_ts=timezone.now(), saloon_id=1, slot_id="S1", metrics={}
+        )
+
+    with pytest.raises(UnscopedTelemetryQueryError):
+        SaloonTelemetry.objects.bulk_create(
+            [SaloonTelemetry(device_ts=timezone.now(), saloon_id=1, slot_id="S1", metrics={})]
+        )
+
+
+def test_saloon_telemetry_compression_and_metric_hourly_rls(timescale_db):
+    """C-11 Approach B against TimescaleDB: metric_hourly_aggregates keeps
+    FORCE RLS; saloon_telemetry has RLS disabled, columnstore compression
+    enabled, and compress_chunk succeeds without RLS errors."""
+    if connection.vendor != "postgresql":
+        pytest.skip("TimescaleDB compression + pg_class RLS flags require PostgreSQL")
+
+    from datetime import datetime, timedelta, timezone as dt_tz
+
+    from apps.devices.models import SaloonPosition, SaloonSensorSlot
+    from apps.telemetry.models import SaloonTelemetry
+
+    # 1. Verify RLS posture on the two hypertables in pg_class.
+    rls_hourly = _fetch(
+        "SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = 'metric_hourly_aggregates'"
+    )[0]
+    assert rls_hourly == (True, True)
+
+    rls_telemetry = _fetch(
+        "SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = 'saloon_telemetry'"
+    )[0]
+    assert rls_telemetry == (False, False)
+
+    # 2. Verify TimescaleDB columnstore compression is enabled on saloon_telemetry.
+    compression_enabled = _fetchone(
+        "SELECT compression_enabled FROM timescaledb_information.hypertables "
+        "WHERE hypertable_name = 'saloon_telemetry'"
+    )
+    assert compression_enabled is True
+
+    # 3. Seed a row in an old chunk and prove compress_chunk succeeds cleanly.
+    a = _build_org("comp")
+    saloon = a["saloons"][0]
+    pos = SaloonPosition.objects.create(saloon=saloon, org=a["org"], label="center")
+    slot = SaloonSensorSlot.objects.create(
+        slot_id="slot-comp-1", saloon=saloon, org=a["org"], position=pos
+    )
+    old_ts = datetime.now(dt_tz.utc) - timedelta(days=100)
+    SaloonTelemetry.objects.bulk_create(
+        [
+            SaloonTelemetry(
+                server_received_ts=old_ts,
+                device_ts=old_ts,
+                org=a["org"],
+                saloon=saloon,
+                slot=slot,
+                is_buffered=False,
+                metrics={"temp": {"avg": 26.5}},
+            )
+        ]
+    )
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT compress_chunk(i, if_not_compressed => true) "
+            "FROM show_chunks('saloon_telemetry', older_than => INTERVAL '30 days') i"
+        )
+        compressed_chunks = cursor.fetchall()
+    assert len(compressed_chunks) >= 1
+
+    is_compressed = _fetchone(
+        "SELECT bool_or(is_compressed) FROM timescaledb_information.chunks "
+        "WHERE hypertable_name = 'saloon_telemetry'"
+    )
+    assert is_compressed is True
+
+    # Compressed row remains readable through the scoped ORM manager.
+    rows = list(
+        SaloonTelemetry.objects.filter(org_id=a["org"].org_id, saloon_id=saloon.pk)
+    )
+    assert len(rows) == 1
+    assert rows[0].metrics["temp"]["avg"] == 26.5

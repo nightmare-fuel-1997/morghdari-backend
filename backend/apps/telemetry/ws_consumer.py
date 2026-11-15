@@ -419,7 +419,9 @@ class SaloonTelemetryConsumer(JsonWebsocketConsumer):
 
         with transaction.atomic(), tenant_context(self.org_id):
             queryset = (
-                SaloonTelemetry._default_manager.filter(saloon_id=self.saloon_id)
+                SaloonTelemetry._default_manager.filter(
+                    org_id=self.org_id, saloon_id=self.saloon_id
+                )
                 .filter(device_ts__gte=since)
                 .order_by("device_ts", "server_received_ts")
             )

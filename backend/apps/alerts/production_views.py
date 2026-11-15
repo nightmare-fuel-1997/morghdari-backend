@@ -238,7 +238,9 @@ def _live_metric_keys(saloon: Saloon) -> set:
         return live
     since = timezone.now() - RECENT_TELEMETRY_WINDOW
     for row in (
-        SaloonTelemetry.objects.filter(saloon=saloon, server_received_ts__gte=since)
+        SaloonTelemetry.objects.filter(
+            org_id=saloon.org_id, saloon=saloon, server_received_ts__gte=since
+        )
         .only("metrics")
         .order_by("-server_received_ts")
         .distinct()[:200]

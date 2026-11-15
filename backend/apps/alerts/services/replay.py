@@ -150,7 +150,7 @@ def run_replay_sweep(gateway_slot: str | None = None) -> list:
             org_hint = str(org_raw)
             with transaction.atomic(), tenant_context(org_hint):
                 rows_qs = SaloonTelemetry.objects.filter(
-                    is_buffered=True, slot_id=slot_id
+                    org_id=org_hint, is_buffered=True, slot_id=slot_id
                 ).order_by("device_ts")
                 covered = client.get(replay_covered_key(slot_id))
                 if covered:

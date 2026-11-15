@@ -76,9 +76,12 @@ END
 $$;
 """
 
-# The two hypertables whose RLS lives in telemetry.0002 (C-11) — parity
-# script adds these to the migration-side expectation set.
-HYPERTABLES_RLS_IN_TELEMETRY = {"saloon_telemetry", "metric_hourly_aggregates"}
+# C-11 (Approach B): metric_hourly_aggregates gets its RLS inside telemetry.0002;
+# saloon_telemetry enables TimescaleDB columnstore compression and is the sole
+# compressed hypertable exempt from PostgreSQL RLS (enforced by
+# TenantSafeTelemetryManager + explicit org_id predicates + parent gatekeepers).
+HYPERTABLES_RLS_IN_TELEMETRY = {"metric_hourly_aggregates"}
+COMPRESSED_HYPERTABLES_EXEMPT_FROM_RLS = {"saloon_telemetry"}
 
 
 class Migration(migrations.Migration):

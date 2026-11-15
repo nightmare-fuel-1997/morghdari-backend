@@ -15,6 +15,13 @@ Full memory notes live in `.opencode/memory/*.md` - read one when its topic beco
 - [Continue until checkpoint](continue-until-checkpoint.md) — user expects autonomous runs to reach milestones without pausing; if interrupted, brief reason + immediate resume
 - [Confirm, don't explain](confirm-dont-explain.md) — no unsolicited system recaps after bulk reads; when a report IS needed, keep it plain-language + decision-oriented (dense exit report → "didn't understand"); end reports with one reply-ready action
 
+# Remote Server Sync & Testing Workflow (MANDATORY standing rule)
+
+- Whenever any fix or feature is implemented in this workspace (`m:\projects\poultry_the_main_by_ai` / `M:\projects\poultry\backend_docs`):
+  1. Always `git commit` and `git push` the changes from the local repository.
+  2. Connect to the remote server (`main` -> `root@82.115.17.252`, repo at `/opt/morghdari`) via `ssh-mcp` (`ssh_exec`), `git pull` / sync the updated code there, and run all tests on the remote server (e.g., via the `morghdari_ci` stack or `/opt/morghdari`).
+  3. **NEVER run Morghdari tests on the local Windows machine** unless the user explicitly instructs you to run them locally.
+
 # Synapse memory (MCP)
 
 Use the synapse MCP tools for long-term memory across sessions. The server runs as a local SQLite store (`~/.synapse/synapse.db`); tools are `memory_write`, `memory_retrieve`, `memory_digest`, `memory_feedback`.

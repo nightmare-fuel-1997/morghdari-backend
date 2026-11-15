@@ -575,7 +575,9 @@ class TestDrainPush(_NoFlush):
 
         with tenant_context(str(self.org.org_id)):
             rows = SaloonTelemetry.objects.filter(
-                saloon_id=self.saloon.pk, slot_id=self.slot.slot_id,
+                org_id=self.org.org_id,
+                saloon_id=self.saloon.pk,
+                slot_id=self.slot.slot_id,
                 device_ts="2026-09-06T10:05:00Z",
             ).count()
         assert rows == 1  # the UNIQUE constraint absorbed the redelivery

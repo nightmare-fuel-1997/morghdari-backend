@@ -29,7 +29,7 @@ from rest_framework.response import Response
 
 from apps.accounts.permissions import _claims
 from apps.common.schemas import TAG_TELEMETRY, error_responses
-from apps.farms.models import Farm
+from apps.farms.models import Farm, Saloon
 from apps.telemetry.models import SaloonTelemetry
 from apps.telemetry.serializers import (
     FarmTelemetryResponseSerializer,
@@ -244,6 +244,16 @@ def saloon_telemetry(request, saloon_id: int):
     if org_id is None:
         return Response({"error": "organization context required"}, status=400)
 
+    error, _paging = _parse_paging(request)
+    if error is not None:
+        return error
+
+    if not Saloon.objects.filter(org_id=org_id, pk=saloon_id).exists():
+        return Response(
+            {"saloon_id": str(saloon_id), "results": []},
+            status=status.HTTP_200_OK,
+        )
+
     queryset = SaloonTelemetry.objects.filter(org_id=org_id, saloon_id=saloon_id)
     queryset = _windowed_queryset(request, queryset)
 
@@ -409,6 +419,13 @@ def saloon_analytics_hourly(request, saloon_id: int):
     """
     from apps.telemetry.models import MetricHourlyAggregate, SensorMetricType
 
+    org_id = _org_id(request)
+    if org_id is None:
+        return Response(
+            {"error": "organization context required"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
     from_iso = str(request.query_params.get("from", "")).strip()
     to_iso = str(request.query_params.get("to", "")).strip()
     metric = str(request.query_params.get("metric", "")).strip()
@@ -428,8 +445,18 @@ def saloon_analytics_hourly(request, saloon_id: int):
         return Response({"error": f"unknown metric_key {metric!r}"}, status=status.HTTP_400_BAD_REQUEST)
 
     slot_id = str(request.query_params.get("slot_id", "")).strip()
+    if not Saloon.objects.filter(org_id=org_id, pk=saloon_id).exists():
+        return Response(
+            {"metric": metric, "slot_id": slot_id, "results": []},
+            status=status.HTTP_200_OK,
+        )
+
     qs = MetricHourlyAggregate.objects.filter(
-        saloon_id=saloon_id, metric=metric, bucket_hr__gte=from_dt, bucket_hr__lte=to_dt
+        org_id=org_id,
+        saloon_id=saloon_id,
+        metric=metric,
+        bucket_hr__gte=from_dt,
+        bucket_hr__lte=to_dt,
     )
     if slot_id:
         qs = qs.filter(slot_id=slot_id)

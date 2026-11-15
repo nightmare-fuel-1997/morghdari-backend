@@ -42,10 +42,13 @@ DECLARE
     'saloon_actuator_slots',
     'actuator_hardware_registry',
     -- C3 telemetry/time-series — the two HYPERTABLES are deliberately ABSENT
-    -- here: TimescaleDB rejects ENABLE RLS after columnstore is enabled
-    -- (CONSTRAINTS C-11), so their policies are applied by the telemetry DDL
-    -- migration BEFORE compression setup: apps/telemetry/migrations/
-    -- 0002_timescale_hypertables.py. flock_cycles is a regular table.
+    -- here (CONSTRAINTS C-11 Approach B): metric_hourly_aggregates gets its
+    -- ENABLE + FORCE RLS policy in apps/telemetry/migrations/0002_timescale_hypertables.py,
+    -- while saloon_telemetry is the sole compressed hypertable exempt from
+    -- PostgreSQL RLS (TimescaleDB rejects columnstore + RLS on the same table;
+    -- protected instead by fail-closed TenantSafeTelemetryManager + explicit
+    -- org_id filters + parent saloons/farms RLS gatekeepers).
+    -- flock_cycles is a regular table.
     'flock_cycles',
     -- C4 alerting/config (+ D22/D23)
     'lifecycle_templates',

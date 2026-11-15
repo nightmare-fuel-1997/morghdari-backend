@@ -634,7 +634,7 @@ def operational_state(request, saloon_id: int):
     # config; no config → no block).
     if requested == "ACTIVE_FLOCK":
         tolerance = _config_float(ACTIVE_FLOCK_TOLERANCE_KEY, 2.0)
-        warning = _warn_on_temp_violation(saloon.pk, tolerance)
+        warning = _warn_on_temp_violation(saloon.pk, tolerance, org_id=org_id)
         if warning:
             return Response({"error": warning}, status=400)
 
@@ -657,7 +657,7 @@ def operational_state(request, saloon_id: int):
     )
 
 
-def _warn_on_temp_violation(saloon_id: int, tolerance: float):
+def _warn_on_temp_violation(saloon_id: int, tolerance: float, org_id=None):
     """Return an error string when the ACTIVE_FLOCK temp guard trips, else None.
 
     Compare the latest known temp avg (from telemetry) against the cached
@@ -687,8 +687,14 @@ def _warn_on_temp_violation(saloon_id: int, tolerance: float):
         target = float(raw_target)
     except (TypeError, ValueError):
         return None
+    if org_id is None:
+        org_id = Saloon.objects.filter(pk=saloon_id).values_list("org_id", flat=True).first()
+    if org_id is None:
+        return None
     latest = (
-        SaloonTelemetry.objects.filter(saloon_id=saloon_id, is_buffered=False)
+        SaloonTelemetry.objects.filter(
+            org_id=org_id, saloon_id=saloon_id, is_buffered=False
+        )
         .order_by("-device_ts")
         .first()
     )
