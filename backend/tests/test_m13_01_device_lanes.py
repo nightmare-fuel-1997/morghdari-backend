@@ -88,6 +88,7 @@ def test_readiness_requires_all_five_lanes(clean_sub_state):
     everything, and the gauge must say so."""
     lanes = (
         sub.SHARED_TOPIC,
+        sub.SHARED_LIVE_TOPIC,
         sub.STATUS_TOPIC,
         sub.COMMAND_RESPONSE_TOPIC,
         sub.REPORTED_DEVICE_TOPIC,

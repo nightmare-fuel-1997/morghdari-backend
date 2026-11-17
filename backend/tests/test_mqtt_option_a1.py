@@ -512,16 +512,17 @@ def test_case_18_canonical_builder_unbound_yields_4_device_rules():
 
 def test_case_19_canonical_builder_bound_yields_exact_13_rules():
     rules = canonical_gateway_acl_rules("GW-BOUND-123", "org-uuid-1", 42)
-    assert len(rules) == 13
+    assert len(rules) == 14
     topics = {r["topic"] for r in rules}
     # 4 device lane topics
     assert "devices/GW-BOUND-123/desired" in topics
     assert "devices/GW-BOUND-123/command" in topics
     assert "devices/GW-BOUND-123/reported" in topics
     assert "devices/GW-BOUND-123/command/response" in topics
-    # 9 tenant topics
+    # 10 tenant topics
     base = "org-uuid-1/farms/42/gateways/GW-BOUND-123"
     assert f"{base}/telemetry" in topics
+    assert f"{base}/telemetry/live" in topics
     assert f"{base}/status" in topics
     assert f"{base}/commands" in topics
     assert f"{base}/commands/response" in topics
@@ -543,7 +544,7 @@ def test_case_20_suspend_deletes_all_db_acl_rules(org_and_farm, test_user, monke
     rules = canonical_gateway_acl_rules(slot.slot_id, str(org.org_id), farm.pk)
     for r in rules:
         MqttAclRule.objects.create(username=slot.slot_id, **r)
-    assert MqttAclRule.objects.filter(username=slot.slot_id).count() == 13
+    assert MqttAclRule.objects.filter(username=slot.slot_id).count() == 14
 
     suspend_gateway(slot.slot_id, test_user, reason="test suspension")
     assert MqttAclRule.objects.filter(username=slot.slot_id).count() == 0
@@ -559,7 +560,7 @@ def test_case_21_resume_restores_all_13_rules_fixing_d21(org_and_farm, test_user
 
     resume_gateway(slot.slot_id, test_user)
     db_rules = list(MqttAclRule.objects.filter(username=slot.slot_id))
-    assert len(db_rules) == 13
+    assert len(db_rules) == 14
     topics = {r.topic for r in db_rules}
 
     # Verify device lane rules were restored (D21 defect resolution)
@@ -570,6 +571,7 @@ def test_case_21_resume_restores_all_13_rules_fixing_d21(org_and_farm, test_user
 
     # Verify tenant rules are present
     assert f"{org.org_id}/farms/{farm.pk}/gateways/{slot.slot_id}/telemetry" in topics
+    assert f"{org.org_id}/farms/{farm.pk}/gateways/{slot.slot_id}/telemetry/live" in topics
 
 
 @pytest.mark.django_db
@@ -591,7 +593,7 @@ def test_case_22_binding_creates_all_13_canonical_rules(org_and_farm, test_user,
     _bind_job_to_unit(job, unit, actor=test_user, via_override=False, reason="test bind")
 
     rules = MqttAclRule.objects.filter(username=unit.unit_id)
-    assert rules.count() == 13
+    assert rules.count() == 14
     topics = {r.topic for r in rules}
     assert f"devices/{unit.unit_id}/command/response" in topics
     assert f"{org.org_id}/farms/{farm.pk}/gateways/{unit.unit_id}/telemetry" in topics

@@ -185,6 +185,74 @@ def telemetry_update_message(saloon_id, slot_id, device_ts, metrics, is_buffered
     }
 
 
+def telemetry_live_message(
+    saloon_id: int,
+    slot_id: str,
+    device_ts: str,
+    stream_state: str,
+    session_id: str | None = None,
+    trigger_metric: str | None = None,
+    roc_delta: float | None = None,
+    roc_window_sec: int = 10,
+    metrics: dict | None = None,
+    sensor_errors: dict | None = None,
+) -> dict:
+    """Ephemeral 10s Auto-RoC payload pushed directly from Subscriber to Channels.
+    `type: "telemetry.live"` routes to `SaloonTelemetryConsumer.telemetry_live`
+    and `FarmTelemetryConsumer.telemetry_live`."""
+    return {
+        "type": "telemetry.live",
+        "saloon_id": saloon_id,
+        "slot_id": slot_id,
+        "device_ts": device_ts,
+        "stream_state": stream_state,
+        "session_id": session_id,
+        "trigger_metric": trigger_metric,
+        "roc_delta": roc_delta,
+        "roc_window_sec": roc_window_sec,
+        "metrics": metrics or {},
+        "sensor_errors": sensor_errors or {},
+    }
+
+
+def push_live_telemetry(org_id: str, items: list[dict], channel_layer=None) -> int:
+    """Fast-path producer called directly by Subscriber on T10 `/telemetry/live`.
+    Bypasses Celery and TimescaleDB completely."""
+    layer = channel_layer or get_channel_layer()
+    if layer is None:
+        return 0
+    dispatches = 0
+    from asgiref.sync import async_to_sync
+
+    for item in items:
+        saloon_id = item["saloon_id"]
+        try:
+            async_to_sync(layer.group_send)(
+                group_name(org_id, saloon_id),
+                telemetry_live_message(
+                    saloon_id=saloon_id,
+                    slot_id=item["slot_id"],
+                    device_ts=item["device_ts"],
+                    stream_state=item["stream_state"],
+                    session_id=item.get("session_id"),
+                    trigger_metric=item.get("trigger_metric"),
+                    roc_delta=item.get("roc_delta"),
+                    roc_window_sec=item.get("roc_window_sec", 10),
+                    metrics=item.get("metrics") or {},
+                    sensor_errors=item.get("sensor_errors") or {},
+                ),
+            )
+            dispatches += 1
+        except Exception:
+            logger.exception(
+                "telemetry.live push failed for org=%s saloon=%s slot=%s",
+                org_id,
+                saloon_id,
+                item.get("slot_id"),
+            )
+    return dispatches
+
+
 def gap_fill_message(saloon_id, rows: list[dict]) -> dict:
     """The M6-07 reconnect payload for an inbound {"action": "gap_fill"}.
 

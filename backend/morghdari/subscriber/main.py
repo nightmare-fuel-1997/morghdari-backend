@@ -50,6 +50,8 @@ logging.basicConfig(
 logger = logging.getLogger("morghdari.subscriber")
 
 SHARED_TOPIC = "$share/telemetry_workers/+/farms/+/gateways/+/telemetry"
+SHARED_LIVE_TOPIC = "$share/telemetry_workers/+/farms/+/gateways/+/telemetry/live"
+VALID_LIVE_STATES = {"STARTED", "ACTIVE", "SETTLING", "ENDED"}
 STATUS_TOPIC = "+/farms/+/gateways/+/status"
 # Phase 3 / task 3.1 (closes D9): the downlink command-response lane. v0.5
 # specified it (task E2) and nothing ever subscribed, so every ACK/SUCCESS a
@@ -200,6 +202,7 @@ def _request_subscriptions(client) -> None:
     """
     for topic in (
         SHARED_TOPIC,
+        SHARED_LIVE_TOPIC,
         STATUS_TOPIC,
         COMMAND_RESPONSE_TOPIC,
         REPORTED_DEVICE_TOPIC,
@@ -246,9 +249,10 @@ def _on_subscribe(client, userdata, mid, granted_qos, properties=None):
 
 
 def _subscriptions_ok() -> bool:
-    """All five lanes currently granted — drives the subscriber_subscribed gauge."""
+    """All six lanes currently granted — drives the subscriber_subscribed gauge."""
     return {
         SHARED_TOPIC,
+        SHARED_LIVE_TOPIC,
         STATUS_TOPIC,
         COMMAND_RESPONSE_TOPIC,
         REPORTED_DEVICE_TOPIC,
@@ -575,6 +579,18 @@ def _on_message(client, userdata, message) -> None:
             _handle_status(_redis(), topic, message.payload)
             _maybe_ack(client, message)
             return
+        from .topics import is_live_telemetry_topic
+
+        if is_live_telemetry_topic(topic):
+            handle_live_message(
+                _redis(),
+                topic,
+                message.payload,
+                db_fetch=_slot_db_fetch,
+                meta_fetch=lambda org, farm, gw: _fetch_gateway_meta(_redis(), org, farm, gw),
+            )
+            _maybe_ack(client, message)
+            return
         # T1 topic shape: {org}/farms/{farm}/gateways/{slot}/telemetry — Option A+1
         # uses the topic's claimed (org, farm, gateway_slot) to perform an early,
         # tenant-scoped metadata check via PostgreSQL RLS and Redis caching.
@@ -727,6 +743,175 @@ def _is_status_topic(topic: str) -> bool:
         and parts[3] == "gateways"
         and parts[5] == "status"
     )
+
+
+def _resolve_slot_saloon_cached(redis_client, org_id: str, slot_id: str) -> int | None:
+    """Resolve slot_id -> saloon_id using a 24h Redis cache, falling back to
+    PostgreSQL under tenant_context(org_id) on a cache miss."""
+    from apps.alerts.services.redis_keys import slot_saloon_cache_key
+
+    key = slot_saloon_cache_key(org_id, slot_id)
+    if redis_client is not None:
+        try:
+            cached = redis_client.get(key)
+            if cached is not None:
+                return int(cached)
+        except Exception:
+            logger.exception("slot->saloon Redis cache read failed for %s", slot_id)
+
+    if not _django_ready():
+        return None
+
+    try:
+        from django.db import connection, transaction
+        from apps.devices.models import SaloonSensorSlot
+
+        def _lookup():
+            return (
+                SaloonSensorSlot.objects.filter(pk=slot_id)
+                .values_list("saloon_id", flat=True)
+                .first()
+            )
+
+        if connection.vendor == "postgresql" and org_id:
+            from apps.tenants.context import tenant_context
+
+            with transaction.atomic(), tenant_context(org_id):
+                saloon_id = _lookup()
+        else:
+            saloon_id = _lookup()
+
+        if saloon_id is not None and redis_client is not None:
+            try:
+                redis_client.set(key, str(saloon_id), ex=24 * 3600)
+            except Exception:
+                pass
+        return saloon_id
+    except Exception:
+        logger.exception("slot->saloon DB lookup failed for slot=%s org=%s", slot_id, org_id)
+        return None
+
+
+def handle_live_message(
+    redis_client,
+    topic: str,
+    payload: bytes,
+    db_fetch=None,
+    meta_fetch=None,
+    saloon_fetch=None,
+    ws_pusher=None,
+) -> str | None:
+    """Fast-path handler for T10 `{org}/farms/{farm}/gateways/{slot}/telemetry/live`.
+
+    Enforces Gates 1, 2, 2.5, 3, and 5 (using Redis caches), records the live
+    stream state in Redis for the single-slot velocity grace guard, and pushes
+    directly to Channels WebSocket groups without touching Celery or TimescaleDB.
+    """
+    import json
+    from .dlq import send_to_dlq
+    from .pipeline import (
+        STATUS_PENDING_APPROVAL,
+        STATUS_REJECTED,
+        STATUS_SUSPENDED,
+        SUPPORTED_SCHEMA_VERSION,
+    )
+    from .resolver import UNKNOWN_SLOT, resolve_pack_slot
+    from .topics import TopicParseError, identity_fault, parse_live_topic
+    from apps.alerts.services.redis_keys import live_stream_active_key
+
+    try:
+        org_id, farm_id, gateway_slot = parse_live_topic(topic)
+    except TopicParseError:
+        return send_to_dlq(redis_client, topic, payload, "bad_live_topic")
+
+    try:
+        data = json.loads(payload)
+    except ValueError:
+        return send_to_dlq(redis_client, topic, payload, "bad_json")
+    if not isinstance(data, dict):
+        return send_to_dlq(redis_client, topic, payload, "bad_json")
+
+    fault = identity_fault(gateway_slot, data)
+    if fault is not None:
+        return send_to_dlq(redis_client, topic, payload, fault)
+
+    meta = (
+        meta_fetch(org_id, farm_id, gateway_slot)
+        if meta_fetch is not None
+        else {"farm_id": farm_id, "provisioning_status": "PROVISIONED"}
+    )
+    if meta is None:
+        return send_to_dlq(redis_client, topic, payload, "UNKNOWN_OR_UNAUTHORIZED_SLOT")
+    if str(meta.get("farm_id")) != str(farm_id):
+        return send_to_dlq(redis_client, topic, payload, "TOPIC_FARM_MISMATCH")
+
+    status = meta.get("provisioning_status")
+    if status in (STATUS_REJECTED, STATUS_SUSPENDED, STATUS_PENDING_APPROVAL):
+        return None
+
+    if data.get("schema_version") != SUPPORTED_SCHEMA_VERSION:
+        return send_to_dlq(redis_client, topic, payload, "UNSUPPORTED_SCHEMA_VERSION")
+
+    device_ts = data.get("device_ts")
+    stream_state = str(data.get("stream_state") or "ACTIVE").upper()
+    if not device_ts or stream_state not in VALID_LIVE_STATES:
+        return send_to_dlq(redis_client, topic, payload, "invalid_live_envelope")
+
+    hw_id = data.get("gateway_hardware_id", "")
+    session_id = data.get("session_id")
+    push_items = []
+    now_ts = time.time()
+
+    for reading in data.get("readings", []):
+        if not isinstance(reading, dict):
+            continue
+        pack_id = reading.get("pack_id")
+        slot_id = resolve_pack_slot(redis_client, org_id, hw_id, pack_id, db_fetch=db_fetch)
+        if slot_id == UNKNOWN_SLOT:
+            continue
+
+        saloon_id = (
+            saloon_fetch(org_id, str(slot_id))
+            if saloon_fetch is not None
+            else _resolve_slot_saloon_cached(redis_client, org_id, str(slot_id))
+        )
+        if saloon_id is None:
+            continue
+
+        live_key = live_stream_active_key(saloon_id, str(slot_id))
+        try:
+            state_blob = json.dumps({
+                "stream_state": stream_state,
+                "trigger_metric": reading.get("trigger_metric"),
+                "roc_delta": reading.get("roc_delta"),
+                "updated_at": now_ts,
+            })
+            redis_client.set(live_key, state_blob, ex=60)
+        except Exception:
+            logger.exception("Failed to set live_stream_active_key for %s", slot_id)
+
+        push_items.append({
+            "saloon_id": saloon_id,
+            "slot_id": str(slot_id),
+            "device_ts": device_ts,
+            "stream_state": stream_state,
+            "session_id": session_id,
+            "trigger_metric": reading.get("trigger_metric"),
+            "roc_delta": reading.get("roc_delta"),
+            "roc_window_sec": reading.get("roc_window_sec", 10),
+            "metrics": reading.get("metrics") or {},
+            "sensor_errors": reading.get("sensor_errors") or {},
+        })
+
+    if push_items:
+        if ws_pusher is not None:
+            ws_pusher(org_id, push_items)
+        else:
+            from apps.telemetry.ws import push_live_telemetry
+
+            push_live_telemetry(org_id, push_items)
+
+    return None
 
 
 # ---------------------------------------------------------------------------

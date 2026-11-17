@@ -104,7 +104,7 @@ def gateway_acl_rule_items(org_uuid, farm_id: int, slot_id: str) -> list[dict]:
         return []
     base = f"{org_uuid}/farms/{farm_id}/gateways/{slot_id}"
     publishes = [
-        ("telemetry", "T1"), ("status", "T2"),
+        ("telemetry", "T1"), ("telemetry/live", "T10"), ("status", "T2"),
         ("commands/response", "T4"), ("ota/response", "T7"),
         ("diagnostics/response", "T9"),
     ]

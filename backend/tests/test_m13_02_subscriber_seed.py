@@ -20,6 +20,7 @@ pytestmark = pytest.mark.django_db
 
 EXPECTED_TOPICS = {
     "+/farms/+/gateways/+/telemetry",
+    "+/farms/+/gateways/+/telemetry/live",
     "+/farms/+/gateways/+/status",
     "+/farms/+/gateways/+/commands/response",
     "devices/+/reported",
@@ -76,7 +77,7 @@ def test_reseeding_is_idempotent_and_can_rotate_the_password():
     _seed()  # second run, same everything
     from apps.mqtt_auth.models import MqttAclRule, MqttDeviceCredential
 
-    assert MqttAclRule.objects.filter(username="subscriber-svc").count() == 5
+    assert MqttAclRule.objects.filter(username="subscriber-svc").count() == 6
 
     call_command(
         "seed_subscriber_credentials",

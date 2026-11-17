@@ -69,6 +69,7 @@ def test_subscriber_rules_are_subscribe_only():
     assert all(r["permission"] == "allow" and r["action"] == "subscribe" for r in rules)
     assert set(r["topic"] for r in rules) == {
         "+/farms/+/gateways/+/telemetry",
+        "+/farms/+/gateways/+/telemetry/live",
         "+/farms/+/gateways/+/status",
         "+/farms/+/gateways/+/commands/response",
         "devices/+/reported",
@@ -110,6 +111,7 @@ def test_the_subscribers_rules_match_what_it_subscribes():
     subscribed = {
         t.removeprefix("$share/telemetry_workers/") for t in (
             sub.SHARED_TOPIC,
+            sub.SHARED_LIVE_TOPIC,
             sub.STATUS_TOPIC,
             sub.COMMAND_RESPONSE_TOPIC,
             sub.REPORTED_DEVICE_TOPIC,

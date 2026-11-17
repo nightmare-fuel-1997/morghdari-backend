@@ -77,6 +77,8 @@ def subscriber_rules(subscriber_user: str = "demo-sub") -> list:
         {"permission": "allow", "action": "subscribe",
          "topic": "+/farms/+/gateways/+/telemetry"},
         {"permission": "allow", "action": "subscribe",
+         "topic": "+/farms/+/gateways/+/telemetry/live"},
+        {"permission": "allow", "action": "subscribe",
          "topic": "+/farms/+/gateways/+/status"},
         {"permission": "allow", "action": "subscribe",
          "topic": "+/farms/+/gateways/+/commands/response"},

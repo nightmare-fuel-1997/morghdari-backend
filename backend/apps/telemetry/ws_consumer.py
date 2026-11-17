@@ -274,6 +274,10 @@ class SaloonTelemetryConsumer(JsonWebsocketConsumer):
         # Forward verbatim; the layer already scoped it to our org's group.
         self.send_json(event)
 
+    def telemetry_live(self, event):
+        """Forward ephemeral 10s Auto-RoC live sensor stream to the dashboard tab."""
+        self.send_json(event)
+
     def telemetry_gap_fill(self, event):  # parity hook for server-side fills
         self.send_json(event)
 

@@ -19,12 +19,34 @@ _TOPIC_RE = re.compile(
     r"(?P<gateway_slot>[^/]+)/telemetry$"
 )
 
+_LIVE_TOPIC_RE = re.compile(
+    r"^(?P<org_id>[^/]+)/farms/(?P<farm_id>[^/]+)/gateways/"
+    r"(?P<gateway_slot>[^/]+)/telemetry/live$"
+)
+
 
 def parse_topic(topic: str) -> tuple[str, str, str]:
     """Return (org_id, farm_id, gateway_slot); raise TopicParseError otherwise."""
     match = _TOPIC_RE.match(topic or "")
     if match is None:
         raise TopicParseError(f"topic does not match T1 shape: {topic!r}")
+    return (
+        match.group("org_id"),
+        match.group("farm_id"),
+        match.group("gateway_slot"),
+    )
+
+
+def is_live_telemetry_topic(topic: str) -> bool:
+    """Return True if topic matches T10 `{org}/farms/{farm}/gateways/{slot}/telemetry/live`."""
+    return _LIVE_TOPIC_RE.match(topic or "") is not None
+
+
+def parse_live_topic(topic: str) -> tuple[str, str, str]:
+    """Return (org_id, farm_id, gateway_slot) for T10 live topic; raise TopicParseError otherwise."""
+    match = _LIVE_TOPIC_RE.match(topic or "")
+    if match is None:
+        raise TopicParseError(f"topic does not match T10 live shape: {topic!r}")
     return (
         match.group("org_id"),
         match.group("farm_id"),

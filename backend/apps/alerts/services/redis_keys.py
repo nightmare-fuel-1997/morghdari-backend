@@ -103,3 +103,25 @@ def replay_covered_key(slot_id: str) -> str:
     sensor slot — lets a LATER outage open a NEW batch_id window instead of
     being swallowed by the first episode's covered check."""
     return f"replay:covered:{slot_id}"
+
+
+def slot_saloon_cache_key(org_id: str, slot_id: str) -> str:
+    """24h cache mapping (org_id, slot_id) -> saloon_id for the live fast-path."""
+    return f"slot:saloon:{org_id}:{slot_id}"
+
+
+def live_stream_active_key(saloon_id: int, slot_id: str) -> str:
+    """Ephemeral marker set by Subscriber when a pack is in live RoC mode.
+    Holds JSON {'stream_state', 'trigger_metric', 'roc_delta', 'updated_at'} with 60s TTL."""
+    return f"sensor:live_stream:{saloon_id}:{slot_id}"
+
+
+def slot_last_metrics_key(saloon_id: int, slot_id: str) -> str:
+    """Per-slot last 60s reading snapshot so velocity.py can compare a single
+    slot's delta against peer slots in the same saloon."""
+    return f"saloon:{saloon_id}:slot:{slot_id}:last_metrics"
+
+
+def single_slot_spike_grace_key(saloon_id: int, slot_id: str, metric: str) -> str:
+    """30s grace hold when a velocity breach occurs on a single isolated slot."""
+    return f"saloon:{saloon_id}:spike_grace:{slot_id}:{metric}"

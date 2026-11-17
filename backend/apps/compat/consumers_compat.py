@@ -90,6 +90,22 @@ class FarmTelemetryConsumer(JsonWebsocketConsumer):
         saloon_id = event.get("saloon_id")
         flat = svc.compat_flatten_reading(_ShimRow(event), self.saloon_slugs.get(saloon_id, ""))
         self.send_json(flat)
+
+    def telemetry_live(self, event):
+        """Translate ephemeral 10s Auto-RoC live sensor stream for Flutter farm sockets."""
+        saloon_id = event.get("saloon_id")
+        raw_metrics = event.get("metrics") or {}
+        norm_metrics = {
+            k: (v if isinstance(v, dict) else {"avg": v})
+            for k, v in raw_metrics.items()
+            if v is not None
+        }
+        shim_event = {**event, "metrics": norm_metrics, "is_buffered": False}
+        flat = svc.compat_flatten_reading(_ShimRow(shim_event), self.saloon_slugs.get(saloon_id, ""))
+        flat["stream_state"] = event.get("stream_state")
+        flat["trigger_metric"] = event.get("trigger_metric")
+        flat["roc_delta"] = event.get("roc_delta")
+        self.send_json(flat)
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------

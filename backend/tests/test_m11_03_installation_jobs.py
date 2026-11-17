@@ -456,7 +456,7 @@ def test_bind_joins_the_factory_unit_to_the_job(django_user_model):
     assert f"devices/GW-BIND-0001/desired" in topics, "the device lane was dropped"
     assert f"devices/GW-BIND-0001/reported" in topics
     assert f"{w['org'].org_id}/farms/{w['farm'].pk}/gateways/GW-BIND-0001/telemetry" in topics
-    assert rules.count() == 13  # 4 kept + 9 tenant (command/response since 2026-10-20)
+    assert rules.count() == 14  # 4 kept + 10 tenant (command/response + telemetry/live)
 
     # a PROVISION command was queued for the device
     from apps.provisioning.models import GatewayCommand

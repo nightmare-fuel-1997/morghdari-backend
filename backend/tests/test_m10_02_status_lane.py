@@ -37,7 +37,7 @@ def test_farmless_slot_gets_no_acls_instead_of_a_none_topic():
 
 def test_slot_with_a_farm_still_gets_the_full_set():
     items = gateway_acl_rule_items("org-uuid", 12, "GW-0042")
-    assert len(items) == 9
+    assert len(items) == 10
     assert all(item["permission"] == "allow" for item in items)
     assert all("farms/None" not in item["topic"] for item in items)
 

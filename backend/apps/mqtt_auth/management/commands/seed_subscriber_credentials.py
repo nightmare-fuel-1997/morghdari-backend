@@ -49,6 +49,7 @@ PLATFORM_ORG_NAME = "Morghdari Platform"
 # That is how Phase 3 arrived: the lane was finally subscribed, and nothing
 # authorized it. When adding a subscription to main.py, add it here too.
 SHARED_TOPIC = "+/farms/+/gateways/+/telemetry"   # effective filter of $share/telemetry_workers/...
+SHARED_LIVE_TOPIC = "+/farms/+/gateways/+/telemetry/live"
 STATUS_TOPIC = "+/farms/+/gateways/+/status"
 COMMAND_RESPONSE_TOPIC = "+/farms/+/gateways/+/commands/response"
 # The device lanes (AD-3): org-less, so they cannot be prefixed by an org.
@@ -56,6 +57,7 @@ REPORTED_DEVICE_TOPIC = "devices/+/reported"
 COMMAND_RESPONSE_DEVICE_TOPIC = "devices/+/command/response"
 SUBSCRIBER_TOPICS = (
     SHARED_TOPIC,
+    SHARED_LIVE_TOPIC,
     STATUS_TOPIC,
     COMMAND_RESPONSE_TOPIC,
     REPORTED_DEVICE_TOPIC,

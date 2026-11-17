@@ -20,10 +20,10 @@ SLOT = "FARM-01-GW-A"
 
 def test_builder_covers_all_nine_topics():
     items = gateway_acl_rule_items(ORG, FARM, SLOT)
-    assert len(items) == 9
+    assert len(items) == 10
     base = f"{ORG}/farms/{FARM}/gateways/{SLOT}"
     assert {i["topic"] for i in items} == {
-        f"{base}/telemetry", f"{base}/status",
+        f"{base}/telemetry", f"{base}/telemetry/live", f"{base}/status",
         f"{base}/commands/response", f"{base}/ota/response",
         f"{base}/diagnostics/response",
         f"{base}/commands", f"{base}/clock/sync", f"{base}/ota",
@@ -37,8 +37,9 @@ def test_actions_match_the_contract():
                  for action in ("publish", "subscribe")}
     base = f"{ORG}/farms/{FARM}/gateways/{SLOT}"
     assert by_action["publish"] == {
-        f"{base}/telemetry", f"{base}/status", f"{base}/commands/response",
-        f"{base}/ota/response", f"{base}/diagnostics/response",
+        f"{base}/telemetry", f"{base}/telemetry/live", f"{base}/status",
+        f"{base}/commands/response", f"{base}/ota/response",
+        f"{base}/diagnostics/response",
     }
     assert by_action["subscribe"] == {
         f"{base}/commands", f"{base}/clock/sync", f"{base}/ota",

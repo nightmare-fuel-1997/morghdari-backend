@@ -843,7 +843,7 @@ def test_resume_restores_the_device_lane_rules(django_user_model):
             username=slot.slot_id, topic=item["topic"],
             defaults={"permission": item["permission"], "action": item["action"]},
         )
-    assert MqttAclRule.objects.filter(username=slot.slot_id).count() == 13
+    assert MqttAclRule.objects.filter(username=slot.slot_id).count() == 14
 
     suspend_gateway(slot.slot_id, w["support"], reason="d21 drill")
     assert MqttAclRule.objects.filter(username=slot.slot_id).count() == 0
@@ -861,7 +861,7 @@ def test_resume_restores_the_device_lane_rules(django_user_model):
         "config-apply uplink are dead for this gateway"
     )
     # and the tenant set came back too
-    assert len(rules) == 13
+    assert len(rules) == 14
 
 
 @pytest.mark.django_db

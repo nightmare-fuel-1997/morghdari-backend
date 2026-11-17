@@ -92,8 +92,8 @@ def test_on_connect_subscribes_telemetry_and_status_on_success(fake_client, capl
 
     assert "connected to broker (session_present=False)" in caplog.text
     topics = [c.args[0] for c in fake_client.subscribe.call_args_list]
-    assert topics == [sub.SHARED_TOPIC, sub.STATUS_TOPIC, sub.COMMAND_RESPONSE_TOPIC,
-           sub.REPORTED_DEVICE_TOPIC, sub.COMMAND_RESPONSE_DEVICE_TOPIC]
+    assert topics == [sub.SHARED_TOPIC, sub.SHARED_LIVE_TOPIC, sub.STATUS_TOPIC,
+           sub.COMMAND_RESPONSE_TOPIC, sub.REPORTED_DEVICE_TOPIC, sub.COMMAND_RESPONSE_DEVICE_TOPIC]
     assert "subscribed via" not in caplog.text  # no SUBACK yet — no claim yet
 
 
@@ -101,6 +101,7 @@ def test_on_subscribe_granted_logs_the_lane(fake_client, clean_sub_state, caplog
     """A granted SUBACK is the ONLY "subscribed" log that means the broker
     holds the subscription — one per lane, naming the grant."""
     sub._pending_subs[11] = sub.SHARED_TOPIC
+    sub._pending_subs[16] = sub.SHARED_LIVE_TOPIC
     sub._pending_subs[12] = sub.STATUS_TOPIC
     sub._pending_subs[13] = sub.COMMAND_RESPONSE_TOPIC
     sub._pending_subs[14] = sub.REPORTED_DEVICE_TOPIC
@@ -108,6 +109,7 @@ def test_on_subscribe_granted_logs_the_lane(fake_client, clean_sub_state, caplog
 
     with caplog.at_level("INFO", logger="morghdari.subscriber"):
         sub._on_subscribe(fake_client, None, 11, [1])
+        sub._on_subscribe(fake_client, None, 16, [1])
         sub._on_subscribe(fake_client, None, 12, [1])
         sub._on_subscribe(fake_client, None, 13, [1])
         sub._on_subscribe(fake_client, None, 14, [1])
@@ -151,8 +153,8 @@ def test_on_subscribe_denied_is_critical_and_resubscribes(
     # firing the backoff re-sends both subscribes:
     timers[0][1](*timers[0][2])
     topics = [c.args[0] for c in fake_client.subscribe.call_args_list]
-    assert topics == [sub.SHARED_TOPIC, sub.STATUS_TOPIC, sub.COMMAND_RESPONSE_TOPIC,
-           sub.REPORTED_DEVICE_TOPIC, sub.COMMAND_RESPONSE_DEVICE_TOPIC]
+    assert topics == [sub.SHARED_TOPIC, sub.SHARED_LIVE_TOPIC, sub.STATUS_TOPIC,
+           sub.COMMAND_RESPONSE_TOPIC, sub.REPORTED_DEVICE_TOPIC, sub.COMMAND_RESPONSE_DEVICE_TOPIC]
 
 
 def test_build_client_uses_the_required_stable_client_id(fake_client, monkeypatch):

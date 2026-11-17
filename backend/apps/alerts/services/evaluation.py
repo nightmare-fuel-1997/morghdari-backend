@@ -96,6 +96,7 @@ def evaluate_entry(
     velocity_result = check_velocity_emergency(
         redis_client, saloon_id, thresholds, metrics,
         clock_now=clock_now, config_getter=cfg_get,
+        slot_id=slot_id,
     )
     if velocity_result is not None:
         from apps.alerts.services.firing import fire_or_coalesce
