@@ -62,7 +62,7 @@ from apps.devices.models import (
     effective_roc_config,
     validate_and_merge_roc_config,
 )
-from apps.common.schemas import RATE_LIMITED_RESPONSE, TAG_OPS, error_responses
+from apps.common.schemas import CONFLICT_RESPONSE, RATE_LIMITED_RESPONSE, TAG_OPS, error_responses
 from apps.alerts.services.thresholds import effective_template
 from apps.farms.models import Farm, Saloon
 from apps.monitoring import ops_serializers as ser
@@ -845,7 +845,8 @@ def gateway_diagnostics(request, slot: str):
     request=RocConfigSerializer,
     responses={
         200: GatewayRocConfigResponseSerializer,
-        **error_responses(400, 401, 403, 404, 409),
+        409: CONFLICT_RESPONSE,
+        **error_responses(400, 401, 403, 404),
     },
 )
 @api_view(["GET", "PATCH"])
