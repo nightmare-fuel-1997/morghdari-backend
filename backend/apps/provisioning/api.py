@@ -1331,6 +1331,16 @@ def issue_gateway_command(request, gateway_slot_id: str):
             },
             status=400,
         )
+    if kind == GatewayCommand.KIND_SET_ROC_CONFIG:
+        return Response(
+            {
+                "error": (
+                    "SET_ROC_CONFIG goes through PATCH /gateways/{slot}/roc-config/ "
+                    "— that endpoint persists roc_config and bumps desired_config_version"
+                )
+            },
+            status=400,
+        )
 
     command = issue_command(
         slot.slot_id, kind,

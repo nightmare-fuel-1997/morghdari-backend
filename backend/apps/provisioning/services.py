@@ -250,7 +250,8 @@ def cached_status(slot_id: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 def issue_command(slot_id: str, kind: str, payload: dict | None = None,
-                  *, org_id=None) -> "GatewayCommand":
+                  *, org_id=None, config_version: int | None = None,
+                  created_by=None) -> "GatewayCommand":
     """Create a command row and enqueue its publish. Returns the row.
 
     WHY this exists: `publish_command` and `reconcile_command_response` were
@@ -278,6 +279,8 @@ def issue_command(slot_id: str, kind: str, payload: dict | None = None,
         gateway_slot_id=slot_id,
         kind=kind,
         payload=payload or {},
+        config_version=config_version,
+        created_by=created_by,
         state=GatewayCommand.STATE_PENDING,
         expires_at=timezone.now() + timedelta(minutes=COMMAND_TTL_MINUTES),
     )

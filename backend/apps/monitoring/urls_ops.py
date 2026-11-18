@@ -52,6 +52,7 @@ urlpatterns = [
     path("gateways/", ops_views.gateways, name="gateways"),
     path("gateways/<str:slot>/", ops_views.gateway_detail, name="gateway-detail"),
     path("gateways/<str:slot>/diagnostics/", ops_views.gateway_diagnostics, name="gateway-diagnostics"),
+    path("gateways/<str:slot>/roc-config/", ops_views.gateway_roc_config, name="gateway-roc-config"),
     # O10 — password change (auth_strict 3/min)
     path("auth/password/change/", ops_views.password_change, name="password-change"),
     # O11/O12 — session register

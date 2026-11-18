@@ -792,6 +792,46 @@ def _resolve_slot_saloon_cached(redis_client, org_id: str, slot_id: str) -> int 
         return None
 
 
+def _record_live_test_audit_log(
+    org_id: str,
+    farm_id: str | int | None,
+    saloon_id: int,
+    details: dict,
+) -> None:
+    """Safeguard 2: Non-blocking & RLS-safe summary audit row on ENDED."""
+    if not _django_ready():
+        return
+    try:
+        from django.db import connection, transaction
+        from apps.accounts.system import get_system_user
+        from apps.auditing.models import AccountActivityLog
+        from apps.farms.models import Saloon
+
+        def _write():
+            if not Saloon.objects.filter(pk=saloon_id, org_id=org_id).exists():
+                return
+            farm_pk = int(farm_id) if str(farm_id).isdigit() else None
+            AccountActivityLog.objects.create(
+                actor=get_system_user(),
+                org_id=org_id,
+                farm_id=farm_pk,
+                saloon_id=saloon_id,
+                action="SENSOR_LIVE_TEST_COMPLETED",
+                details=details,
+            )
+
+        if connection.vendor == "postgresql" and org_id:
+            from apps.tenants.context import tenant_context
+
+            with transaction.atomic(), tenant_context(org_id):
+                _write()
+        else:
+            with transaction.atomic():
+                _write()
+    except Exception as exc:  # noqa: BLE001 — fast-path / unit tests never block
+        logger.debug("Skipped SENSOR_LIVE_TEST_COMPLETED audit write: %s", exc)
+
+
 def handle_live_message(
     redis_client,
     topic: str,
@@ -803,9 +843,10 @@ def handle_live_message(
 ) -> str | None:
     """Fast-path handler for T10 `{org}/farms/{farm}/gateways/{slot}/telemetry/live`.
 
-    Enforces Gates 1, 2, 2.5, 3, and 5 (using Redis caches), records the live
-    stream state in Redis for the single-slot velocity grace guard, and pushes
-    directly to Channels WebSocket groups without touching Celery or TimescaleDB.
+    Enforces Gates 1, 2, 2.5, 3, and 5 (using Redis caches), stores the full
+    snapshot in Redis for WebSocket Late-Joiners & the single-slot velocity
+    grace guard, records a summary audit row on ENDED, and pushes directly to
+    Channels WebSocket groups without touching Celery or TimescaleDB.
     """
     import json
     from .dlq import send_to_dlq
@@ -817,7 +858,12 @@ def handle_live_message(
     )
     from .resolver import UNKNOWN_SLOT, resolve_pack_slot
     from .topics import TopicParseError, identity_fault, parse_live_topic
-    from apps.alerts.services.redis_keys import live_stream_active_key
+    from apps.alerts.services.redis_keys import (
+        live_audit_guard_key,
+        live_session_meta_key,
+        live_stream_active_key,
+        live_stream_slots_set_key,
+    )
 
     try:
         org_id, farm_id, gateway_slot = parse_live_topic(topic)
@@ -878,21 +924,10 @@ def handle_live_message(
         if saloon_id is None:
             continue
 
-        live_key = live_stream_active_key(saloon_id, str(slot_id))
-        try:
-            state_blob = json.dumps({
-                "stream_state": stream_state,
-                "trigger_metric": reading.get("trigger_metric"),
-                "roc_delta": reading.get("roc_delta"),
-                "updated_at": now_ts,
-            })
-            redis_client.set(live_key, state_blob, ex=60)
-        except Exception:
-            logger.exception("Failed to set live_stream_active_key for %s", slot_id)
-
-        push_items.append({
+        slot_str = str(slot_id)
+        item = {
             "saloon_id": saloon_id,
-            "slot_id": str(slot_id),
+            "slot_id": slot_str,
             "device_ts": device_ts,
             "stream_state": stream_state,
             "session_id": session_id,
@@ -901,7 +936,80 @@ def handle_live_message(
             "roc_window_sec": reading.get("roc_window_sec", 10),
             "metrics": reading.get("metrics") or {},
             "sensor_errors": reading.get("sensor_errors") or {},
-        })
+        }
+        live_key = live_stream_active_key(saloon_id, slot_str)
+        slots_set_key = live_stream_slots_set_key(saloon_id)
+        meta_key = live_session_meta_key(saloon_id, slot_str)
+
+        try:
+            # Safeguard 1: Store full snapshot (so Late-Joiners get full state)
+            # AND NEVER DEL live_key on ENDED (keep stream_state=ENDED for 60s
+            # so velocity.py can suppress false Tier-1 alerts after settle).
+            redis_client.set(live_key, json.dumps({**item, "updated_at": now_ts}), ex=60)
+
+            roc_val = reading.get("roc_delta")
+            roc_abs = abs(float(roc_val)) if isinstance(roc_val, (int, float)) else 0.0
+
+            if stream_state == "ENDED":
+                redis_client.srem(slots_set_key, slot_str)
+
+                prev_meta = {}
+                raw_meta = redis_client.get(meta_key)
+                if raw_meta:
+                    try:
+                        prev_meta = json.loads(raw_meta)
+                    except ValueError:
+                        prev_meta = {}
+                    redis_client.delete(meta_key)
+
+                effective_session_id = str(
+                    session_id or prev_meta.get("session_id") or f"{gateway_slot}-{pack_id}-{int(now_ts)}"
+                )
+                guard_key = live_audit_guard_key(saloon_id, slot_str, effective_session_id)
+                if redis_client.set(guard_key, "1", nx=True, ex=600):
+                    started_ts = float(prev_meta.get("started_ts") or now_ts)
+                    duration_sec = max(0, int(round(now_ts - started_ts)))
+                    audit_details = {
+                        "slot_id": slot_str,
+                        "gateway_slot_id": gateway_slot,
+                        "pack_id": pack_id,
+                        "session_id": effective_session_id,
+                        "trigger_metric": prev_meta.get("trigger_metric") or reading.get("trigger_metric"),
+                        "peak_roc_delta": round(max(float(prev_meta.get("peak_roc_delta") or 0.0), roc_abs), 4),
+                        "packet_count": int(prev_meta.get("packet_count") or 0) + 1,
+                        "started_at": prev_meta.get("started_at") or device_ts,
+                        "ended_at": device_ts,
+                        "duration_sec": duration_sec,
+                        "final_metrics": item["metrics"],
+                    }
+                    _record_live_test_audit_log(org_id, farm_id, saloon_id, audit_details)
+            else:
+                redis_client.sadd(slots_set_key, slot_str)
+                redis_client.expire(slots_set_key, 60)
+
+                prev_meta = {}
+                raw_meta = redis_client.get(meta_key)
+                if raw_meta:
+                    try:
+                        prev_meta = json.loads(raw_meta)
+                    except ValueError:
+                        prev_meta = {}
+                if session_id and prev_meta.get("session_id") and prev_meta["session_id"] != session_id:
+                    prev_meta = {}
+
+                next_meta = {
+                    "session_id": session_id or prev_meta.get("session_id") or f"{gateway_slot}-{pack_id}-{int(now_ts)}",
+                    "started_at": prev_meta.get("started_at") or device_ts,
+                    "started_ts": prev_meta.get("started_ts") or now_ts,
+                    "trigger_metric": prev_meta.get("trigger_metric") or reading.get("trigger_metric"),
+                    "peak_roc_delta": round(max(float(prev_meta.get("peak_roc_delta") or 0.0), roc_abs), 4),
+                    "packet_count": int(prev_meta.get("packet_count") or 0) + 1,
+                }
+                redis_client.set(meta_key, json.dumps(next_meta), ex=300)
+        except Exception:
+            logger.exception("Failed to update live Redis state for %s", slot_id)
+
+        push_items.append(item)
 
     if push_items:
         if ws_pusher is not None:

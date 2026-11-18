@@ -324,3 +324,27 @@ def test_the_fault_profile_reads_itself_from_the_environment():
     assert (f.drop_connectivity, f.invalid_reading, f.restart) == (0.1, 0.05, 0.0)
     assert f.delay_seconds == 7.0
     assert f.describe() == "drop=0.1, invalid=0.05"
+
+
+def test_set_roc_config_via_desired_and_command():
+    """Dynamic RoC thresholds arrive via retained desired state or SET_ROC_CONFIG downlink."""
+    t = make_twin()
+    roc = {"enabled": True, "thresholds": {"temp": 1.2, "humidity": 5.0}, "exit_ratio": 0.25}
+    t._on_desired(_desired(2, roc_config=roc))
+    assert t.roc_config == roc
+
+    t._on_command(
+        _command(
+            action="SET_ROC_CONFIG",
+            uuid="roc-cmd-1",
+            config_version=4,
+            roc_config={"enabled": False, "thresholds": {"temp": 0.9}},
+        ),
+        lane="tenant",
+    )
+    assert [b["state"] for b in t.commands_seen[-2:]] == ["ACK", "SUCCESS"]
+    assert t.applied_version == 4
+    assert t.roc_config == {"enabled": False, "thresholds": {"temp": 0.9}}
+
+    t._on_command(_command(action="SET_ROC_CONFIG", uuid="roc-bad"), lane="tenant")
+    assert t.commands_seen[-1]["state"] == "FAILED"

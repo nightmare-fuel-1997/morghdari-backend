@@ -59,6 +59,8 @@ from apps.devices.models import (
     GatewaySaloonZone,
     GatewaySlot,
     SaloonPhoto,
+    effective_roc_config,
+    validate_and_merge_roc_config,
 )
 from apps.common.schemas import RATE_LIMITED_RESPONSE, TAG_OPS, error_responses
 from apps.alerts.services.thresholds import effective_template
@@ -77,6 +79,8 @@ from apps.monitoring.ops_serializers import (
     GatewayDetailResponseSerializer,
     GatewayDiagnosticsSerializer,
     GatewayListResponseSerializer,
+    GatewayRocConfigResponseSerializer,
+    RocConfigSerializer,
     PasswordChangeRequestSerializer,
     PasswordChangeResponseSerializer,
     PhotoItemSerializer,
@@ -814,6 +818,143 @@ def gateway_diagnostics(request, slot: str):
     if diag is None:
         return _not_found("no diagnostics yet")
     return Response(diag)
+
+
+@extend_schema(
+    methods=["GET"],
+    tags=[TAG_OPS],
+    operation_id="get_gateway_roc_config",
+    summary="Read effective Auto-RoC live streaming thresholds for a gateway (engineer+)",
+    parameters=[
+        OpenApiParameter("slot", str, OpenApiParameter.PATH, description="Gateway slot id.")
+    ],
+    request=None,
+    responses={
+        200: GatewayRocConfigResponseSerializer,
+        **error_responses(401, 403, 404),
+    },
+)
+@extend_schema(
+    methods=["PATCH"],
+    tags=[TAG_OPS],
+    operation_id="update_gateway_roc_config",
+    summary="Update Auto-RoC live streaming thresholds and push downlink to gateway (engineer+)",
+    parameters=[
+        OpenApiParameter("slot", str, OpenApiParameter.PATH, description="Gateway slot id.")
+    ],
+    request=RocConfigSerializer,
+    responses={
+        200: GatewayRocConfigResponseSerializer,
+        **error_responses(400, 401, 403, 404, 409),
+    },
+)
+@api_view(["GET", "PATCH"])
+@permission_classes([IsAuthenticated])
+def gateway_roc_config(request, slot: str):
+    """GET / PATCH /api/v1/gateways/{slot}/roc-config/ — dynamic Auto-RoC thresholds."""
+    org_claim = _org_claim(request)
+    if not org_claim or not _roles(request) & {"owner", "manager", "engineer"}:
+        return _forbidden()
+
+    from apps.provisioning.models import GatewayCommand
+    from apps.tenants.context import tenant_context
+
+    if request.method == "GET":
+        with db_transaction.atomic(), tenant_context(org_claim):
+            slot_row = _gateway_or_none(request, slot)
+            if slot_row is None:
+                return _not_found("gateway not found")
+            last_cmd = (
+                GatewayCommand.objects.filter(
+                    gateway_slot_id=slot_row.slot_id,
+                    kind=GatewayCommand.KIND_SET_ROC_CONFIG,
+                )
+                .order_by("-created_at")
+                .values("command_uuid", "state")
+                .first()
+            )
+        return Response(
+            {
+                "slot_id": slot_row.slot_id,
+                "roc_config": effective_roc_config(slot_row.roc_config),
+                "desired_config_version": slot_row.desired_config_version,
+                "applied_config_version": slot_row.applied_config_version,
+                "in_sync": (slot_row.applied_config_version or 0) >= (slot_row.desired_config_version or 0),
+                "last_command_uuid": str(last_cmd["command_uuid"]) if last_cmd else None,
+                "last_command_state": last_cmd["state"] if last_cmd else None,
+            }
+        )
+
+    payload = request.data if isinstance(request.data, dict) else {}
+    with db_transaction.atomic(), tenant_context(org_claim):
+        slot_row = (
+            GatewaySlot.objects.select_for_update()
+            .filter(slot_id=slot, org_id=str(org_claim))
+            .first()
+        )
+        if slot_row is None:
+            return _not_found("gateway not found")
+        if slot_row.provisioning_status in ("REJECTED", "SUSPENDED"):
+            return Response(
+                {"error": f"gateway {slot_row.provisioning_status.lower()} — roc_config locked"},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        merged, err = validate_and_merge_roc_config(slot_row.roc_config, payload)
+        if err is not None:
+            return _bad_request(err)
+
+        next_version = (slot_row.desired_config_version or 0) + 1
+        slot_row.roc_config = merged
+        slot_row.desired_config_version = next_version
+        slot_row.save(update_fields=["roc_config", "desired_config_version"])
+
+        AccountActivityLog.objects.create(
+            actor=request.user,
+            org_id=slot_row.org_id,
+            farm_id=slot_row.farm_id,
+            action="GATEWAY_ROC_CONFIG_UPDATED",
+            details={
+                "slot_id": slot_row.slot_id,
+                "config_version": next_version,
+                "roc_config": merged,
+            },
+        )
+
+        last_command_uuid = None
+        last_command_state = None
+        if slot_row.provisioning_status == "PROVISIONED":
+            from apps.provisioning.services import issue_command
+
+            cmd = issue_command(
+                slot_row.slot_id,
+                GatewayCommand.KIND_SET_ROC_CONFIG,
+                payload={"config_version": next_version, "roc_config": merged},
+                org_id=slot_row.org_id,
+                config_version=next_version,
+                created_by=request.user,
+            )
+            last_command_uuid = str(cmd.pk)
+            last_command_state = cmd.state
+
+            def _push_desired(sid=slot_row.slot_id, oid=str(slot_row.org_id)):
+                from apps.provisioning.tasks import publish_desired_state
+
+                publish_desired_state.delay(sid, oid)
+
+            db_transaction.on_commit(_push_desired)
+
+    return Response(
+        {
+            "slot_id": slot_row.slot_id,
+            "roc_config": merged,
+            "desired_config_version": next_version,
+            "applied_config_version": slot_row.applied_config_version,
+            "in_sync": (slot_row.applied_config_version or 0) >= next_version,
+            "last_command_uuid": last_command_uuid,
+            "last_command_state": last_command_state,
+        }
+    )
 
 
 # ---------------------------------------------------------------------------

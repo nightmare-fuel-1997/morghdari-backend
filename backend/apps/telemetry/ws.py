@@ -253,6 +253,70 @@ def push_live_telemetry(org_id: str, items: list[dict], channel_layer=None) -> i
     return dispatches
 
 
+def active_live_streams_for_saloon(saloon_id: int, client=None) -> list[dict]:
+    """Return active (non-ENDED) Auto-RoC live snapshots for a saloon so
+    late-joining WebSocket clients see ongoing live streams immediately."""
+    import json
+    from apps.alerts.services.redis_keys import (
+        live_stream_active_key,
+        live_stream_slots_set_key,
+    )
+
+    try:
+        r = client or ws_redis()
+        set_key = live_stream_slots_set_key(saloon_id)
+        slot_ids = sorted(r.smembers(set_key) or [])
+        if not slot_ids:
+            return []
+        keys = [live_stream_active_key(saloon_id, sid) for sid in slot_ids]
+        raw_values = r.mget(keys)
+    except Exception:
+        logger.debug("active_live_streams_for_saloon degraded open for saloon=%s", saloon_id)
+        return []
+
+    snapshots: list[dict] = []
+    stale_slots: list[str] = []
+    for sid, raw in zip(slot_ids, raw_values):
+        if not raw:
+            stale_slots.append(sid)
+            continue
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            stale_slots.append(sid)
+            continue
+        if not isinstance(data, dict):
+            continue
+        state = str(data.get("stream_state") or "").upper()
+        # Safeguard 1 extra guard: ENDED payloads stay in live_stream_active_key
+        # for 60s so velocity.py can suppress false alarms, but late-joiners
+        # MUST NOT receive finished streams.
+        if state == "ENDED" or "metrics" not in data:
+            stale_slots.append(sid)
+            continue
+        snapshots.append(
+            telemetry_live_message(
+                saloon_id=int(data.get("saloon_id") or saloon_id),
+                slot_id=str(data.get("slot_id") or sid),
+                device_ts=str(data.get("device_ts") or ""),
+                stream_state=state or "ACTIVE",
+                session_id=data.get("session_id"),
+                trigger_metric=data.get("trigger_metric"),
+                roc_delta=data.get("roc_delta"),
+                roc_window_sec=int(data.get("roc_window_sec") or 10),
+                metrics=data.get("metrics") or {},
+                sensor_errors=data.get("sensor_errors") or {},
+            )
+        )
+
+    if stale_slots:
+        try:
+            r.srem(set_key, *stale_slots)
+        except Exception:
+            pass
+    return snapshots
+
+
 def gap_fill_message(saloon_id, rows: list[dict]) -> dict:
     """The M6-07 reconnect payload for an inbound {"action": "gap_fill"}.
 

@@ -102,6 +102,7 @@ def build_desired_state(slot) -> dict:
     Reads `gateway_slots`, `gateway_hardware_registry` / `device_units`, and
     `gateway_sensor_mapping`. Never writes.
     """
+    from apps.devices.models import effective_roc_config
     from apps.provisioning import topics
 
     hw_id = gateway_hardware_id(slot)
@@ -126,8 +127,10 @@ def build_desired_state(slot) -> dict:
         },
         "sensors": build_sensor_list(hw_id),
         "report_interval_sec": _report_interval_sec(),
+        "roc_config": effective_roc_config(getattr(slot, "roc_config", None)),
         "topics": {
             "telemetry": f"{slot.org_id}/farms/{slot.farm_id}/gateways/{slot.slot_id}/telemetry",
+            "telemetry_live": f"{slot.org_id}/farms/{slot.farm_id}/gateways/{slot.slot_id}/telemetry/live",
             "status": f"{slot.org_id}/farms/{slot.farm_id}/gateways/{slot.slot_id}/status",
             "commands": f"{slot.org_id}/farms/{slot.farm_id}/gateways/{slot.slot_id}/commands",
             "commands_response": f"{slot.org_id}/farms/{slot.farm_id}/gateways/{slot.slot_id}/commands/response",

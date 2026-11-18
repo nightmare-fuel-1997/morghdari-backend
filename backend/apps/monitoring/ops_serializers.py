@@ -350,6 +350,32 @@ class GatewayDiagnosticsSerializer(serializers.Serializer):
     )
 
 
+class RocThresholdsSerializer(serializers.Serializer):
+    temp = serializers.FloatField(required=False)
+    humidity = serializers.FloatField(required=False)
+    nh3 = serializers.FloatField(required=False)
+    lux = serializers.FloatField(required=False)
+
+
+class RocConfigSerializer(serializers.Serializer):
+    enabled = serializers.BooleanField(required=False)
+    thresholds = RocThresholdsSerializer(required=False)
+    exit_ratio = serializers.FloatField(required=False)
+    settling_hold_sec = serializers.IntegerField(required=False)
+    max_live_duration_sec = serializers.IntegerField(required=False)
+    lockout_cooldown_sec = serializers.IntegerField(required=False)
+
+
+class GatewayRocConfigResponseSerializer(serializers.Serializer):
+    slot_id = serializers.CharField()
+    roc_config = RocConfigSerializer()
+    desired_config_version = serializers.IntegerField()
+    applied_config_version = serializers.IntegerField()
+    in_sync = serializers.BooleanField()
+    last_command_uuid = serializers.CharField(allow_null=True, required=False)
+    last_command_state = serializers.CharField(allow_null=True, required=False)
+
+
 class PasswordChangeRequestSerializer(serializers.Serializer):
     current_password = serializers.CharField(
         write_only=True, help_text="Current password (401 when wrong)."

@@ -4801,6 +4801,51 @@ paths:
                     items: { type: string }
         '404': { description: No diagnostics yet, or unknown/foreign slot (404 either way) }
 
+  /gateways/{slot}/roc-config/:
+    get:
+      tags: [Ops]
+      summary: Read effective Auto-RoC live streaming thresholds (engineer+)
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: slot, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Effective Auto-RoC configuration and sync status }
+        '401': { description: Invalid or missing token }
+        '403': { description: Engineer/manager/owner role required }
+        '404': { description: Unknown or foreign gateway slot }
+    patch:
+      tags: [Ops]
+      summary: Update Auto-RoC live streaming thresholds and push downlink command (engineer+)
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: slot, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled: { type: boolean }
+                thresholds:
+                  type: object
+                  properties:
+                    temp: { type: number }
+                    humidity: { type: number }
+                    nh3: { type: number }
+                    lux: { type: number }
+                exit_ratio: { type: number }
+                settling_hold_sec: { type: integer }
+                max_live_duration_sec: { type: integer }
+                lockout_cooldown_sec: { type: integer }
+      responses:
+        '200': { description: Updated Auto-RoC configuration and downlink command reference }
+        '400': { description: Out-of-bounds or invalid roc_config patch }
+        '401': { description: Invalid or missing token }
+        '403': { description: Engineer/manager/owner role required }
+        '404': { description: Unknown or foreign gateway slot }
+        '409': { description: Gateway is REJECTED or SUSPENDED }
+
   /auth/password/change/:
     post:
       tags: [Authentication]

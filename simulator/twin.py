@@ -183,6 +183,7 @@ class DigitalTwin:
         self.org_id = None
         self.tenant_farm_id = None
         self.sensors: list = []
+        self.roc_config: dict = {}
         self.report_interval_sec = interval_sec
         self.state = "NEW"           # NEW → CONNECTED → CONFIGURED → ONLINE
         self.reboots = 0
@@ -349,6 +350,8 @@ class DigitalTwin:
         self.org_id = doc.get("org_id")
         self.tenant_farm_id = doc.get("farm_id", self.farm_id)
         self.sensors = doc.get("sensors") or []
+        if isinstance(doc.get("roc_config"), dict):
+            self.roc_config = dict(doc["roc_config"])
         self.report_interval_sec = float(doc.get("report_interval_sec")
                                         or self.interval_sec)
         # §3.3.4 — persist before reporting
@@ -404,6 +407,7 @@ class DigitalTwin:
             "REBOOT": self._cmd_reboot,
             "DIAGNOSTICS_REQUEST": self._cmd_diagnostics,
             "ROTATE_CREDENTIAL": self._cmd_rotate,
+            "SET_ROC_CONFIG": self._cmd_set_roc_config,
         }
         handler = handlers.get(action)
         if handler is None:
@@ -488,6 +492,19 @@ class DigitalTwin:
             raise ValueError("rotate without a new password")
         self.password = new_password
         return {"password": new_password, "rotated": True, "reconnect": "deferred"}
+
+    def _cmd_set_roc_config(self, params: dict) -> dict:
+        roc_cfg = params.get("roc_config")
+        if not isinstance(roc_cfg, dict):
+            raise ValueError("SET_ROC_CONFIG requires a roc_config object")
+        self.roc_config = dict(roc_cfg)
+        ver = params.get("config_version")
+        if isinstance(ver, int) and ver > self.applied_version:
+            self.applied_version = ver
+        return {
+            "config_version": self.applied_version,
+            "roc_config": self.roc_config,
+        }
 
     # ------------------------------------------------------ telemetry (§3.8)
     def tick(self) -> bool:

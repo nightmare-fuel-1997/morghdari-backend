@@ -15,6 +15,148 @@ from django.db.models import Q
 from django.db.models.functions import Now
 
 
+DEFAULT_ROC_CONFIG = {
+    "enabled": True,
+    "thresholds": {
+        "temp": 0.8,
+        "humidity": 4.0,
+        "nh3": 3.0,
+        "lux": 50.0,
+    },
+    "exit_ratio": 0.3,
+    "settling_hold_sec": 30,
+    "max_live_duration_sec": 180,
+    "lockout_cooldown_sec": 600,
+}
+
+ROC_THRESHOLD_BOUNDS = {
+    "temp": (0.2, 5.0),
+    "humidity": (1.0, 20.0),
+    "nh3": (0.5, 25.0),
+    "lux": (10.0, 500.0),
+}
+
+ROC_SCALAR_BOUNDS = {
+    "exit_ratio": (0.1, 0.8),
+    "settling_hold_sec": (10, 120),
+    "max_live_duration_sec": (30, 600),
+    "lockout_cooldown_sec": (60, 3600),
+}
+
+
+def effective_roc_config(raw: dict | None) -> dict:
+    """Deep-merge a GatewaySlot's stored roc_config over firmware defaults."""
+    base_thresholds = dict(DEFAULT_ROC_CONFIG["thresholds"])
+    raw_dict = raw if isinstance(raw, dict) else {}
+    raw_thresholds = raw_dict.get("thresholds")
+    if isinstance(raw_thresholds, dict):
+        for metric, bounds in ROC_THRESHOLD_BOUNDS.items():
+            val = raw_thresholds.get(metric)
+            if isinstance(val, (int, float)) and not isinstance(val, bool):
+                lo, hi = bounds
+                if lo <= float(val) <= hi:
+                    base_thresholds[metric] = round(float(val), 4)
+
+    return {
+        "enabled": (
+            bool(raw_dict["enabled"])
+            if isinstance(raw_dict.get("enabled"), bool)
+            else DEFAULT_ROC_CONFIG["enabled"]
+        ),
+        "thresholds": base_thresholds,
+        "exit_ratio": (
+            round(float(raw_dict["exit_ratio"]), 4)
+            if isinstance(raw_dict.get("exit_ratio"), (int, float))
+            and not isinstance(raw_dict.get("exit_ratio"), bool)
+            and ROC_SCALAR_BOUNDS["exit_ratio"][0]
+            <= float(raw_dict["exit_ratio"])
+            <= ROC_SCALAR_BOUNDS["exit_ratio"][1]
+            else DEFAULT_ROC_CONFIG["exit_ratio"]
+        ),
+        "settling_hold_sec": (
+            int(raw_dict["settling_hold_sec"])
+            if isinstance(raw_dict.get("settling_hold_sec"), int)
+            and not isinstance(raw_dict.get("settling_hold_sec"), bool)
+            and ROC_SCALAR_BOUNDS["settling_hold_sec"][0]
+            <= int(raw_dict["settling_hold_sec"])
+            <= ROC_SCALAR_BOUNDS["settling_hold_sec"][1]
+            else DEFAULT_ROC_CONFIG["settling_hold_sec"]
+        ),
+        "max_live_duration_sec": (
+            int(raw_dict["max_live_duration_sec"])
+            if isinstance(raw_dict.get("max_live_duration_sec"), int)
+            and not isinstance(raw_dict.get("max_live_duration_sec"), bool)
+            and ROC_SCALAR_BOUNDS["max_live_duration_sec"][0]
+            <= int(raw_dict["max_live_duration_sec"])
+            <= ROC_SCALAR_BOUNDS["max_live_duration_sec"][1]
+            else DEFAULT_ROC_CONFIG["max_live_duration_sec"]
+        ),
+        "lockout_cooldown_sec": (
+            int(raw_dict["lockout_cooldown_sec"])
+            if isinstance(raw_dict.get("lockout_cooldown_sec"), int)
+            and not isinstance(raw_dict.get("lockout_cooldown_sec"), bool)
+            and ROC_SCALAR_BOUNDS["lockout_cooldown_sec"][0]
+            <= int(raw_dict["lockout_cooldown_sec"])
+            <= ROC_SCALAR_BOUNDS["lockout_cooldown_sec"][1]
+            else DEFAULT_ROC_CONFIG["lockout_cooldown_sec"]
+        ),
+    }
+
+
+def validate_and_merge_roc_config(current_raw: dict | None, patch) -> tuple[dict | None, str | None]:
+    """Validate a partial roc_config PATCH body and merge into effective defaults."""
+    if not isinstance(patch, dict) or not patch:
+        return None, "roc_config patch must be a non-empty JSON object"
+
+    allowed_top = {"enabled", "thresholds", *ROC_SCALAR_BOUNDS.keys()}
+    unknown_top = set(patch.keys()) - allowed_top
+    if unknown_top:
+        return None, f"unsupported roc_config keys: {', '.join(sorted(unknown_top))}"
+
+    merged = effective_roc_config(current_raw)
+
+    if "enabled" in patch:
+        if not isinstance(patch["enabled"], bool):
+            return None, "enabled must be a boolean"
+        merged["enabled"] = patch["enabled"]
+
+    if "thresholds" in patch:
+        th = patch["thresholds"]
+        if not isinstance(th, dict) or not th:
+            return None, "thresholds must be a non-empty object"
+        unknown_metrics = set(th.keys()) - set(ROC_THRESHOLD_BOUNDS.keys())
+        if unknown_metrics:
+            return None, f"unsupported RoC metrics: {', '.join(sorted(unknown_metrics))}"
+        for metric, raw_val in th.items():
+            if isinstance(raw_val, bool) or not isinstance(raw_val, (int, float)):
+                return None, f"threshold for {metric} must be numeric"
+            val = float(raw_val)
+            lo, hi = ROC_THRESHOLD_BOUNDS[metric]
+            if not (lo <= val <= hi):
+                return None, f"threshold for {metric} must be between {lo} and {hi}"
+            merged["thresholds"][metric] = round(val, 4)
+
+    for key, (lo, hi) in ROC_SCALAR_BOUNDS.items():
+        if key not in patch:
+            continue
+        raw_val = patch[key]
+        if key == "exit_ratio":
+            if isinstance(raw_val, bool) or not isinstance(raw_val, (int, float)):
+                return None, f"{key} must be numeric"
+            val = float(raw_val)
+            if not (lo <= val <= hi):
+                return None, f"{key} must be between {lo} and {hi}"
+            merged[key] = round(val, 4)
+        else:
+            if isinstance(raw_val, bool) or not isinstance(raw_val, int):
+                return None, f"{key} must be an integer"
+            if not (lo <= raw_val <= hi):
+                return None, f"{key} must be between {lo} and {hi}"
+            merged[key] = raw_val
+
+    return merged, None
+
+
 class GatewayRequest(models.Model):
     """Zero-touch provisioning request. NOTE (2026-08-23, Tracker §4i): the old
     subquery CHECK was removed from the doc — PostgreSQL CHECKs cannot reliably
@@ -119,6 +261,7 @@ class GatewaySlot(models.Model):
     applied_at = models.DateTimeField(null=True, blank=True)
     last_reported_at = models.DateTimeField(null=True, blank=True)
     last_publish_error = models.TextField(null=True, blank=True)
+    roc_config = models.JSONField(default=dict, blank=True)
 
     objects = GatewaySlotQuerySet.as_manager()
 

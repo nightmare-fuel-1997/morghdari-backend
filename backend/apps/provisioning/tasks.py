@@ -453,6 +453,28 @@ def _on_command_applied(row, payload: dict) -> None:
         )
         return
 
+    if row.kind == GatewayCommand.KIND_SET_ROC_CONFIG:
+        from apps.devices.models import GatewaySlot
+
+        result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+        ver = row.config_version or result.get("config_version")
+        try:
+            ver_int = int(ver) if ver is not None else None
+        except (TypeError, ValueError):
+            ver_int = None
+        if ver_int is not None:
+            now = timezone.now()
+            GatewaySlot.objects.filter(
+                pk=row.gateway_slot_id,
+                applied_config_version__lt=ver_int,
+            ).update(
+                applied_config_version=ver_int,
+                applied_at=now,
+                last_reported_at=now,
+                last_publish_error=None,
+            )
+        return
+
     # PROVISION / REBOOT / REFRESH: the state transition above is the whole
     # effect. Config convergence is driven by the reported lane, not by this.
 

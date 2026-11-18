@@ -111,9 +111,35 @@ def slot_saloon_cache_key(org_id: str, slot_id: str) -> str:
 
 
 def live_stream_active_key(saloon_id: int, slot_id: str) -> str:
-    """Ephemeral marker set by Subscriber when a pack is in live RoC mode.
-    Holds JSON {'stream_state', 'trigger_metric', 'roc_delta', 'updated_at'} with 60s TTL."""
+    """Ephemeral marker + full live snapshot set by Subscriber during Auto-RoC.
+    Holds JSON with stream_state, trigger_metric, roc_delta, metrics, etc. (60s TTL).
+    NOTE: MUST remain populated for 60s even on stream_state == 'ENDED' so
+    velocity.py's 60s periodic check can distinguish settled tests from blind spikes."""
     return f"sensor:live_stream:{saloon_id}:{slot_id}"
+
+
+def live_stream_slots_set_key(saloon_id: int) -> str:
+    """Set of currently streaming (non-ENDED) slot_ids in a saloon for instant
+    WebSocket Late-Joiner snapshots without scanning Redis."""
+    return f"sensor:live_slots:{saloon_id}"
+
+
+def live_session_meta_key(saloon_id: int, slot_id: str) -> str:
+    """Temporary per-session stats (started_at, peak_roc_delta, packet_count)
+    aggregated until stream_state == 'ENDED' to emit one audit row."""
+    return f"sensor:live_session_meta:{saloon_id}:{slot_id}"
+
+
+def live_audit_guard_key(saloon_id: int, slot_id: str, session_id: str) -> str:
+    """NX guard ensuring each live Auto-RoC session emits at most one
+    SENSOR_LIVE_TEST_COMPLETED row in AccountActivityLog."""
+    return f"sensor:live_audit_guard:{saloon_id}:{slot_id}:{session_id}"
+
+
+def live_suppressed_audit_guard_key(saloon_id: int, slot_id: str, metric: str) -> str:
+    """NX guard ensuring suppressed single-slot test spikes emit at most one
+    SENSOR_LIVE_TEST_SUPPRESSED audit row per suppression episode."""
+    return f"sensor:live_suppressed_audit:{saloon_id}:{slot_id}:{metric}"
 
 
 def slot_last_metrics_key(saloon_id: int, slot_id: str) -> str:

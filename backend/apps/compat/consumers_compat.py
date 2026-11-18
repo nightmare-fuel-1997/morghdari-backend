@@ -67,6 +67,12 @@ class FarmTelemetryConsumer(JsonWebsocketConsumer):
             "org_id": self.org_id,
             "saloon_count": len(self.saloon_ids),
         })
+        for saloon_id in self.saloon_ids:
+            for live_ev in ws.active_live_streams_for_saloon(saloon_id):
+                try:
+                    self.telemetry_live(live_ev)
+                except Exception:
+                    logger.exception("compat late-join live push failed for saloon=%s", saloon_id)
 
     def disconnect(self, code):
         if getattr(self, "connection_id", None) and getattr(self, "user", None):

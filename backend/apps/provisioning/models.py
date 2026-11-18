@@ -167,7 +167,15 @@ class GatewayCommand(models.Model):
     KIND_DIAGNOSTICS = "DIAGNOSTICS_REQUEST"
     KIND_REBOOT = "REBOOT"
     KIND_REFRESH = "REFRESH_CONFIG"
-    KINDS = [KIND_PROVISION, KIND_ROTATE, KIND_DIAGNOSTICS, KIND_REBOOT, KIND_REFRESH]
+    KIND_SET_ROC_CONFIG = "SET_ROC_CONFIG"
+    KINDS = [
+        KIND_PROVISION,
+        KIND_ROTATE,
+        KIND_DIAGNOSTICS,
+        KIND_REBOOT,
+        KIND_REFRESH,
+        KIND_SET_ROC_CONFIG,
+    ]
 
     STATE_PENDING = "PENDING"
     STATE_SENT = "SENT"
@@ -209,7 +217,7 @@ class GatewayCommand(models.Model):
             models.CheckConstraint(
                 check=Q(kind__in=[
                     "PROVISION", "ROTATE_CREDENTIAL", "DIAGNOSTICS_REQUEST",
-                    "REBOOT", "REFRESH_CONFIG",
+                    "REBOOT", "REFRESH_CONFIG", "SET_ROC_CONFIG",
                 ]),
                 name="ck_gateway_commands_kind",
             ),

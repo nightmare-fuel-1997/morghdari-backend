@@ -36,6 +36,7 @@ import time as _time
 
 from apps.alerts.services.redis_keys import (
     live_stream_active_key,
+    live_suppressed_audit_guard_key,
     single_slot_spike_grace_key,
     slot_last_metrics_key,
 )
@@ -65,6 +66,60 @@ def _config_float(config_getter, key: str, default: float) -> float:
 
 def _peer_spikes_key(saloon_id: int) -> str:
     return f"saloon:{saloon_id}:peer_velocity_spikes"
+
+
+def _record_suppressed_spike_audit(
+    redis_client,
+    saloon_id: int,
+    slot_id: str,
+    metric: str,
+    details: dict,
+) -> None:
+    """Safeguard 2: Record SENSOR_LIVE_TEST_SUPPRESSED once per suppression
+    episode, guarded against non-DB unit tests and Postgres RLS."""
+    try:
+        guard_key = live_suppressed_audit_guard_key(saloon_id, str(slot_id), metric)
+        if not redis_client.set(guard_key, "1", nx=True, ex=60):
+            return
+        from django.apps import apps
+
+        if not apps.ready:
+            return
+        from django.db import connection, transaction
+        from apps.accounts.system import get_system_user
+        from apps.auditing.models import AccountActivityLog
+        from apps.farms.models import Saloon
+        from apps.tenants.context import admin_alias, tenant_context
+
+        saloon = (
+            Saloon.objects.using(admin_alias())
+            .filter(pk=saloon_id)
+            .values("org_id", "farm_id")
+            .first()
+        )
+        if saloon is None:
+            return
+        org_id = saloon["org_id"]
+        farm_id = saloon["farm_id"]
+
+        def _write():
+            AccountActivityLog.objects.create(
+                actor=get_system_user(),
+                org_id=org_id,
+                farm_id=farm_id,
+                saloon_id=saloon_id,
+                action="SENSOR_LIVE_TEST_SUPPRESSED",
+                details=details,
+            )
+
+        if connection.vendor == "postgresql":
+            with transaction.atomic(), tenant_context(org_id):
+                _write()
+        else:
+            with transaction.atomic():
+                _write()
+    except Exception as exc:  # noqa: BLE001 — pure-Redis tests never fail here
+        logger.debug("Skipped SENSOR_LIVE_TEST_SUPPRESSED audit write: %s", exc)
 
 
 def _should_suppress_single_slot_test_spike(
@@ -138,6 +193,13 @@ def _should_suppress_single_slot_test_spike(
         logger.info(
             "TEST_SPIKE_IGNORED: saloon=%s slot=%s metric=%s (live stream %s)",
             saloon_id, slot_id, metric, stream_state,
+        )
+        _record_suppressed_spike_audit(
+            redis_client,
+            saloon_id,
+            slot_id,
+            metric,
+            {"slot_id": slot_id, "metric": metric, "stream_state": stream_state, "reason": "live_settled"},
         )
         return True, False
 
@@ -263,6 +325,19 @@ def check_velocity_emergency(
                         "TEST_SPIKE_IGNORED: saloon=%s slot=%s metric=temp "
                         "(recovered within baseline delta %.2f°C)",
                         saloon_id, slot_id, delta,
+                    )
+                    _record_suppressed_spike_audit(
+                        redis_client,
+                        saloon_id,
+                        slot_id,
+                        "temp",
+                        {
+                            "slot_id": slot_id,
+                            "metric": "temp",
+                            "delta_c": round(delta, 2),
+                            "value": float(temp_data["avg"]),
+                            "reason": "recovered_to_baseline",
+                        },
                     )
 
         pipe = redis_client.pipeline()

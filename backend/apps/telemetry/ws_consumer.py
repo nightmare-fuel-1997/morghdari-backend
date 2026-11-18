@@ -134,6 +134,8 @@ class SaloonTelemetryConsumer(JsonWebsocketConsumer):
             "org_id": self.org_id,
             "thresholds": setup.get("thresholds", {}),
         })
+        for live_ev in (setup.get("live_streams") or []):
+            self.send_json(live_ev)
 
     def _post_auth_setup(self, cap, timeout=2.5):
         """Run the whole post-auth redis block under ONE wall-clock bound.
@@ -167,18 +169,29 @@ class SaloonTelemetryConsumer(JsonWebsocketConsumer):
                         "WS group-join degraded — socket stays up without push: %s",
                         exc,
                     )
+                bands_ok = False
                 try:
                     bands = ws.ws_redis().hgetall(thresholds_hash(self.saloon_id))
+                    bands_ok = True
                 except Exception:
                     bands = {}
+                live_streams = (
+                    ws.active_live_streams_for_saloon(self.saloon_id) if bands_ok else []
+                )
                 box["result"] = {
                     "decision": "accept",
                     "connection_id": connection_id,
                     "thresholds": bands,
+                    "live_streams": live_streams,
                 }
             except Exception as exc:  # noqa: BLE001 — ANY redis failure degrades open
                 logger.exception("WS post-auth setup degraded open: %s", exc)
-                box["result"] = {"decision": "accept", "connection_id": None, "thresholds": {}}
+                box["result"] = {
+                    "decision": "accept",
+                    "connection_id": None,
+                    "thresholds": {},
+                    "live_streams": [],
+                }
             finally:
                 box["done"] = True
                 # The join outcome lives on the box, but connect() reads the
@@ -191,8 +204,8 @@ class SaloonTelemetryConsumer(JsonWebsocketConsumer):
         worker.join(timeout)
         if not box.get("done"):
             logger.error("WS post-auth setup timed out after %.1fs — degraded open", timeout)
-            return {"decision": "accept", "connection_id": None, "thresholds": {}}
-        return box.get("result") or {"decision": "accept", "connection_id": None, "thresholds": {}}
+            return {"decision": "accept", "connection_id": None, "thresholds": {}, "live_streams": []}
+        return box.get("result") or {"decision": "accept", "connection_id": None, "thresholds": {}, "live_streams": []}
 
     def disconnect(self, code):
         # Clean up the cap membership — but only our own: a pre-auth close
@@ -236,6 +249,8 @@ class SaloonTelemetryConsumer(JsonWebsocketConsumer):
                 "org_id": self.org_id,
                 "thresholds": thresholds,
             })
+            for live_ev in ws.active_live_streams_for_saloon(self.saloon_id):
+                self.send_json(live_ev)
         except Exception:
             logger.exception("WS rejoined hello failed")
 
