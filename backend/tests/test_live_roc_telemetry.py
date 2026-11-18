@@ -370,7 +370,8 @@ class TestGatewayRocConfigApiAndDownlink:
         from django.contrib.auth import get_user_model
         from apps.accounts.models import OrgMember
         from apps.devices.models import DeviceUnit, GatewaySlot
-        from apps.farms.models import City, Farm, Province
+        from apps.farms.models import Farm
+        from apps.geography.models import City, Province
         from apps.tenants.models import Organization
 
         tag = _uuid.uuid4().hex[:8]
@@ -588,10 +589,10 @@ def test_ws_consumers_push_late_joiner_snapshot_on_connect(monkeypatch):
     world = _make_world(users=("owner",))
     saloon = world["saloon"]
     LegacySlugMap.objects.create(
-        org=world["org"], kind="farm", farm=world["farm"], slug=f"farm-{world['tag']}"
+        org_id=world["org"].org_id, kind="farm", farm_id=world["farm"].pk, slug=f"farm-{world['tag']}"
     )
     LegacySlugMap.objects.create(
-        org=world["org"], kind="device", saloon=saloon, slug=f"dev-{world['tag']}"
+        org_id=world["org"].org_id, kind="device", farm_id=world["farm"].pk, saloon_id=saloon.pk, slug=f"dev-{world['tag']}"
     )
 
     topic = f"{world['org'].org_id}/farms/{world['farm'].pk}/gateways/GW-LJ/telemetry/live"
@@ -672,7 +673,8 @@ def test_audit_log_on_ended_and_simulate_live_roc_command(monkeypatch, capsys):
         SaloonPosition,
         SaloonSensorSlot,
     )
-    from apps.farms.models import City, Farm, Province, Saloon
+    from apps.farms.models import Farm, Saloon
+    from apps.geography.models import City, Province
     from apps.tenants.models import Organization
 
     tag = _uuid.uuid4().hex[:8]
